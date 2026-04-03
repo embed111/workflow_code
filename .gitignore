@@ -2,8 +2,12 @@
 .repository/
 .test/
 .tmp/
+.tmp-cdp-test-profile2/
+artifact-root/
+artifacts/
 __pycache__/
 *.py[cod]
+test-results/
 .running/prod/
 .running/*/.workflow-local-deployment.json
 .running/control/runtime/prod/
