@@ -152,13 +152,30 @@ function Get-WorkflowSourceRoot {
     return [System.IO.Path]::GetFullPath((Join-Path $ScriptRoot '..'))
 }
 
+function Get-WorkflowGovernanceRoot {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$SourceRoot
+    )
+
+    $resolvedSourceRoot = [System.IO.Path]::GetFullPath($SourceRoot)
+    $parent = Split-Path $resolvedSourceRoot -Parent
+    if (-not [string]::IsNullOrWhiteSpace($parent)) {
+        $parentLeaf = Split-Path $parent -Leaf
+        if ($parentLeaf -ieq '.repository') {
+            return [System.IO.Path]::GetFullPath((Join-Path $parent '..'))
+        }
+    }
+    return $resolvedSourceRoot
+}
+
 function Get-WorkflowRunningRoot {
     param(
         [Parameter(Mandatory = $true)]
         [string]$SourceRoot
     )
 
-    return (Join-Path $SourceRoot '.running')
+    return (Join-Path (Get-WorkflowGovernanceRoot -SourceRoot $SourceRoot) '.running')
 }
 
 function Get-WorkflowControlRoot {
@@ -723,12 +740,13 @@ function Get-WorkflowDefaultArtifactRoot {
         [string]$SourceRoot
     )
 
-    $sourceConfig = Read-WorkflowJson -Path (Join-Path $SourceRoot '.runtime\state\runtime-config.json') -Default @{}
+    $governanceRoot = Get-WorkflowGovernanceRoot -SourceRoot $SourceRoot
+    $sourceConfig = Read-WorkflowJson -Path (Join-Path $governanceRoot '.runtime\state\runtime-config.json') -Default @{}
     $configured = [string]($sourceConfig['artifact_root'])
     if (-not [string]::IsNullOrWhiteSpace($configured)) {
         return [System.IO.Path]::GetFullPath($configured)
     }
-    return [System.IO.Path]::GetFullPath((Join-Path (Split-Path $SourceRoot -Parent) '.output'))
+    return [System.IO.Path]::GetFullPath((Join-Path (Split-Path $governanceRoot -Parent) '.output'))
 }
 
 function Get-WorkflowDerivedArtifactRoot {
@@ -773,7 +791,8 @@ function Resolve-WorkflowEnvironmentDescriptor {
     $manifestPath = Get-WorkflowEnvironmentManifestPath -SourceRoot $SourceRoot -Environment $Environment
     $manifest = Read-WorkflowJson -Path $manifestPath -Default @{}
     $runtimeConfig = Get-WorkflowRuntimeConfig -RuntimeRoot $runtimeRoot
-    $sourceConfig = Read-WorkflowJson -Path (Join-Path $SourceRoot '.runtime\state\runtime-config.json') -Default @{}
+    $governanceRoot = Get-WorkflowGovernanceRoot -SourceRoot $SourceRoot
+    $sourceConfig = Read-WorkflowJson -Path (Join-Path $governanceRoot '.runtime\state\runtime-config.json') -Default @{}
     $prodRuntimeRoot = Get-WorkflowEnvironmentRuntimeRoot -SourceRoot $SourceRoot -Environment 'prod'
     $prodRuntimeConfig = Get-WorkflowRuntimeConfig -RuntimeRoot $prodRuntimeRoot
     $prodArtifactBase = if (-not [string]::IsNullOrWhiteSpace([string]$prodRuntimeConfig['artifact_root'])) {
@@ -793,7 +812,7 @@ function Resolve-WorkflowEnvironmentDescriptor {
         [string]$sourceConfig['agent_search_root']
     }
     else {
-        [System.IO.Path]::GetFullPath((Split-Path $SourceRoot -Parent))
+        [System.IO.Path]::GetFullPath((Split-Path $governanceRoot -Parent))
     }
 
     $resolvedArtifactRoot = if (-not [string]::IsNullOrWhiteSpace($ArtifactRoot)) {
