@@ -1,0 +1,6 @@
+[
+    "index_core_and_schema.py",
+    "session_and_analysis_sync.py",
+    "task_and_system_sync.py",
+    "query_accessors.py"
+]

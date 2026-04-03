@@ -1,0 +1,460 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>workflow 启动中</title>
+<style>
+  :root {
+    --bg: #f2f4f7;
+    --bg-grad: #fafbfc;
+    --panel: #ffffff;
+    --line: #d9dee7;
+    --text: #1f2329;
+    --muted: #667085;
+    --accent: #3370ff;
+    --accent-soft: #edf3ff;
+    --ok: #00a871;
+    --warn: #d97904;
+    --shadow: 0 20px 48px rgba(15, 23, 42, 0.16);
+  }
+
+  * {
+    box-sizing: border-box;
+  }
+
+  html,
+  body {
+    height: 100%;
+    margin: 0;
+  }
+
+  body {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 20px;
+    background:
+      radial-gradient(circle at top left, rgba(51, 112, 255, 0.12), transparent 32%),
+      linear-gradient(180deg, var(--bg-grad), var(--bg));
+    color: var(--text);
+    font-family: "PingFang SC", "Microsoft YaHei", "Segoe UI", sans-serif;
+  }
+
+  .startup-shell {
+    width: min(620px, 100%);
+    background: rgba(255, 255, 255, 0.92);
+    border: 1px solid rgba(217, 222, 231, 0.9);
+    border-radius: 20px;
+    box-shadow: var(--shadow);
+    padding: 24px;
+    backdrop-filter: blur(10px);
+  }
+
+  .eyebrow {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 10px;
+    border-radius: 999px;
+    background: var(--accent-soft);
+    color: var(--accent);
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+  }
+
+  .title {
+    margin-top: 16px;
+    font-size: clamp(24px, 4vw, 34px);
+    line-height: 1.12;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+  }
+
+  .subtitle {
+    margin-top: 10px;
+    color: var(--muted);
+    font-size: 14px;
+    line-height: 1.7;
+  }
+
+  .progress-wrap {
+    margin-top: 22px;
+    padding: 16px;
+    border-radius: 16px;
+    border: 1px solid #e7ebf1;
+    background: #fbfcfe;
+  }
+
+  .progress-meta {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    align-items: baseline;
+    flex-wrap: wrap;
+  }
+
+  .progress-label {
+    font-size: 15px;
+    font-weight: 600;
+  }
+
+  .progress-value {
+    font-size: 22px;
+    font-weight: 700;
+    color: var(--accent);
+  }
+
+  .stage-list {
+    margin-top: 16px;
+    display: grid;
+    gap: 0;
+  }
+
+  .stage-item {
+    position: relative;
+    display: grid;
+    grid-template-columns: 28px minmax(0, 1fr);
+    gap: 12px;
+    align-items: start;
+    padding-bottom: 12px;
+  }
+
+  .stage-item:last-child {
+    padding-bottom: 0;
+  }
+
+  .stage-item::before {
+    content: "";
+    position: absolute;
+    left: 13px;
+    top: 30px;
+    bottom: 0;
+    width: 2px;
+    border-radius: 999px;
+    background: #dfe5ef;
+  }
+
+  .stage-item:last-child::before {
+    display: none;
+  }
+
+  .stage-dot {
+    position: relative;
+    z-index: 1;
+    width: 28px;
+    height: 28px;
+    border-radius: 999px;
+    border: 1px solid #cfd8e6;
+    background: #fff;
+    color: #7a8599;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 12px;
+    font-weight: 700;
+  }
+
+  .stage-item.is-done::before {
+    background: linear-gradient(180deg, rgba(0, 168, 113, 0.34), rgba(0, 168, 113, 0.16));
+  }
+
+  .stage-item.is-done .stage-dot {
+    border-color: rgba(0, 168, 113, 0.24);
+    background: rgba(0, 168, 113, 0.12);
+    color: var(--ok);
+  }
+
+  .stage-item.is-active::before {
+    background: linear-gradient(180deg, rgba(51, 112, 255, 0.34), rgba(223, 229, 239, 0.9));
+  }
+
+  .stage-item.is-active .stage-dot {
+    border-color: rgba(51, 112, 255, 0.36);
+    background: rgba(51, 112, 255, 0.12);
+    color: var(--accent);
+  }
+
+  .stage-title {
+    font-size: 14px;
+    font-weight: 600;
+  }
+
+  .stage-desc {
+    margin-top: 3px;
+    font-size: 12px;
+    line-height: 1.55;
+    color: var(--muted);
+  }
+
+  .footer {
+    margin-top: 20px;
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    flex-wrap: wrap;
+    align-items: center;
+  }
+
+  .footer-meta {
+    font-size: 12px;
+    color: var(--muted);
+    line-height: 1.6;
+  }
+
+  .footer-meta strong {
+    color: var(--text);
+  }
+
+  .actions {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+  }
+
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 38px;
+    padding: 0 14px;
+    border-radius: 10px;
+    border: 1px solid #d4dbe7;
+    background: #fff;
+    color: var(--text);
+    text-decoration: none;
+    font-size: 13px;
+    font-weight: 600;
+  }
+
+  .btn.primary {
+    border-color: transparent;
+    background: var(--accent);
+    color: #fff;
+  }
+
+  .hint {
+    margin-top: 16px;
+    padding: 12px 14px;
+    border-radius: 12px;
+    border: 1px solid #e8edf5;
+    background: rgba(255, 255, 255, 0.82);
+    font-size: 12px;
+    line-height: 1.65;
+    color: var(--muted);
+  }
+
+  .hint.warn {
+    border-color: rgba(217, 121, 4, 0.2);
+    background: rgba(255, 247, 235, 0.95);
+    color: #8a5b08;
+  }
+
+  .ready .progress-value {
+    color: var(--ok);
+  }
+
+  @media (max-width: 640px) {
+    .startup-shell {
+      padding: 18px;
+      border-radius: 18px;
+    }
+
+    .progress-wrap {
+      padding: 14px;
+    }
+  }
+</style>
+</head>
+<body>
+  <main id="startupShell" class="startup-shell" aria-live="polite">
+    <div class="eyebrow" id="eyebrow">WORKFLOW STARTUP</div>
+    <div class="title" id="title">正在启动工作台</div>
+    <div class="subtitle" id="subtitle">首次启动会做运行态校验、数据恢复和服务检查。页面准备好后会自动进入工作台。</div>
+
+    <section class="progress-wrap">
+      <div class="progress-meta">
+        <div class="progress-label" id="progressLabel">正在检查运行环境</div>
+        <div class="progress-value" id="progressValue">4%</div>
+      </div>
+      <div class="stage-list" id="stageList">
+        <div class="stage-item is-active" data-stage="prepare">
+          <div class="stage-dot">1</div>
+          <div>
+            <div class="stage-title">准备运行环境</div>
+            <div class="stage-desc">检查部署副本、环境标记和运行配置。</div>
+          </div>
+        </div>
+        <div class="stage-item" data-stage="launch">
+          <div class="stage-dot">2</div>
+          <div>
+            <div class="stage-title">启动服务进程</div>
+            <div class="stage-desc">拉起 Web 服务并等待端口开始响应。</div>
+          </div>
+        </div>
+        <div class="stage-item" data-stage="probe">
+          <div class="stage-dot">3</div>
+          <div>
+            <div class="stage-title">探测服务可用性</div>
+            <div class="stage-desc">持续轮询目标地址，确认页面已经能够打开。</div>
+          </div>
+        </div>
+        <div class="stage-item" data-stage="ready">
+          <div class="stage-dot">4</div>
+          <div>
+            <div class="stage-title">进入工作台</div>
+            <div class="stage-desc">服务就绪后自动跳转，不需要手动刷新。</div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <div id="hint" class="hint">如果等待时间偏长，通常说明正在做首次部署、SQLite 回填或运行态修复。</div>
+
+    <div class="footer">
+      <div class="footer-meta">
+        当前目标: <strong id="targetLabel">http://127.0.0.1:8090</strong><br />
+        运行环境: <strong id="envLabel">prod</strong> · 已等待 <strong id="elapsedLabel">0s</strong>
+      </div>
+      <div class="actions">
+        <a id="openTargetBtn" class="btn primary" href="http://127.0.0.1:8090" rel="noreferrer">直接打开工作台</a>
+        <a class="btn" href="." id="reloadBtn">刷新启动页</a>
+      </div>
+    </div>
+  </main>
+
+  <script>
+    (function () {
+      const hash = new URLSearchParams((window.location.hash || '').replace(/^#/, ''));
+      const targetUrl = (hash.get('target') || 'http://127.0.0.1:8090').trim();
+      const environment = (hash.get('environment') || 'prod').trim();
+      const targetLabel = document.getElementById('targetLabel');
+      const envLabel = document.getElementById('envLabel');
+      const openTargetBtn = document.getElementById('openTargetBtn');
+      const progressLabel = document.getElementById('progressLabel');
+      const progressValue = document.getElementById('progressValue');
+      const elapsedLabel = document.getElementById('elapsedLabel');
+      const hint = document.getElementById('hint');
+      const title = document.getElementById('title');
+      const subtitle = document.getElementById('subtitle');
+      const shell = document.getElementById('startupShell');
+      const stageNodes = Array.from(document.querySelectorAll('[data-stage]'));
+
+      const startedAt = Date.now();
+      let finished = false;
+      let probeInFlight = false;
+      let probeVersion = 0;
+      let stableProbeCount = 0;
+
+      const timeline = [
+        { stage: 'prepare', percent: 8, afterMs: 400, label: '正在检查运行环境' },
+        { stage: 'launch', percent: 28, afterMs: 1800, label: '正在启动服务进程' },
+        { stage: 'probe', percent: 58, afterMs: 7000, label: '正在等待服务响应' },
+        { stage: 'probe', percent: 82, afterMs: 15000, label: '服务启动较慢，继续探测中' },
+        { stage: 'probe', percent: 94, afterMs: 26000, label: '正在做最后校验，请稍候' }
+      ];
+
+      function setStage(stageKey, percent, label) {
+        const nextPercent = Math.max(4, Math.min(100, Number(percent || 0)));
+        progressValue.textContent = nextPercent + '%';
+        progressLabel.textContent = label || '正在启动';
+        const stageOrder = ['prepare', 'launch', 'probe', 'ready'];
+        const currentIndex = stageOrder.indexOf(stageKey);
+        stageNodes.forEach((node) => {
+          const key = node.getAttribute('data-stage') || '';
+          const index = stageOrder.indexOf(key);
+          node.classList.toggle('is-done', index >= 0 && index < currentIndex);
+          node.classList.toggle('is-active', index === currentIndex);
+        });
+      }
+
+      function setReady() {
+        finished = true;
+        shell.classList.add('ready');
+        setStage('ready', 100, '服务已就绪，正在进入工作台');
+        title.textContent = '工作台已准备完成';
+        subtitle.textContent = '服务响应正常，正在为你跳转到 workflow 工作台。';
+        hint.className = 'hint';
+        hint.textContent = '如果浏览器没有自动跳转，可以点击右下角“直接打开工作台”。';
+        setTimeout(() => {
+          window.location.replace(targetUrl);
+        }, 260);
+      }
+
+      function updateElapsed() {
+        const elapsedMs = Date.now() - startedAt;
+        const elapsedSec = Math.max(0, Math.floor(elapsedMs / 1000));
+        elapsedLabel.textContent = elapsedSec + 's';
+        if (!finished) {
+          const entry = timeline.reduce((latest, item) => {
+            return elapsedMs >= item.afterMs ? item : latest;
+          }, timeline[0]);
+          setStage(entry.stage, entry.percent, entry.label);
+          if (elapsedSec >= 20) {
+            hint.className = 'hint warn';
+            hint.textContent = '启动时间已明显偏长，通常是首次部署、数据库恢复或端口释放较慢；如果控制台报错，请优先查看启动窗口。';
+          }
+        }
+      }
+
+      function fetchWithTimeout(url, timeoutMs) {
+        const controller = typeof AbortController === 'function' ? new AbortController() : null;
+        let timeoutId = 0;
+        if (controller) {
+          timeoutId = window.setTimeout(() => controller.abort(), timeoutMs);
+        }
+        return fetch(url, {
+          method: 'GET',
+          mode: 'no-cors',
+          cache: 'no-store',
+          signal: controller ? controller.signal : undefined
+        }).finally(() => {
+          if (timeoutId) {
+            window.clearTimeout(timeoutId);
+          }
+        });
+      }
+
+      function buildProbeUrl(pathname) {
+        const url = new URL(pathname, targetUrl);
+        url.searchParams.set('_startup_probe', String(Date.now()));
+        return url.toString();
+      }
+
+      async function probeTarget() {
+        if (finished || probeInFlight) return;
+        probeInFlight = true;
+        probeVersion += 1;
+        const version = probeVersion;
+        try {
+          await fetchWithTimeout(buildProbeUrl('/healthz'), 1500);
+          if (finished || version !== probeVersion) return;
+          setStage('probe', 88, '检测到服务响应，正在确认工作台页面');
+          await fetchWithTimeout(buildProbeUrl('/'), 1500);
+          if (finished || version !== probeVersion) return;
+          stableProbeCount += 1;
+          if (stableProbeCount >= 2) {
+            setReady();
+          }
+        } catch (error) {
+          stableProbeCount = 0;
+        } finally {
+          probeInFlight = false;
+        }
+      }
+
+      targetLabel.textContent = targetUrl;
+      envLabel.textContent = environment || 'prod';
+      openTargetBtn.href = targetUrl;
+      document.getElementById('reloadBtn').href = window.location.href;
+
+      updateElapsed();
+      probeTarget();
+      window.setInterval(updateElapsed, 400);
+      window.setInterval(probeTarget, 1200);
+    })();
+  </script>
+</body>
+</html>

@@ -1,0 +1,1167 @@
+<!doctype html>
+<html>
+<head>
+<meta charset='utf-8'/>
+<meta name='viewport' content='width=device-width,initial-scale=1'/>
+    <title>workflow</title>
+<link rel='stylesheet' href='/static/workflow-web.css'/>
+
+</head>
+<body>
+<div id='startupOverlay' class='startup-overlay is-hidden' role='status' aria-live='polite' aria-label='系统启动进度'>
+  <div class='startup-overlay-card'>
+    <div class='startup-overlay-eyebrow'>workflow startup</div>
+    <div id='startupOverlayTitle' class='startup-overlay-title'>正在准备工作台</div>
+    <div id='startupOverlayDetail' class='startup-overlay-detail'>正在初始化布局、连接运行时并恢复最近的工作状态。</div>
+    <div class='startup-overlay-meta'>
+      <span id='startupOverlayPercent'>0%</span>
+      <span id='startupOverlayElapsed'>刚开始</span>
+    </div>
+    <div id='startupOverlayStages' class='startup-overlay-stages'>
+      <div class='startup-overlay-stage is-active' data-stage='shell'>
+        <span class='startup-overlay-stage-dot'>1</span>
+        <span class='startup-overlay-stage-text'>准备页面</span>
+      </div>
+      <div class='startup-overlay-stage' data-stage='connect'>
+        <span class='startup-overlay-stage-dot'>2</span>
+        <span class='startup-overlay-stage-text'>连接服务</span>
+      </div>
+      <div class='startup-overlay-stage' data-stage='agents'>
+        <span class='startup-overlay-stage-dot'>3</span>
+        <span class='startup-overlay-stage-text'>加载角色</span>
+      </div>
+      <div class='startup-overlay-stage' data-stage='sessions'>
+        <span class='startup-overlay-stage-dot'>4</span>
+        <span class='startup-overlay-stage-text'>恢复数据</span>
+      </div>
+      <div class='startup-overlay-stage' data-stage='workspace'>
+        <span class='startup-overlay-stage-dot'>5</span>
+        <span class='startup-overlay-stage-text'>恢复工作台</span>
+      </div>
+      <div class='startup-overlay-stage' data-stage='ready'>
+        <span class='startup-overlay-stage-dot'>6</span>
+        <span class='startup-overlay-stage-text'>启动完成</span>
+      </div>
+    </div>
+    <div id='startupOverlayHint' class='startup-overlay-hint'>首次启动通常会更慢，因为需要做环境检查、运行态恢复和数据预热。</div>
+    <div id='startupOverlayError' class='startup-overlay-error'></div>
+    <div class='startup-overlay-actions'>
+      <a class='startup-overlay-link' href='.'>刷新页面</a>
+    </div>
+  </div>
+</div>
+<div id='appRoot' class='app'>
+  <aside class='rail'>
+    <div class='brand'>
+      <div class='title'>
+        workflow
+        <span id='runtimeEnvBadge' class='brand-env-badge' data-env='source' title='当前环境: source' aria-label='当前环境 source'>SOURCE</span>
+        <span id='runtimeVersionBadge' class='brand-version-badge' title='当前版本读取中' aria-label='当前版本读取中'>版本读取中</span>
+      </div>
+      <div class='brand-status-bar'>
+        <div id='statusLine' class='brand-status-primary' aria-live='polite'>就绪</div>
+        <div id='metricLine' class='brand-metric-list'>指标加载中...</div>
+      </div>
+    </div>
+    <div class='tabs'>
+      <button class='tab active' data-tab='chat'>对话</button>
+      <button class='tab' data-tab='training'>工作记录与训练</button>
+      <button class='tab' data-tab='training-center'>角色中心</button>
+      <button class='tab' data-tab='task-center'>任务中心</button>
+      <button class='tab' data-tab='schedule-center'>定时任务</button>
+      <button class='tab' data-tab='requirement-bug'>需求与缺陷</button>
+      <button class='tab' data-tab='settings'>设置</button>
+    </div>
+  </aside>
+  <div id='appSplitter' class='resizer' title='拖拽调整导航栏宽度'></div>
+
+  <main class='workspace'>
+    <section id='pane-chat' class='pane active'>
+      <div id='chatWrap' class='chat-wrap'>
+        <aside class='column chat-side-column'>
+          <div class='panel session-entry-panel'>
+            <div class='card-title'>会话入口</div>
+            <div class='hint'>无可用角色时禁止创建会话</div>
+            <div style='height:6px'></div>
+            <div class='row session-entry-inline'>
+              <div id='agentDropdown' class='agent-dropdown'>
+                <select id='agentSelect' class='agent-select-native' tabindex='-1' aria-hidden='true'></select>
+                <button id='agentSelectTrigger' class='alt agent-dropdown-trigger' type='button' aria-haspopup='listbox' aria-expanded='false'>
+                  <span id='agentSelectTriggerMain' class='agent-dropdown-trigger-main'>
+                    <span id='agentSelectTriggerText' class='agent-dropdown-trigger-text'>请选择角色</span>
+                    <span id='agentSelectTriggerSub' class='agent-dropdown-trigger-sub'>未分析</span>
+                  </span>
+                  <span class='agent-dropdown-trigger-right'>
+                    <span id='agentSelectTriggerState' class='analysis-badge pending'></span>
+                    <span class='agent-dropdown-trigger-arrow' aria-hidden='true'></span>
+                  </span>
+                </button>
+                <div id='agentSelectPanel' class='agent-dropdown-panel'>
+                  <div class='agent-dropdown-search-wrap'>
+                    <input id='agentSelectSearch' class='agent-dropdown-search' type='text' placeholder='搜索角色...' autocomplete='off'/>
+                  </div>
+                  <div id='agentSelectOptions' class='agent-dropdown-options' role='listbox' aria-label='角色列表'></div>
+                </div>
+              </div>
+            </div>
+            <div class='row session-entry-toolbar'>
+              <button id='loadAgentsBtn' class='alt session-entry-icon-btn' type='button' title='刷新角色' aria-label='刷新角色'></button>
+              <button id='clearPolicyCacheBtn' class='alt session-entry-icon-btn' type='button' title='清理当前角色缓存' aria-label='清理当前角色缓存'></button>
+              <button id='clearAllPolicyCacheBtn' class='alt session-entry-icon-btn' type='button' title='清理所有角色缓存' aria-label='清理所有角色缓存'></button>
+              <button id='regeneratePolicyCacheBtn' class='alt session-entry-icon-btn' type='button' title='生成当前角色缓存' aria-label='生成当前角色缓存'></button>
+            </div>
+            <div style='height:8px'></div>
+            <div class='row'>
+              <button id='newSessionBtn'>新建会话</button>
+              <button id='policyGateBtn' class='alt'>角色与职责确认/兜底</button>
+            </div>
+            <div id='policyGateMeta' class='hint'></div>
+            <div id='agentMeta' class='hint'></div>
+          </div>
+          <div class='panel grow column'>
+            <div class='row between'>
+              <div class='card-title'>会话列表</div>
+              <div class='row'>
+                <button id='reloadSessionsBtn' class='alt'>刷新列表</button>
+                <button id='deleteSessionBtn' class='bad'>删除当前会话</button>
+              </div>
+            </div>
+            <div id='sessionList' class='session-list'></div>
+          </div>
+        </aside>
+        <div id='chatSplitter' class='resizer' title='拖拽调整会话栏宽度'></div>
+
+        <main class='chat-main'>
+          <div class='panel column grow'>
+            <div class='row between'>
+              <div id='chatTitle' class='card-title'>未选择会话</div>
+              <div id='activeTaskInfo' class='hint'>运行中任务: 0</div>
+            </div>
+            <div id='runningTaskList' class='running-task-list'></div>
+            <div id='feed' class='feed'></div>
+          </div>
+          <div class='panel'>
+            <textarea id='msg' placeholder='回车发送，换行请按住上档键再回车'></textarea>
+            <div style='height:8px'></div>
+            <div class='row'>
+              <button id='sendBtn'>发送并执行</button>
+              <button id='stopBtn' class='warn'>中断当前会话</button>
+              <button id='retryBtn' class='alt'>重试上一轮</button>
+              <div id='chatErr' class='error'></div>
+            </div>
+          </div>
+        </main>
+      </div>
+    </section>
+
+    <section id='pane-training' class='pane'>
+      <div id='trainWrap' class='train-wrap'>
+        <aside class='panel train-queue-panel'>
+        <div class='row between'>
+          <div id='workflowQueueTitle' class='card-title'>工作记录</div>
+          <button id='refreshWorkflowBtn' class='alt'>刷新队列</button>
+        </div>
+        <div class='row between'>
+          <div class='queue-mode-switch'>
+            <button id='queueModeRecordsBtn' class='queue-mode-btn active' type='button'>工作记录</button>
+            <button id='queueModeTrainingBtn' class='queue-mode-btn' type='button'>训练任务</button>
+          </div>
+          <div id='batchProgressMeta' class='hint'>分析任务空闲</div>
+        </div>
+          <div class='row'>
+            <select id='batchAnalystInput'></select>
+            <button id='batchAnalyzeBtn'>按顺序分析并生成训练任务</button>
+            <button id='batchDeleteRecordsBtn' class='bad'>批量删除所选记录</button>
+          </div>
+          <div class='workflow-queue'>
+            <div class='workflow-queue-head'>
+              <input id='workflowSelectionToggleCheck' type='checkbox' title='全选工作记录'/>
+              <div id='workflowSelectionMeta' class='hint'>已选 0/0</div>
+            </div>
+            <div id='workflowList' class='session-list'></div>
+          </div>
+        </aside>
+        <div id='trainSplitter' class='resizer' title='拖拽调整队列栏宽度'></div>
+
+        <main id='trainMain' class='train-main'>
+          <section class='panel column train-detail'>
+            <div id='workflowMeta' class='hint'>请选择左侧工作记录或训练任务</div>
+            <div id='workflowDialogue' class='workflow-dialogue-list'>
+              <div class='hint'>暂无工作记录</div>
+            </div>
+            <div class='row'>
+              <select id='analystInput'></select>
+              <button id='assignBtn'>指派并开始分析</button>
+            </div>
+            <div class='row'>
+              <button id='generatePlanBtn' class='alt'>生成训练任务</button>
+              <button id='executePlanBtn'>执行训练任务</button>
+              <button id='deleteWorkflowBtn' class='bad'>删除当前记录/任务</button>
+            </div>
+            <div id='planBox' class='plan-box'></div>
+          </section>
+          <div id='trainDetailSplitter' class='resizer' title='拖拽调整详情区宽度'></div>
+
+          <section class='column train-side'>
+            <div class='panel grow column'>
+              <div class='row between'>
+                <div class='card-title'>分析与训练事件流</div>
+                <button id='refreshEventsBtn' class='alt'>刷新事件</button>
+              </div>
+              <div id='workflowEvents' class='events'></div>
+            </div>
+            <div class='panel'>
+              <pre id='workflowResult' class='pre'>等待操作...</pre>
+            </div>
+          </section>
+        </main>
+      </div>
+    </section>
+
+    <section id='pane-training-center' class='pane'>
+      <div class='panel training-center-wrap'>
+        <div class='row between'>
+          <div class='card-title tc-page-title'>角色中心</div>
+          <div id='tcRootMeta' class='hint'>围绕角色资产、创建角色和训练优化统一运营，独立于普通会话流程</div>
+        </div>
+        <div class='tc-toolbar'>
+          <div class='tc-module-tabs'>
+            <button id='tcTabAgentsBtn' class='active' type='button'>角色资产与版本</button>
+            <button id='tcTabCreateRoleBtn' type='button'>创建角色</button>
+            <button id='tcTabOpsBtn' type='button'>训练优化</button>
+          </div>
+          <span id='tcSelectedAgentMeta' class='hint'>未选择角色</span>
+        </div>
+        <div>
+          <div id='tcModuleAgents' class='tc-module active'>
+            <div class='tc-grid'>
+              <aside class='tc-side'>
+                <div class='row'>
+                  <input id='tcAgentSearchInput' type='text' placeholder='搜索角色...'/>
+                  <button id='tcRefreshAgentsBtn' class='alt' type='button'>刷新</button>
+                </div>
+                <div id='tcAgentStats' class='hint'>角色总数=0 · Git可用=0 · 最新发布时间=- · 队列待处理=0</div>
+                <div id='tcAgentList' class='tc-list'></div>
+              </aside>
+              <section class='tc-detail'>
+                <section id='tcPortraitCard' class='tc-portrait-card'>
+                  <div class='tc-detail-head'>
+                    <div class='tc-portrait-head'>
+                      <div id='tcAvatarPreview' class='tc-avatar-preview'></div>
+                      <div class='tc-portrait-meta'>
+                        <div id='tcAgentDetailTitle' class='card-title'>角色详情</div>
+                        <div id='tcAgentDetailSubtitle' class='tc-detail-subtitle'></div>
+                      </div>
+                    </div>
+                    <div class='tc-detail-head-actions'>
+                      <div class='tc-version-switch'>
+                        <div id='tcVersionDropdown' class='tc-version-dropdown'>
+                          <select id='tcSwitchVersionSelect' class='tc-version-native-select' tabindex='-1' aria-hidden='true'>
+                            <option value=''>无可切换版本</option>
+                          </select>
+                          <button id='tcSwitchVersionTrigger' class='tc-version-trigger' type='button' aria-haspopup='listbox' aria-expanded='false'>
+                            <span class='tc-version-trigger-main'>
+                              <span id='tcSwitchVersionTriggerText' class='tc-version-trigger-text'>请选择角色</span>
+                              <span id='tcSwitchVersionTriggerSub' class='tc-version-trigger-sub'>暂无已发布版本</span>
+                            </span>
+                            <span class='tc-version-trigger-right'>
+                              <span class='tc-version-trigger-arrow' aria-hidden='true'></span>
+                            </span>
+                          </button>
+                          <div id='tcSwitchVersionPanel' class='tc-version-panel'>
+                            <div id='tcSwitchVersionOptions' class='tc-version-options' role='listbox' aria-label='发布版本列表'></div>
+                          </div>
+                        </div>
+                      </div>
+                      <button
+                        id='tcSetAvatarBtn'
+                        class='alt tc-avatar-trigger'
+                        type='button'
+                        title='单头像展示，支持 png/jpg/webp，单文件 <=2MB'
+                        aria-label='更换头像，单头像展示，支持 png/jpg/webp，单文件小于等于 2MB'
+                      >更换头像</button>
+                      <button id='tcEnterOpsBtn' class='alt' type='button'>进入训练优化</button>
+                    </div>
+                    <input
+                      id='tcAvatarFileInput'
+                      class='tc-avatar-file-input'
+                      type='file'
+                      accept='.png,.jpg,.jpeg,.webp,image/png,image/jpeg,image/webp'
+                    />
+                  </div>
+                  <div id='tcPortraitFields' class='tc-portrait-grid'></div>
+                </section>
+                <div id='tcAgentDetailBody'>
+                  <div id='tcAgentDetailMeta' class='tc-kv'>路径/版本信息将在这里展示</div>
+                  <div id='tcAgentLifecycleMeta' class='tc-release-state'></div>
+                  <div style='height:8px'></div>
+                  <div class='card-title'>发布历史与操作</div>
+                  <div class='hint'>以下仅“发布版本”可切换；在头部下拉中选择后会立即切换，Git 提交记录默认收起，仅在需要时展开查看。</div>
+                  <div style='height:6px'></div>
+                  <div class='card-title'>发布版本</div>
+                  <div id='tcReleaseList' class='tc-release-list'></div>
+                  <div style='height:8px'></div>
+                  <details id='tcNormalCommitDetails' class='tc-git-commit-details'>
+                    <summary class='tc-git-commit-summary'>
+                      <span id='tcNormalCommitSummaryText'>查看 Git 提交记录详情</span>
+                      <span id='tcNormalCommitCount' class='tc-badge warn'></span>
+                    </summary>
+                    <div id='tcNormalCommitList' class='tc-release-list'></div>
+                  </details>
+                   <div class='tc-release-actions'>
+                     <div class='tc-release-row'>
+                       <input id='tcCloneAgentNameInput' type='text' placeholder='克隆角色名称（必填且唯一）'/>
+                       <button id='tcCloneAgentBtn' class='alt' type='button'>克隆角色</button>
+                     </div>
+                     <div class='tc-release-row'>
+                       <button id='tcDiscardPreReleaseBtn' class='bad' type='button'>舍弃预发布（单角色）</button>
+                     </div>
+                   </div>
+                   <section id='tcReleaseReviewCard' class='tc-release-review-card'>
+                     <div class='tc-release-review-head'>
+                       <div>
+                         <div class='card-title'>当前进行中的发布评审</div>
+                         <div id='tcReleaseReviewHint' class='hint'>首页只承载当前活跃评审；历史正式发布记录请从“发布版本”列表查看</div>
+                        </div>
+                        <div class='tc-release-review-actions'>
+                          <button id='tcEnterReleaseReviewBtn' class='alt' type='button'>进入发布评审</button>
+                          <button id='tcDiscardReleaseReviewBtn' class='bad' type='button'>废弃当前评审</button>
+                          <button id='tcConfirmReleaseReviewBtn' type='button'>确认发布</button>
+                        </div>
+                      </div>
+                     <div id='tcReleaseReviewStepper' class='tc-release-review-steps'></div>
+                     <div id='tcReleaseReviewProgress' class='tc-release-review-progress' aria-live='polite'></div>
+                     <div id='tcReleaseReviewSubstage' class='tc-release-review-substage'></div>
+                     <div class='tc-release-review-grid'>
+                       <section class='tc-release-review-panel'>
+                         <div class='tc-release-review-section-title'>发布报告</div>
+                         <div id='tcReleaseReviewReport' class='tc-release-review-content'></div>
+                       </section>
+                       <section class='tc-release-review-panel'>
+                         <div class='tc-release-review-section-title'>分析链路</div>
+                         <div id='tcReleaseReviewChain' class='tc-release-review-content'></div>
+                       </section>
+                     </div>
+                     <div class='tc-release-review-grid'>
+                       <section class='tc-release-review-panel'>
+                         <div class='tc-release-review-section-title'>人工审核</div>
+                         <div class='tc-release-row'>
+                           <select id='tcEvalDecisionSelect'>
+                             <option value='approve_publish'>通过并进入确认发布</option>
+                             <option value='reject_continue_training'>不通过：继续训练</option>
+                             <option value='reject_discard_pre_release'>不通过：舍弃预发布</option>
+                           </select>
+                           <input id='tcEvalReviewerInput' type='text' placeholder='审核人（必填）'/>
+                         </div>
+                         <div class='tc-release-row'>
+                           <textarea id='tcEvalSummaryInput' rows='3' placeholder='审核意见 / 发布说明（建议填写）'></textarea>
+                           <button id='tcSubmitEvalBtn' class='alt' type='button'>提交审核结论</button>
+                         </div>
+                         <div id='tcReleaseReviewManualMeta' class='tc-release-review-content'></div>
+                       </section>
+                       <section class='tc-release-review-panel'>
+                         <div class='tc-release-review-section-title'>执行日志</div>
+                         <div id='tcReleaseReviewLogs' class='tc-release-review-content'></div>
+                         <div class='tc-release-review-section-title'>兜底状态</div>
+                         <div id='tcReleaseReviewFallback' class='tc-release-review-content'></div>
+                       </section>
+                     </div>
+                   </section>
+                   <pre id='tcAgentActionResult' class='pre tc-agent-action-result'>等待发布管理操作...</pre>
+                   <div id='tcAgentDetailErr' class='error'></div>
+                 </div>
+              </section>
+            </div>
+          </div>
+
+          <div id='tcModuleCreateRole' class='tc-module'>
+            <div id='rcWorkbench' class='rc-workbench'>
+              <aside id='rcDraftColumn' class='rc-draft-column'>
+                <button id='rcDraftCollapseBtn' class='rc-draft-handle alt' type='button' aria-expanded='true' title='收起或展开会话列表'>
+                  <span aria-hidden='true'>‹</span>
+                </button>
+                <div class='rc-panel rc-draft-panel'>
+                  <div class='rc-draft-head'>
+                    <div>
+                      <div class='card-title'>创建草稿</div>
+                      <div id='rcDraftMeta' class='hint'>新建后通过对话逐步收口角色画像、能力包、知识沉淀与首批任务</div>
+                    </div>
+                    <button id='rcNewSessionBtn' class='alt' type='button'>新建</button>
+                  </div>
+                  <div class='rc-draft-toolbar'>
+                    <input id='rcSessionSearchInput' class='rc-session-search-input' type='search' placeholder='搜索角色名、草稿内容、任务图' spellcheck='false' />
+                    <div id='rcSessionFilterRow' class='rc-session-filter-row'>
+                      <button class='rc-session-filter-chip active' type='button' data-rc-session-filter='all'>全部</button>
+                      <button class='rc-session-filter-chip' type='button' data-rc-session-filter='draft'>草稿</button>
+                      <button class='rc-session-filter-chip' type='button' data-rc-session-filter='creating'>创建中</button>
+                      <button class='rc-session-filter-chip' type='button' data-rc-session-filter='completed'>已完成</button>
+                    </div>
+                  </div>
+                  <div id='rcSessionList' class='rc-session-list'></div>
+                  <div id='rcDraftCollapsedBody' class='rc-draft-collapsed' hidden>
+                    <span id='rcDraftCollapsedCount' class='rc-draft-count'>0</span>
+                    <span class='rc-draft-collapsed-label'>会话</span>
+                    <span id='rcDraftCollapsedCurrent' class='rc-draft-current-dot' hidden></span>
+                  </div>
+                </div>
+              </aside>
+
+              <section class='rc-chat-shell rc-panel'>
+                <div class='rc-chat-head'>
+                  <div class='rc-chat-head-main'>
+                    <div id='rcSessionTitle' class='card-title'>创建角色</div>
+                    <div id='rcSessionMeta' class='hint'>先创建草稿，再通过对话收口角色画像、能力包、知识沉淀与首批任务</div>
+                    <div id='rcFailureCardHost'></div>
+                  </div>
+                  <div class='rc-chat-actions'>
+                    <button id='rcStartSessionBtn' type='button'>开始创建</button>
+                    <button id='rcCompleteSessionBtn' class='alt' type='button'>确认完成</button>
+                  </div>
+                </div>
+                <div id='rcMessages' class='rc-messages' aria-live='polite'></div>
+                <div id='rcComposer' class='rc-composer'>
+                  <div id='rcDraftFiles' class='rc-draft-files'></div>
+                  <div id='rcDropHint' class='rc-drop-hint' hidden>松开即可把图片加入当前消息</div>
+                  <div id='rcComposerBox' class='rc-composer-box'>
+                    <textarea id='rcInput' class='rc-composer-input' placeholder='直接描述想创建的角色。支持粘贴、拖拽或选图，图片和文字会作为同一条消息发送。'></textarea>
+                  </div>
+                  <div class='rc-composer-actions'>
+                    <div class='rc-composer-left'>
+                      <button id='rcPickImageBtn' class='alt' type='button'>选图</button>
+                      <span class='hint'>支持粘贴、拖拽、系统选图</span>
+                    </div>
+                    <div class='rc-composer-right'>
+                      <span id='rcComposerMeta' class='hint'>同一条消息可同时发送图片和文字</span>
+                      <button id='rcSendBtn' type='button'>发送</button>
+                    </div>
+                  </div>
+                  <input
+                    id='rcImageInput'
+                    type='file'
+                    accept='.png,.jpg,.jpeg,.webp,.gif,image/png,image/jpeg,image/webp,image/gif'
+                    multiple
+                    hidden
+                  />
+                </div>
+                <div id='rcError' class='error'></div>
+              </section>
+
+              <aside class='rc-detail-shell rc-panel'>
+                <div class='detail-tabs' role='tablist' aria-label='创建角色辅助区'>
+                  <button id='rcDetailTabEvolution' class='detail-tab active' type='button'>阶段与任务演进</button>
+                  <button id='rcDetailTabProfile' class='detail-tab' type='button'>结构化草稿</button>
+                </div>
+                <div id='rcDetailPaneEvolution' class='rc-detail-pane active'>
+                  <div id='rcStageFlow' class='rc-stage-flow'></div>
+                </div>
+                <div id='rcDetailPaneProfile' class='rc-detail-pane'>
+                  <div id='rcProfileView' class='rc-profile-view'></div>
+                </div>
+              </aside>
+            </div>
+            <div id='rcTaskHoverFloat' class='task-hover-float rc-task-hover-float' aria-hidden='true'></div>
+          </div>
+
+          <div id='tcModuleOps' class='tc-module'>
+            <div class='tc-loop-head'>
+              <span id='tcOpsRisk' class='tc-risk' hidden></span>
+            </div>
+
+            <div class='tc-loop-grid'>
+              <aside class='tc-side tc-loop-side'>
+                <div class='tc-loop-side-head'>
+                  <div class='tc-loop-side-heading'>
+                    <div class='tc-loop-side-title'>优化会话</div>
+                    <div id='tcLoopQueueSummary' class='tc-loop-side-summary'>按状态筛选并查看当前优化会话</div>
+                  </div>
+                  <div class='tc-loop-side-actions'>
+                    <button id='tcDispatchNextBtn' class='alt' type='button'>调度下一个</button>
+                  </div>
+                </div>
+
+                <div class='tc-loop-task-toolbar'>
+                  <input id='tcLoopTaskSearchInput' type='text' placeholder='搜索会话 / 能力目标'/>
+                  <button id='tcRefreshQueueBtn' class='alt' type='button'>刷新</button>
+                </div>
+
+                <div id='tcLoopQueueFilterRow' class='tc-loop-filter-row'>
+                  <button class='tc-loop-filter-chip active' type='button' data-filter='all'>全部</button>
+                  <button class='tc-loop-filter-chip' type='button' data-filter='running'>进行中</button>
+                  <button class='tc-loop-filter-chip' type='button' data-filter='queued'>待评测</button>
+                  <button class='tc-loop-filter-chip' type='button' data-filter='done'>已通过</button>
+                </div>
+                <div id='tcQueueList' class='tc-list tc-loop-task-list'></div>
+                <div id='tcOpsErr' class='error'></div>
+              </aside>
+
+              <section id='tcLoopCenterPane' class='tc-loop-center'>
+                <section id='tcLoopProcessCard' class='tc-loop-panel tc-loop-process'></section>
+
+                <section class='tc-loop-panel tc-loop-detail-shell'>
+                  <div id='tcLoopDetailHead' class='tc-loop-view-head'></div>
+                  <div id='tcLoopDetailBody' class='tc-loop-detail-body'></div>
+                </section>
+              </section>
+
+              <aside id='tcLoopRightColumn' class='tc-loop-right'>
+                <section id='tcLoopRightPane' class='tc-loop-panel tc-loop-right-pane'></section>
+                <section class='tc-loop-panel tc-loop-run-panel'>
+                  <div class='card-title'>执行结果</div>
+                  <pre id='tcRunResult' class='pre tc-loop-run-result'>等待执行...</pre>
+                </section>
+              </aside>
+            </div>
+
+            <div class='tc-loop-form-cache' aria-hidden='true'>
+              <select id='tcPlanTargetAgentSelect'></select>
+              <textarea id='tcPlanGoalInput' rows='4'></textarea>
+              <textarea id='tcPlanTasksInput' rows='5'></textarea>
+              <textarea id='tcPlanAcceptanceInput' rows='4'></textarea>
+              <select id='tcPlanPrioritySelect'>
+                <option value=''>请选择优先级</option>
+                <option value='P0'>P0</option>
+                <option value='P1'>P1</option>
+                <option value='P2'>P2</option>
+                <option value='P3'>P3</option>
+              </select>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id='pane-task-center' class='pane'>
+      <div class='panel assignment-wrap'>
+        <div class='assignment-head'>
+          <div>
+            <div class='card-title assignment-page-title'>任务中心</div>
+            <div id='assignmentHeaderNote' class='hint'>按依赖关系与优先级展示当前任务图。</div>
+          </div>
+          <div class='assignment-head-actions'>
+            <span id='assignmentSchedulerStateChip' class='assignment-chip idle'>未启动</span>
+            <span id='assignmentParallelCountChip' class='assignment-chip muted'>并行agent数 0</span>
+            <button id='assignmentPauseBtn' class='alt' type='button' data-assignment-root-required='1'>暂停调度</button>
+            <button id='assignmentResumeBtn' class='alt' type='button' data-assignment-root-required='1'>继续运行</button>
+            <button id='assignmentClearBtn' class='bad' type='button' data-assignment-root-required='1'>清空任务</button>
+            <button id='assignmentCreateBtn' type='button' data-assignment-root-required='1'>+ 创建任务</button>
+          </div>
+        </div>
+
+        <div class='assignment-shell'>
+          <section class='assignment-graph-panel'>
+            <div class='assignment-panel-head'>
+              <div>
+                <div class='card-title'>任务图</div>
+                <div id='assignmentGraphMeta' class='hint'>全局主图待加载</div>
+              </div>
+              <div class='row'>
+                <select id='assignmentGraphSelect' class='assignment-graph-select' data-assignment-root-required='1'>
+                  <option value=''>暂无任务图</option>
+                </select>
+                <button id='assignmentRefreshBtn' class='alt' type='button' data-assignment-root-required='1'>刷新</button>
+                <button id='assignmentLoadMoreTasksBtn' class='alt' type='button' data-assignment-root-required='1'>加载更多任务</button>
+                <button id='assignmentLoadHistoryBtn' class='alt' type='button' data-assignment-root-required='1'>加载更多历史</button>
+              </div>
+            </div>
+            <div id='assignmentGraphError' class='error'></div>
+            <div id='assignmentGraphCanvas' class='assignment-graph-canvas'>
+              <div class='assignment-graph-topbar'>
+                <div class='assignment-time-cap' aria-hidden='true'></div>
+                <div class='assignment-graph-overlay'>
+                  <div class='assignment-legend'>
+                    <span class='assignment-legend-item'><span class='assignment-legend-dot done'></span>已完成</span>
+                    <span class='assignment-legend-item'><span class='assignment-legend-dot running'></span>进行中</span>
+                    <span class='assignment-legend-item'><span class='assignment-legend-dot blocked'></span>阻塞</span>
+                    <span class='assignment-legend-item'><span class='assignment-legend-dot fail'></span>失败</span>
+                    <span class='assignment-legend-item'><span class='assignment-legend-dot future'></span>待开始</span>
+                  </div>
+                  <div id='assignmentHistoryChip' class='assignment-history-chip'>历史状态待刷新</div>
+                </div>
+              </div>
+              <div id='assignmentEmptyState' class='assignment-empty'>
+                <div class='assignment-empty-title'>暂无任务图</div>
+                <div class='hint'>点击“+ 创建任务”时会自动创建主图。</div>
+              </div>
+              <div id='assignmentGraphStage' class='assignment-graph-stage'>
+                <div id='assignmentTimeColumn' class='assignment-time-column'></div>
+                <div class='assignment-canvas-column'>
+                  <svg id='assignmentGraphSvg' class='assignment-graph-svg' aria-label='任务图'></svg>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <aside class='assignment-detail-panel'>
+            <div class='assignment-panel-head'>
+              <div>
+                <div class='card-title'>任务详情</div>
+                <div id='assignmentDetailMeta' class='hint'>请选择任务节点</div>
+              </div>
+            </div>
+            <div id='assignmentDetailError' class='error'></div>
+            <div id='assignmentDetailBody' class='assignment-detail-body'></div>
+          </aside>
+        </div>
+      </div>
+
+      <div id='assignmentDrawerMask' class='assignment-drawer-mask hidden'>
+        <div class='assignment-drawer-panel'>
+          <div class='assignment-drawer-head'>
+            <div>
+              <div class='assignment-drawer-title'>创建任务</div>
+              <div class='hint'>最小字段收口，底层任务图保持可见。</div>
+            </div>
+            <button id='assignmentDrawerCloseBtn' class='alt' type='button'>关闭</button>
+          </div>
+          <div class='assignment-drawer-scroll'>
+            <div class='assignment-form-card'>
+              <div class='assignment-form-grid'>
+                <label class='assignment-field assignment-span-2'>
+                  <span class='hint'>任务名称</span>
+                  <input id='assignmentTaskNameInput' type='text' placeholder='请输入任务名称' />
+                </label>
+                <label class='assignment-field'>
+                  <span class='hint'>执行 agent</span>
+                  <select id='assignmentAgentSelect'></select>
+                </label>
+                <label class='assignment-field'>
+                  <span class='hint'>优先级</span>
+                  <select id='assignmentPrioritySelect'>
+                    <option value='P0'>P0</option>
+                    <option value='P1' selected>P1</option>
+                    <option value='P2'>P2</option>
+                    <option value='P3'>P3</option>
+                  </select>
+                </label>
+                <label class='assignment-field assignment-span-2'>
+                  <span class='hint'>确认任务目标</span>
+                  <textarea id='assignmentGoalInput' rows='5' placeholder='请输入任务目标'></textarea>
+                </label>
+                <label class='assignment-field assignment-span-2'>
+                  <span class='hint'>预期产物（选填）</span>
+                  <textarea id='assignmentArtifactInput' rows='3' placeholder='可留空'></textarea>
+                </label>
+                <label class='assignment-field'>
+                  <span class='hint'>产物交付方式</span>
+                  <select id='assignmentDeliveryModeSelect'>
+                    <option value='none'>默认交付给当前 agent</option>
+                    <option value='specified'>指定交付对象</option>
+                  </select>
+                </label>
+                <label id='assignmentDeliveryReceiverField' class='assignment-field'>
+                  <span class='hint'>指定交付对象</span>
+                  <select id='assignmentDeliveryReceiverSelect'></select>
+                </label>
+                <div class='assignment-field assignment-span-2'>
+                  <span class='hint'>任务产物路径预览</span>
+                  <div id='assignmentPathPreview' class='assignment-path-box'>-</div>
+                </div>
+                <div class='assignment-field assignment-span-2'>
+                  <span class='hint'>上游任务（可选，支持搜索添加）</span>
+                  <div class='assignment-search-row'>
+                    <input id='assignmentUpstreamSearch' type='text' placeholder='搜索任务名称或任务 ID' />
+                    <button id='assignmentClearUpstreamSearchBtn' class='alt' type='button'>清空</button>
+                  </div>
+                  <div id='assignmentUpstreamResults' class='assignment-search-results'></div>
+                  <div id='assignmentSelectedUpstreams' class='assignment-token-list'></div>
+                </div>
+              </div>
+            </div>
+            <div id='assignmentDrawerError' class='error'></div>
+          </div>
+          <div class='assignment-drawer-actions'>
+            <button id='assignmentDrawerCancelBtn' class='alt' type='button'>取消</button>
+            <button id='assignmentDrawerSubmitBtn' type='button' data-assignment-root-required='1'>提交创建</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id='pane-schedule-center' class='pane'>
+      <div class='panel schedule-wrap'>
+        <div class='schedule-head'>
+          <div>
+            <div class='card-title schedule-page-title'>定时任务</div>
+            <div class='hint'>首期只负责计划配置、命中建单和结果回看；真实执行继续走任务中心。</div>
+          </div>
+          <div class='schedule-head-actions'>
+            <span class='assignment-chip muted'>北京时间</span>
+            <button id='scheduleRefreshBtn' class='alt' type='button' data-assignment-root-required='1'>刷新</button>
+            <button id='scheduleScanBtn' class='alt' type='button' data-assignment-root-required='1'>立即扫描</button>
+          </div>
+        </div>
+
+        <div class='schedule-toolbar'>
+          <div class='schedule-view-tabs'>
+            <button id='scheduleViewListBtn' class='active' type='button'>列表视角</button>
+            <button id='scheduleViewCalendarBtn' type='button'>日历视角</button>
+          </div>
+          <div id='scheduleMeta' class='hint'>计划加载中...</div>
+        </div>
+        <div id='scheduleError' class='error'></div>
+
+        <div id='scheduleListView' class='schedule-view active'>
+          <div class='schedule-list-layout'>
+            <aside class='schedule-side'>
+              <div class='schedule-card schedule-side-card'>
+                <div class='schedule-panel-head'>
+                  <div class='card-title'>定时任务列表</div>
+                  <div class='row'>
+                    <span id='schedulePlanCountChip' class='assignment-chip muted'>0 条计划</span>
+                    <button id='scheduleCreateBtn' class='schedule-icon-btn' type='button' aria-label='新建定时任务'>+</button>
+                  </div>
+                </div>
+                <div id='schedulePlanList' class='schedule-plan-list'></div>
+              </div>
+            </aside>
+            <section class='schedule-card schedule-detail-panel'>
+              <div class='schedule-panel-head'>
+                <div>
+                  <div class='card-title'>计划详情</div>
+                  <div id='scheduleDetailMeta' class='hint'>请选择定时计划</div>
+                </div>
+              </div>
+              <div id='scheduleDetailBody' class='schedule-detail-body'></div>
+            </section>
+          </div>
+        </div>
+
+        <div id='scheduleCalendarView' class='schedule-view'>
+          <div class='schedule-calendar-layout'>
+            <section class='schedule-card schedule-calendar-panel'>
+              <div class='schedule-calendar-head'>
+                <div class='row'>
+                  <button id='schedulePrevMonthBtn' class='alt' type='button'>上一月</button>
+                  <div>
+                    <div id='scheduleCalendarMonthLabel' class='card-title'>-</div>
+                    <div class='hint'>日历同时展示未来计划和真实执行结果。</div>
+                  </div>
+                  <button id='scheduleNextMonthBtn' class='alt' type='button'>下一月</button>
+                </div>
+                <div class='schedule-legend'>
+                  <span>虚线：计划</span>
+                  <span>蓝色：待调度/运行中</span>
+                  <span>绿色：成功</span>
+                  <span>红色：失败</span>
+                </div>
+              </div>
+              <div id='scheduleCalendarGrid' class='schedule-calendar-grid'></div>
+            </section>
+            <aside class='schedule-card schedule-calendar-detail'>
+              <div class='schedule-panel-head'>
+                <div>
+                  <div class='card-title'>日历侧详情</div>
+                  <div id='scheduleCalendarDetailMeta' class='hint'>请选择日期</div>
+                </div>
+              </div>
+              <div id='scheduleCalendarDetailBody' class='schedule-calendar-detail-body'></div>
+            </aside>
+          </div>
+        </div>
+      </div>
+
+      <div id='scheduleEditorMask' class='assignment-drawer-mask hidden'>
+        <div class='assignment-drawer-panel schedule-editor-panel'>
+          <div class='assignment-drawer-head'>
+            <div>
+              <div id='scheduleEditorTitle' class='assignment-drawer-title'>新建定时任务</div>
+              <div class='hint'>支持每月 / 每周 / 每日 / 定时 四类规则混合启用，命中后只向任务中心创建单任务实例。</div>
+            </div>
+            <button id='scheduleEditorCloseBtn' class='alt' type='button'>关闭</button>
+          </div>
+          <div class='assignment-drawer-scroll schedule-editor-scroll'>
+            <div class='assignment-form-card'>
+              <div class='assignment-form-grid'>
+                <label class='assignment-field assignment-span-2'>
+                  <span class='hint'>计划名称</span>
+                  <input id='scheduleEditorNameInput' type='text' placeholder='例如：版本发布预检' />
+                </label>
+                <label class='assignment-field'>
+                  <span class='hint'>执行 agent</span>
+                  <select id='scheduleEditorAgentSelect'></select>
+                </label>
+                <label class='assignment-field'>
+                  <span class='hint'>优先级</span>
+                  <select id='scheduleEditorPrioritySelect'>
+                    <option value='P0'>P0</option>
+                    <option value='P1' selected>P1</option>
+                    <option value='P2'>P2</option>
+                    <option value='P3'>P3</option>
+                  </select>
+                </label>
+                <label class='assignment-field assignment-span-2'>
+                  <span class='hint'>发起摘要</span>
+                  <textarea id='scheduleEditorLaunchSummaryInput' rows='3' placeholder='命中后要发起什么任务'></textarea>
+                </label>
+                <label class='assignment-field assignment-span-2'>
+                  <span class='hint'>执行清单</span>
+                  <textarea id='scheduleEditorChecklistInput' rows='5' placeholder='执行者需要完成的关键动作'></textarea>
+                </label>
+                <label class='assignment-field assignment-span-2'>
+                  <span class='hint'>完成标准</span>
+                  <textarea id='scheduleEditorDoneDefinitionInput' rows='4' placeholder='做到什么程度算完成'></textarea>
+                </label>
+                <label class='assignment-field assignment-span-2'>
+                  <span class='hint'>预期产物（选填）</span>
+                  <textarea id='scheduleEditorArtifactInput' rows='3' placeholder='可留空'></textarea>
+                </label>
+                <label class='assignment-field'>
+                  <span class='hint'>交付方式</span>
+                  <select id='scheduleEditorDeliveryModeSelect'>
+                    <option value='none'>默认交付给当前 agent</option>
+                    <option value='specified'>指定交付对象</option>
+                  </select>
+                </label>
+                <label class='assignment-field'>
+                  <span class='hint'>指定交付对象</span>
+                  <select id='scheduleEditorDeliveryReceiverSelect'></select>
+                </label>
+                <label class='assignment-field assignment-span-2 schedule-inline-check'>
+                  <input id='scheduleEditorEnabledCheck' type='checkbox' checked />
+                  <span>保存后立即启用</span>
+                </label>
+              </div>
+            </div>
+
+            <div class='schedule-rule-grid'>
+              <div class='schedule-rule-card'>
+                <label class='schedule-rule-title'><input id='scheduleRuleMonthlyEnabled' type='checkbox' /> 每月</label>
+                <input id='scheduleRuleMonthlyDays' type='text' placeholder='月内日期，逗号分隔，例如 1,15,28' />
+                <input id='scheduleRuleMonthlyTimes' type='text' placeholder='时间点，逗号分隔，例如 09:00,18:30' />
+              </div>
+              <div class='schedule-rule-card'>
+                <label class='schedule-rule-title'><input id='scheduleRuleWeeklyEnabled' type='checkbox' /> 每周</label>
+                <div class='schedule-weekday-row'>
+                  <label><input type='checkbox' data-schedule-weekday='1' />一</label>
+                  <label><input type='checkbox' data-schedule-weekday='2' />二</label>
+                  <label><input type='checkbox' data-schedule-weekday='3' />三</label>
+                  <label><input type='checkbox' data-schedule-weekday='4' />四</label>
+                  <label><input type='checkbox' data-schedule-weekday='5' />五</label>
+                  <label><input type='checkbox' data-schedule-weekday='6' />六</label>
+                  <label><input type='checkbox' data-schedule-weekday='7' />日</label>
+                </div>
+                <input id='scheduleRuleWeeklyTimes' type='text' placeholder='时间点，逗号分隔，例如 09:00,18:30' />
+              </div>
+              <div class='schedule-rule-card'>
+                <label class='schedule-rule-title'><input id='scheduleRuleDailyEnabled' type='checkbox' /> 每日</label>
+                <input id='scheduleRuleDailyTimes' type='text' placeholder='时间点，逗号分隔，例如 09:00,18:30' />
+              </div>
+              <div class='schedule-rule-card'>
+                <label class='schedule-rule-title'><input id='scheduleRuleOnceEnabled' type='checkbox' /> 定时</label>
+                <textarea id='scheduleRuleOnceDates' rows='5' placeholder='一行一个时间，例如&#10;2026-04-01 09:00&#10;2026-04-08 18:30'></textarea>
+              </div>
+            </div>
+            <div id='scheduleEditorError' class='error'></div>
+          </div>
+          <div class='assignment-drawer-actions'>
+            <button id='scheduleEditorCancelBtn' class='alt' type='button'>取消</button>
+            <button id='scheduleEditorSubmitBtn' type='button' data-assignment-root-required='1'>保存计划</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id='pane-requirement-bug' class='pane'>
+      <div class='panel requirement-bug-wrap'>
+        <div class='row between'>
+          <div class='card-title'>需求与缺陷</div>
+          <div class='hint'>本轮正式交付范围只覆盖缺陷闭环，需求入口先保留空态占位。</div>
+        </div>
+        <div class='rb-toolbar'>
+          <div class='rb-module-tabs'>
+            <button id='rbTabRequirementBtn' type='button'>需求</button>
+            <button id='rbTabDefectBtn' class='active' type='button'>缺陷</button>
+          </div>
+          <span id='defectListMeta' class='hint'>共 0 条记录</span>
+        </div>
+        <div id='rbModuleRequirement' class='rb-module'>
+          <div class='defect-empty-card'>
+            <div class='defect-empty-title'>需求视图暂未开放</div>
+            <div class='hint'>当前轮只正式承接缺陷闭环，需求入口先保留为空态占位。</div>
+          </div>
+        </div>
+        <div id='rbModuleDefect' class='rb-module active'>
+          <div class='defect-shell'>
+            <aside class='defect-side'>
+              <div id='defectComposerCard' class='defect-card defect-composer-card'>
+                <div class='row between defect-composer-head'>
+                  <div class='card-title'>提交缺陷</div>
+                  <button id='defectComposerToggleBtn' class='alt' type='button'>收起</button>
+                </div>
+                <div id='defectComposerBody' class='defect-composer-body'>
+                  <div class='hint'>同一条记录同时提交文字描述与图片证据；可直接在描述框中粘贴截图，先由 workflow agent 预判定。</div>
+                  <div style='height:8px'></div>
+                  <label class='defect-field'>
+                    <span class='hint'>缺陷摘要（选填）</span>
+                    <input id='defectSummaryInput' type='text' placeholder='可留空，默认取描述首行' />
+                  </label>
+                  <div style='height:8px'></div>
+                  <label class='defect-field'>
+                    <span class='hint'>缺陷描述</span>
+                    <textarea id='defectReportTextInput' rows='5' placeholder='请描述现象、复现路径和你的判断；可直接在此粘贴截图'></textarea>
+                  </label>
+                  <div class='hint defect-paste-tip'>在描述框中直接 Ctrl+V 粘贴图片，系统会自动收进下方图片证据。</div>
+                  <div id='defectDraftImageList' class='defect-image-list'></div>
+                  <div style='height:8px'></div>
+                  <div class='row'>
+                    <button id='defectSubmitBtn' type='button'>提交缺陷</button>
+                  </div>
+                  <div id='defectSubmitError' class='error'></div>
+                </div>
+              </div>
+              <div class='defect-card defect-list-wrap'>
+                <div>
+                  <div class='row between defect-list-head'>
+                    <div class='card-title'>缺陷记录</div>
+                    <div class='defect-list-head-actions'>
+                      <button
+                        id='defectQueueToggleBtn'
+                        class='alt defect-queue-toggle off'
+                        type='button'
+                        title='全局总开关；开启后会按优先级与上报时间连续串行建单'
+                      >按顺序创建任务：关闭</button>
+                      <button id='defectRefreshBtn' class='alt' type='button'>刷新</button>
+                    </div>
+                  </div>
+                  <div class='row defect-list-toolbar'>
+                    <select id='defectStatusFilterSelect'>
+                      <option value='all'>全部状态</option>
+                      <option value='not_formal'>当前不构成缺陷</option>
+                      <option value='unresolved'>未解决</option>
+                      <option value='resolved'>已解决</option>
+                      <option value='closed'>已关闭</option>
+                      <option value='dispute'>有分歧</option>
+                    </select>
+                    <input id='defectKeywordInput' type='text' placeholder='搜索 DTS、摘要或描述' />
+                  </div>
+                  <div id='defectError' class='error'></div>
+                </div>
+                <div id='defectList' class='defect-list'></div>
+                <div class='defect-list-footer'>
+                  <button id='defectLoadMoreBtn' class='alt' type='button' hidden>加载更多</button>
+                  <span id='defectListMoreMeta' class='hint'></span>
+                </div>
+              </div>
+            </aside>
+            <section class='defect-detail'>
+              <div class='defect-detail-scroll' id='defectDetailScroll'>
+                <div class='row between'>
+                  <div class='card-title'>DTS 详情</div>
+                  <div id='defectDetailMeta' class='hint'>请选择左侧缺陷记录</div>
+                </div>
+                <div id='defectDetailBody'></div>
+              </div>
+            </section>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id='pane-settings' class='pane'>
+      <div class='panel' style='max-width:920px'>
+        <div class='card-title'>全局配置</div>
+        <div class='hint'>设置中明确区分 `agent路径` 与 `任务产物路径`；workflow 仅保留内存态调度工作集，不在自身目录持久化任务明文。</div>
+        <div style='height:8px'></div>
+        <div class='card-title'>agent路径</div>
+        <div class='hint'>用于扫描并加载该路径下全部 agent；切换后会刷新角色池与相关会话入口。</div>
+        <div style='height:8px'></div>
+        <label for='agentSearchRoot' class='hint'>当前 agent路径</label>
+        <input id='agentSearchRoot' value='' placeholder='例如 C:/work/agents'/>
+        <div style='height:14px'></div>
+        <div class='card-title'>代码与开发工作区边界</div>
+        <div class='hint'>固定 `workflow` 为 PM/控制工作区，固定 `workflow_code` 为正式代码根仓；本地开发工作区固定落在 `workflow/.repository/`，只作为临时代码修改区并由 PM 仓 `.gitignore` 忽略。</div>
+        <div style='height:8px'></div>
+        <div id='developerWorkspaceStatusMeta' class='hint'>边界状态读取中...</div>
+        <div style='height:8px'></div>
+        <div class='hint'>PM 工作区路径</div>
+        <div id='pmWorkspacePath' class='assignment-path-box'>-</div>
+        <div class='hint' style='margin-top:8px'>代码根仓路径</div>
+        <div id='codeRootPath' class='assignment-path-box'>-</div>
+        <div class='hint' style='margin-top:8px'>开发工作区根路径</div>
+        <div id='developmentWorkspaceRootPath' class='assignment-path-box'>-</div>
+        <div style='height:8px'></div>
+        <div class='card-title'>测试数据环境策略</div>
+        <div id='showTestDataPolicyMeta' class='hint'>环境策略读取中...</div>
+        <div class='hint'>该策略由当前运行环境决定，为只读信息；页面不提供运行时覆盖入口。</div>
+        <div style='height:8px'></div>
+        <div class='checkline'>
+          <label><input id='allowManualPolicyInputCheck' type='checkbox'/>允许手动角色与职责兜底（管理员）</label>
+          <span id='allowManualPolicyInputMeta' class='hint'>默认开启</span>
+        </div>
+        <div style='height:8px'></div>
+        <div class='row'>
+          <button id='switchRootBtn' class='warn'>应用 agent路径</button>
+          <button id='refreshSettingsBtn' class='alt'>刷新状态</button>
+        </div>
+        <div style='height:14px'></div>
+        <div class='card-title'>任务产物路径</div>
+        <div class='hint'>任务图、任务详情、完整提示词、stdout/stderr、结果正文与任务产物都从该路径动态加载；目录按任务聚合到 `tasks/`。</div>
+        <div style='height:8px'></div>
+        <label for='artifactRootPathInput' class='hint'>当前任务产物路径</label>
+        <input id='artifactRootPathInput' value='' placeholder='例如 ../output 或 D:/workspace-output'/>
+        <div style='height:8px'></div>
+        <div class='row'>
+          <button id='switchArtifactRootBtn' class='alt'>应用任务产物路径</button>
+          <span id='artifactRootStatusMeta' class='hint'>未校验</span>
+        </div>
+        <div style='height:8px'></div>
+        <div class='hint'>任务目录根</div>
+        <div id='artifactWorkspacePath' class='assignment-path-box'>-</div>
+        <div class='hint' style='margin-top:8px'>根目录说明文件</div>
+        <div id='artifactStructurePath' class='assignment-path-box'>-</div>
+        <div class='hint' style='margin-top:8px;line-height:1.7;'>
+          目录约定：
+          <br/>
+          `&lt;任务产物路径&gt;/tasks/&lt;ticket_id&gt;/task.json`
+          <br/>
+          `&lt;任务产物路径&gt;/tasks/&lt;ticket_id&gt;/runs/&lt;run_id&gt;/...`
+          <br/>
+          `&lt;任务产物路径&gt;/tasks/&lt;ticket_id&gt;/artifacts/&lt;node_id&gt;/output/...`
+          <br/>
+          `&lt;任务产物路径&gt;/tasks/&lt;ticket_id&gt;/artifacts/&lt;node_id&gt;/delivery/&lt;receiver_agent_id&gt;/...`
+        </div>
+        <div style='height:14px'></div>
+        <div class='card-title'>任务执行</div>
+        <div class='hint'>设置页只维护全局执行通道与并发；完整提示词、stdout/stderr 和执行过程请在任务详情的 `执行链路` 查看。</div>
+        <div style='height:8px'></div>
+        <div class='assignment-execution-card'>
+          <div class='settings-section-grid'>
+            <div>
+              <label for='assignmentExecutionProviderSelect' class='hint'>执行通道</label>
+              <select id='assignmentExecutionProviderSelect'>
+                <option value='codex'>Codex</option>
+              </select>
+            </div>
+            <div>
+              <label for='assignmentExecutionConcurrencyInput' class='hint'>全局并发上限</label>
+              <input id='assignmentExecutionConcurrencyInput' type='number' min='1' step='1' value='5' placeholder='例如 5'/>
+            </div>
+            <div class='settings-section-span'>
+              <label for='assignmentCodexCommandPathInput' class='hint'>Codex 调用路径</label>
+              <input id='assignmentCodexCommandPathInput' value='' placeholder='例如 C:/Users/think/AppData/Roaming/npm/codex.ps1'/>
+            </div>
+            <div class='settings-section-span'>
+              <label for='assignmentCommandTemplateInput' class='hint'>命令模板</label>
+              <textarea id='assignmentCommandTemplateInput' rows='4' placeholder='必须包含 {codex_path} 与 {workspace_path}'></textarea>
+            </div>
+          </div>
+          <div style='height:8px'></div>
+          <div class='row'>
+            <button id='assignmentExecutionSaveBtn' class='alt' type='button'>应用任务执行配置</button>
+            <span id='assignmentExecutionMeta' class='hint'>最近更新 -</span>
+          </div>
+        </div>
+        <div id='settingsErr' class='error'></div>
+        <div style='height:8px'></div>
+        <div class='hint'>
+          规则：1) 无角色不可开会话。2) 新会话必须先选角色。3) 跨会话并发上限 5，同会话串行。4) 切换根路径前必须先关闭活动会话。
+        </div>
+        <div class='danger-zone'>
+          <div class='card-title'>历史清理</div>
+          <div class='hint'>用于清理历史会话/训练留痕，操作不可撤销。</div>
+          <div style='height:8px'></div>
+          <label for='cleanupMode' class='hint'>清理范围</label>
+          <select id='cleanupMode'>
+            <option value='closed_sessions'>仅清理已关闭会话</option>
+            <option value='test_data'>仅清理测试数据（默认保留近 7 天）</option>
+            <option value='all'>清空全部历史记录</option>
+          </select>
+          <div style='height:8px'></div>
+          <label for='cleanupTestDataHours' class='hint'>测试数据保留时长（小时，仅测试数据模式生效）</label>
+          <input id='cleanupTestDataHours' type='number' min='1' step='1' value='168' placeholder='例如 168'/>
+          <div style='height:6px'></div>
+          <div class='hint'>系统会按后台定时任务自动清理测试数据（默认每天执行一次）。</div>
+          <div style='height:8px'></div>
+          <div class='checkline'>
+            <label><input id='cleanupArtifacts' type='checkbox' checked/>删除关联产物文件</label>
+            <label><input id='cleanupLogs' type='checkbox'/>清空 logs/events|logs/decisions|logs/runs</label>
+          </div>
+          <div style='height:8px'></div>
+          <button id='cleanupHistoryBtn' class='bad'>执行历史清理</button>
+        </div>
+      </div>
+    </section>
+  </main>
+</div>
+<div id='policyConfirmMask' class='policy-confirm-mask hidden' role='dialog' aria-modal='true' aria-labelledby='policyConfirmTitle'>
+  <div class='policy-confirm-modal'>
+    <div class='policy-confirm-scroll'>
+      <div class='policy-confirm-head'>
+        <div id='policyConfirmTitle' class='policy-confirm-title'>角色与职责需人工确认</div>
+        <div class='hint'>会话创建前确认角色与职责/目标边界</div>
+      </div>
+      <div id='policyConfirmMeta' class='policy-confirm-meta'></div>
+      <div id='policyConfirmAlert' class='policy-confirm-alert'></div>
+      <div id='policyConfirmSummary' class='policy-confirm-stack'></div>
+      <details id='policyConfirmAnalysisChain' class='agent-policy-details' style='margin-top:10px'>
+        <summary>查看分析链路（提示词 / Codex 输出 / 解析结果 / 门禁判定）</summary>
+        <div id='policyConfirmAnalysisChainBody' class='agent-policy-detail-body'></div>
+      </details>
+      <details id='policyConfirmGateDetails' class='agent-policy-details' style='margin-top:10px'>
+        <summary>查看门禁与来源（治理层）</summary>
+        <div id='policyConfirmGateBody' class='agent-policy-detail-body'></div>
+      </details>
+      <details id='policyConfirmEvidence' class='agent-policy-details' style='margin-top:10px'>
+        <summary>查看 AGENTS.md 原文证据片段</summary>
+        <div id='policyConfirmEvidenceBody' class='agent-policy-detail-body'></div>
+      </details>
+      <details id='policyConfirmRisk' class='policy-confirm-risk' open>
+        <summary>风险提示</summary>
+      <div id='policyConfirmRiskBody' class='policy-confirm-risk-body'></div>
+      </details>
+      <div class='policy-confirm-edit'>
+        <div class='card-title'>编辑后使用（仅本会话生效）</div>
+        <div class='policy-confirm-edit-grid'>
+          <div class='policy-edit-role'>
+            <label for='policyEditRole' class='hint'>角色</label>
+            <textarea id='policyEditRole' placeholder='请输入角色定位'></textarea>
+          </div>
+          <div class='policy-edit-goal'>
+            <label for='policyEditGoal' class='hint'>目标</label>
+            <textarea id='policyEditGoal' placeholder='请输入会话目标'></textarea>
+          </div>
+          <div class='policy-edit-duty'>
+            <label for='policyEditDuty' class='hint'>职责边界（每行一条）</label>
+            <textarea id='policyEditDuty' placeholder='例如：仅分析并给出建议；不得直接执行高风险操作'></textarea>
+          </div>
+          <div class='policy-edit-recommend'>
+            <label for='policyRecommendPrompt' class='hint'>一句话让 AI 推荐角色与职责（可用于优化当前草稿）</label>
+            <div class='policy-confirm-ai-row'>
+              <input id='policyRecommendPrompt' placeholder='例如：面向新手用户，突出风险边界并给出可执行步骤'/>
+              <button id='policyRecommendBtn' type='button' class='alt'>AI 一句话推荐</button>
+            </div>
+            <div id='policyRecommendMeta' class='policy-confirm-ai-meta'></div>
+          </div>
+          <div class='policy-edit-recommend-trace'>
+            <details id='policyRecommendTrace' class='agent-policy-details policy-recommend-trace'>
+              <summary>查看优化对话记录</summary>
+              <div id='policyRecommendTraceBody' class='agent-policy-detail-body'></div>
+            </details>
+          </div>
+          <div class='policy-edit-reason'>
+            <label for='policyConfirmReason' class='hint'>原因（可选）</label>
+            <input id='policyConfirmReason' placeholder='例如：描述过泛，需要补充边界'/>
+          </div>
+          <div class='policy-edit-rescore'>
+            <label class='hint'>编辑后评分对比</label>
+            <div class='policy-confirm-ai-row'>
+              <button id='policyRescoreBtn' type='button' class='alt'>重新评分并对比</button>
+            </div>
+            <div id='policyRescoreMeta' class='policy-confirm-ai-meta'></div>
+            <div id='policyEditScorePreview' class='policy-edit-score-preview hidden'></div>
+          </div>
+        </div>
+      </div>
+      <div class='policy-confirm-actions'>
+        <button id='policyConfirmUseBtn'>确认并使用本会话</button>
+        <button id='policyEditUseBtn' class='alt'>编辑后使用本会话</button>
+        <button id='policyCopyBtn' class='alt'>复制网页视图</button>
+        <button id='policyCancelBtn' class='alt'>取消</button>
+        <div id='policyConfirmError' class='policy-confirm-error'></div>
+      </div>
+    </div>
+  </div>
+</div>
+<script src='/static/workflow-web-client.js'></script>
+</body>
+</html>

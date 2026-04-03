@@ -1,0 +1,387 @@
+.runtime-upgrade-banner {
+  position: fixed;
+  top: 14px;
+  left: 50%;
+  right: auto;
+  bottom: auto;
+  transform: translateX(-50%);
+  z-index: 2200;
+  width: min(560px, calc(100vw - 24px));
+  max-height: calc(100vh - 24px);
+  box-sizing: border-box;
+  --runtime-upgrade-accent: #3370ff;
+  --runtime-upgrade-accent-strong: #245bdb;
+  --runtime-upgrade-accent-soft: #edf3ff;
+  --runtime-upgrade-line: #e5e6eb;
+  --runtime-upgrade-line-strong: #d0d5dd;
+  --runtime-upgrade-text: #1f2329;
+  --runtime-upgrade-muted: #646a73;
+  --runtime-upgrade-surface: #ffffff;
+  --runtime-upgrade-surface-soft: #f7f8fa;
+  --runtime-upgrade-surface-subtle: #f2f3f5;
+  --runtime-upgrade-shadow: 0 12px 32px rgba(31, 35, 41, 0.14);
+}
+
+.runtime-upgrade-banner.hidden {
+  display: none;
+}
+
+.runtime-upgrade-shell {
+  display: grid;
+  gap: 12px;
+  border: 1px solid var(--runtime-upgrade-line);
+  border-radius: 14px;
+  background: var(--runtime-upgrade-surface);
+  box-shadow: var(--runtime-upgrade-shadow);
+  padding: 14px;
+  width: 100%;
+  box-sizing: border-box;
+  overflow: auto;
+}
+
+.runtime-upgrade-banner.is-passive {
+  width: min(420px, calc(100vw - 24px));
+}
+
+.runtime-upgrade-shell.is-passive {
+  gap: 10px;
+  padding: 12px 14px;
+  box-shadow: 0 10px 24px rgba(31, 35, 41, 0.1);
+}
+
+.runtime-upgrade-shell.is-passive .runtime-upgrade-footer {
+  padding-top: 0;
+  border-top: none;
+}
+
+.runtime-upgrade-head,
+.runtime-upgrade-body,
+.runtime-upgrade-footer {
+  min-width: 0;
+  width: 100%;
+}
+
+.runtime-upgrade-head {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: start;
+}
+
+.runtime-upgrade-head-main {
+  min-width: 0;
+  display: grid;
+  gap: 6px;
+}
+
+.runtime-upgrade-eyebrow {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: fit-content;
+  min-height: 24px;
+  padding: 0 8px;
+  border-radius: 8px;
+  border: 1px solid #d7e3ff;
+  background: var(--runtime-upgrade-accent-soft);
+  color: var(--runtime-upgrade-accent);
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: 0;
+}
+
+.runtime-upgrade-title {
+  font-size: 18px;
+  font-weight: 700;
+  line-height: 1.25;
+  color: var(--runtime-upgrade-text);
+}
+
+.runtime-upgrade-meta,
+.runtime-upgrade-note {
+  margin-top: 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--runtime-upgrade-muted);
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.runtime-upgrade-status-chip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 28px;
+  padding: 0 10px;
+  border-radius: 8px;
+  border: 1px solid var(--runtime-upgrade-line);
+  background: var(--runtime-upgrade-surface-soft);
+  color: var(--runtime-upgrade-muted);
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+  flex: none;
+}
+
+.runtime-upgrade-status-chip.is-ready {
+  color: var(--runtime-upgrade-accent-strong);
+  background: var(--runtime-upgrade-accent-soft);
+  border-color: #d7e3ff;
+}
+
+.runtime-upgrade-status-chip.is-running {
+  color: var(--runtime-upgrade-accent);
+  background: var(--runtime-upgrade-accent-soft);
+  border-color: #d7e3ff;
+}
+
+.runtime-upgrade-status-chip.is-done {
+  color: #166534;
+  background: #eef7f1;
+  border-color: #d4e8da;
+}
+
+.runtime-upgrade-status-chip.is-bad {
+  color: #b42318;
+  background: #fff1f0;
+  border-color: #f0d4d2;
+}
+
+.runtime-upgrade-version-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.runtime-upgrade-version-card {
+  border: 1px solid var(--runtime-upgrade-line);
+  border-radius: 10px;
+  background: var(--runtime-upgrade-surface-soft);
+  padding: 10px 11px;
+  min-width: 0;
+}
+
+.runtime-upgrade-version-card.is-candidate {
+  border-color: #d7e3ff;
+  background: #f8fbff;
+}
+
+.runtime-upgrade-version-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--runtime-upgrade-muted);
+}
+
+.runtime-upgrade-version-value {
+  margin-top: 6px;
+  font: 700 13px/1.45 "Cascadia Mono", "Consolas", "SFMono-Regular", monospace;
+  color: var(--runtime-upgrade-text);
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.runtime-upgrade-body {
+  display: grid;
+  gap: 10px;
+  box-sizing: border-box;
+  padding: 12px;
+  border: 1px solid #eff0f2;
+  border-radius: 12px;
+  background: var(--runtime-upgrade-surface-soft);
+}
+
+.runtime-upgrade-progress-summary {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+}
+
+.runtime-upgrade-progress-meta {
+  min-width: 0;
+  font-size: 12px;
+  font-weight: 600;
+  color: #344054;
+}
+
+.runtime-upgrade-progress-percent {
+  flex: none;
+  min-width: 48px;
+  text-align: right;
+  color: var(--runtime-upgrade-accent-strong);
+  font-size: 12px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.runtime-upgrade-progress {
+  width: 100%;
+}
+
+.runtime-upgrade-progress-track {
+  overflow: hidden;
+  height: 6px;
+  border-radius: 999px;
+  background: #e5e6eb;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.runtime-upgrade-progress-fill {
+  height: 100%;
+  width: 0;
+  border-radius: 999px;
+  transition: width 240ms cubic-bezier(0.2, 0.9, 0.2, 1), background-color 220ms ease;
+  background: #b7bdc7;
+  will-change: width;
+}
+
+.runtime-upgrade-progress-fill.is-running {
+  background: var(--runtime-upgrade-accent);
+}
+
+.runtime-upgrade-progress-fill.is-done {
+  background: #00a871;
+}
+
+.runtime-upgrade-progress-fill.is-bad {
+  background: #d84b4b;
+}
+
+.runtime-upgrade-note.is-bad {
+  color: var(--bad);
+}
+
+.runtime-upgrade-message {
+  border: 1px solid #e8ebf0;
+  border-radius: 10px;
+  background: var(--runtime-upgrade-surface);
+  padding: 10px 12px;
+  font-size: 13px;
+  line-height: 1.55;
+  color: #344054;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.runtime-upgrade-message.is-running {
+  border-color: #d7e3ff;
+  background: #f8fbff;
+}
+
+.runtime-upgrade-message.is-done {
+  border-color: #d4e8da;
+  background: #f6fffb;
+}
+
+.runtime-upgrade-message.is-bad {
+  border-color: #f0d4d2;
+  background: #fff8f7;
+}
+
+.runtime-upgrade-highlights {
+  display: none;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid #d7e3ff;
+  border-radius: 12px;
+  background: #f8fbff;
+}
+
+.runtime-upgrade-highlights-title {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--runtime-upgrade-accent-strong);
+}
+
+.runtime-upgrade-highlights-list {
+  margin: 0;
+  padding-left: 18px;
+  display: grid;
+  gap: 6px;
+}
+
+.runtime-upgrade-highlights-list li {
+  color: var(--runtime-upgrade-text);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.runtime-upgrade-highlights-list li::marker {
+  color: var(--runtime-upgrade-accent);
+}
+
+.runtime-upgrade-footer {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: center;
+  padding-top: 2px;
+  border-top: 1px solid #eff0f2;
+}
+
+.runtime-upgrade-footer-meta {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.runtime-upgrade-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  min-width: 132px;
+}
+
+.runtime-upgrade-actions button {
+  min-width: 132px;
+  height: 36px;
+  padding: 0 14px;
+  border-radius: 8px;
+  white-space: nowrap;
+  box-shadow: none;
+  font-weight: 600;
+}
+
+.runtime-upgrade-actions button:hover {
+  transform: none;
+}
+
+.runtime-upgrade-actions button.is-placeholder {
+  visibility: hidden;
+  pointer-events: none;
+}
+
+@media (max-width: 720px) {
+  .runtime-upgrade-banner {
+    left: 12px;
+    right: 12px;
+    top: 12px;
+    bottom: auto;
+    width: auto;
+    transform: none;
+  }
+
+  .runtime-upgrade-shell {
+    gap: 10px;
+    padding: 12px;
+  }
+
+  .runtime-upgrade-head,
+  .runtime-upgrade-footer,
+  .runtime-upgrade-progress-summary,
+  .runtime-upgrade-version-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .runtime-upgrade-actions,
+  .runtime-upgrade-actions button,
+  .runtime-upgrade-status-chip {
+    width: 100%;
+  }
+
+  .runtime-upgrade-progress-percent {
+    text-align: left;
+  }
+}

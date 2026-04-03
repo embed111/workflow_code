@@ -1,0 +1,6 @@
+[
+    "store_core_and_paths.py",
+    "session_records.py",
+    "analysis_records.py",
+    "task_run_records.py"
+]

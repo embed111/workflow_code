@@ -1,0 +1,7 @@
+[
+  "release_review_core.py",
+  "release_review_execution.py",
+  "release_publish_runtime.py",
+  "release_review_lifecycle.py",
+  "release_confirmation.py"
+]
