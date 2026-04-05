@@ -131,12 +131,15 @@ def _assignment_normalize_workflow_ui_global_graph_header(root: Path, ticket_id:
 
 def _assignment_ensure_workflow_ui_global_graph_ticket(root: Path) -> str:
     bound_ticket_id = _assignment_bound_workflow_ui_global_graph_ticket(root)
-    candidates = _assignment_workflow_ui_global_graph_candidates(root)
     if bound_ticket_id:
-        for candidate in candidates:
-            if str(candidate.get("ticket_id") or "").strip() == bound_ticket_id:
-                _assignment_normalize_workflow_ui_global_graph_header(root, bound_ticket_id)
-                return bound_ticket_id
+        try:
+            bound_record = _assignment_load_task_record_lightweight(root, bound_ticket_id)
+        except Exception:
+            bound_record = {}
+        if _assignment_is_workflow_ui_global_graph_record(bound_record):
+            _assignment_normalize_workflow_ui_global_graph_header(root, bound_ticket_id)
+            return bound_ticket_id
+    candidates = _assignment_workflow_ui_global_graph_candidates(root)
     if not candidates:
         if bound_ticket_id:
             _assignment_set_bound_workflow_ui_global_graph_ticket(root, "")

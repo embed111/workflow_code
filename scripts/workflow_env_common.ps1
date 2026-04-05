@@ -805,6 +805,9 @@ function Resolve-WorkflowEnvironmentDescriptor {
     $resolvedAgentRoot = if (-not [string]::IsNullOrWhiteSpace($AgentSearchRoot)) {
         $AgentSearchRoot
     }
+    elseif ($Environment -ne 'prod' -and -not [string]::IsNullOrWhiteSpace([string]$prodRuntimeConfig['agent_search_root'])) {
+        [string]$prodRuntimeConfig['agent_search_root']
+    }
     elseif (-not [string]::IsNullOrWhiteSpace([string]$runtimeConfig['agent_search_root'])) {
         [string]$runtimeConfig['agent_search_root']
     }

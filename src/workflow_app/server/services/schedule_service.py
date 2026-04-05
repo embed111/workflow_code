@@ -12,7 +12,7 @@ from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from ..infra.db.connection import connect_db
-from . import assignment_service
+from . import schedule_assignment_bridge as _schedule_assignment_bridge
 
 
 def bind_runtime_symbols(symbols: dict[str, object]) -> None:
@@ -27,6 +27,7 @@ def bind_runtime_symbols(symbols: dict[str, object]) -> None:
         if callable(current) and getattr(current, "__module__", "") == module_name:
             continue
         target[key] = value
+    _schedule_assignment_bridge.bind_runtime_symbols(target)
 
 
 class ScheduleCenterError(RuntimeError):
@@ -363,44 +364,19 @@ def _schedule_trigger_thread_key(root: Path, trigger_instance_id: str) -> str:
     return f"{Path(root).resolve(strict=False).as_posix()}::{str(trigger_instance_id or '').strip()}"
 
 
-def _schedule_artifact_tasks_root(root: Path) -> Path:
-    resolver = globals().get("resolve_artifact_root_path")
-    if not callable(resolver):
-        return Path("")
-    try:
-        artifact_root = Path(resolver(root)).resolve(strict=False)
-    except Exception:
-        return Path("")
-    return (artifact_root / "tasks").resolve(strict=False)
-
-
-def _find_schedule_assignment_ref(root: Path, *, schedule_id: str, trigger_instance_id: str) -> dict[str, str]:
-    schedule_key = _safe_token(schedule_id)
-    trigger_key = _safe_token(trigger_instance_id)
-    if not schedule_key or not trigger_key:
-        return {}
-    tasks_root = _schedule_artifact_tasks_root(root)
-    if not tasks_root.exists() or not tasks_root.is_dir():
-        return {}
-    for path in sorted(tasks_root.glob("*/nodes/*.json"), key=lambda item: item.stat().st_mtime if item.exists() else 0, reverse=True):
-        try:
-            payload = json.loads(path.read_text(encoding="utf-8"))
-        except Exception:
-            continue
-        if not isinstance(payload, dict):
-            continue
-        if str(payload.get("source_schedule_id") or "").strip() != schedule_key:
-            continue
-        if str(payload.get("trigger_instance_id") or "").strip() != trigger_key:
-            continue
-        node_id = str(payload.get("node_id") or "").strip()
-        ticket_id = str(path.parents[1].name or "").strip() if len(path.parents) >= 2 else ""
-        if node_id and ticket_id:
-            return {
-                "assignment_ticket_id": ticket_id,
-                "assignment_node_id": node_id,
-            }
-    return {}
+def _find_schedule_assignment_ref(
+    root: Path,
+    *,
+    schedule_id: str,
+    trigger_instance_id: str,
+    ticket_id: str = "",
+) -> dict[str, str]:
+    return _schedule_assignment_bridge.find_schedule_assignment_ref(
+        root,
+        schedule_id=schedule_id,
+        trigger_instance_id=trigger_instance_id,
+        ticket_id=ticket_id,
+    )
 
 
 def _next_trigger_after(schedule: dict[str, Any], *, planned_trigger_at: str) -> str:
@@ -542,10 +518,16 @@ def _process_schedule_trigger_async(
                     },
                 },
             )
+        schedule_ticket_id = ""
+        try:
+            schedule_ticket_id = _ensure_global_assignment_graph(cfg)
+        except Exception:
+            schedule_ticket_id = ""
         recovered = _find_schedule_assignment_ref(
             cfg.root,
             schedule_id=str(schedule.get("schedule_id") or "").strip(),
             trigger_instance_id=trigger_instance_id,
+            ticket_id=schedule_ticket_id,
         )
         if recovered:
             created = {
@@ -1328,6 +1310,24 @@ def get_schedule_detail(root: Path, schedule_id: str) -> dict[str, Any]:
     schedule.update(_schedule_trigger_projection(schedule))
     future = _future_triggers(list(schedule.get("rule_sets") or []), start_dt=_minute_floor(_now_bj()), limit=8)
     recent = [_enrich_trigger(root, item) for item in trigger_rows]
+    if recent:
+        latest = dict(recent[0] or {})
+        schedule["last_trigger_at"] = str(latest.get("planned_trigger_at") or schedule.get("last_trigger_at") or "").strip()
+        schedule["last_result_status"] = str(latest.get("result_status") or schedule.get("last_result_status") or "pending").strip().lower() or "pending"
+        schedule["last_result_status_text"] = str(
+            latest.get("result_status_text")
+            or SCHEDULE_RESULT_TEXT.get(schedule["last_result_status"], SCHEDULE_RESULT_TEXT["pending"])
+        ).strip()
+        schedule["last_result_ticket_id"] = str(latest.get("assignment_ticket_id") or schedule.get("last_result_ticket_id") or "").strip()
+        schedule["last_result_node_id"] = str(latest.get("assignment_node_id") or schedule.get("last_result_node_id") or "").strip()
+        schedule["last_result_summary"] = str(
+            latest.get("trigger_message")
+            or latest.get("assignment_status_text")
+            or schedule.get("last_result_summary")
+            or ""
+        ).strip()
+    else:
+        schedule["last_result_summary"] = str(schedule.get("last_result_summary") or "").strip()
     return {
         "schedule": schedule,
         "future_triggers": future,
@@ -1425,40 +1425,15 @@ def get_schedule_calendar(root: Path, *, month: str = "") -> dict[str, Any]:
 
 
 def _ensure_global_assignment_graph(cfg: Any) -> str:
-    created = assignment_service.create_assignment_graph(
-        cfg,
-        {
-            "graph_name": SCHEDULE_ASSIGNMENT_GRAPH_NAME,
-            "source_workflow": SCHEDULE_ASSIGNMENT_SOURCE_WORKFLOW,
-            "summary": "任务中心手动创建（全局主图）",
-            "review_mode": "none",
-            "external_request_id": SCHEDULE_ASSIGNMENT_GRAPH_REQUEST_ID,
-            "operator": "schedule-worker",
-        },
-    )
-    ticket_id = str(created.get("ticket_id") or "").strip()
-    if not ticket_id:
-        raise ScheduleCenterError(500, "global assignment graph missing", "schedule_assignment_graph_missing")
-    return ticket_id
+    return _schedule_assignment_bridge.ensure_global_assignment_graph(cfg)
 
 
 def _schedule_assignment_goal(schedule: dict[str, Any], *, planned_trigger_at: str, trigger_rule_summary: str) -> str:
-    return "\n".join(
-        [
-            f"计划名称：{str(schedule.get('schedule_name') or '').strip()}",
-            f"计划时间：{planned_trigger_at}",
-            f"命中规则：{trigger_rule_summary}",
-            "",
-            "launch_summary",
-            str(schedule.get("launch_summary") or "").strip() or "-",
-            "",
-            "execution_checklist",
-            str(schedule.get("execution_checklist") or "").strip() or "-",
-            "",
-            "done_definition",
-            str(schedule.get("done_definition") or "").strip() or "-",
-        ]
-    ).strip()
+    return _schedule_assignment_bridge.build_schedule_assignment_goal(
+        schedule,
+        planned_trigger_at=planned_trigger_at,
+        trigger_rule_summary=trigger_rule_summary,
+    )
 
 
 def _create_schedule_node(
@@ -1469,58 +1444,17 @@ def _create_schedule_node(
     planned_trigger_at: str,
     trigger_rule_summary: str,
 ) -> dict[str, Any]:
-    ticket_id = _ensure_global_assignment_graph(cfg)
-    planned_label = planned_trigger_at.replace("T", " ").replace("+08:00", "")
-    created = assignment_service.create_assignment_node(
+    return _schedule_assignment_bridge.create_schedule_node(
         cfg,
-        ticket_id,
-        {
-            "node_name": f"{str(schedule.get('schedule_name') or '').strip()} / {planned_label}",
-            "assigned_agent_id": str(schedule.get("assigned_agent_id") or "").strip(),
-            "priority": str(schedule.get("priority") or "P1"),
-            "node_goal": _schedule_assignment_goal(
-                schedule,
-                planned_trigger_at=planned_trigger_at,
-                trigger_rule_summary=trigger_rule_summary,
-            ),
-            "expected_artifact": str(schedule.get("expected_artifact") or "").strip(),
-            "delivery_mode": str(schedule.get("delivery_mode") or "none").strip().lower() or "none",
-            "delivery_receiver_agent_id": str(schedule.get("delivery_receiver_agent_id") or "").strip(),
-            "source_schedule_id": str(schedule.get("schedule_id") or "").strip(),
-            "planned_trigger_at": planned_trigger_at,
-            "trigger_instance_id": trigger_instance_id,
-            "trigger_rule_summary": trigger_rule_summary,
-            "operator": "schedule-worker",
-        },
-        include_test_data=True,
+        schedule,
+        trigger_instance_id=trigger_instance_id,
+        planned_trigger_at=planned_trigger_at,
+        trigger_rule_summary=trigger_rule_summary,
     )
-    node = dict(created.get("node") or {})
-    node_id = str(node.get("node_id") or "").strip()
-    if not node_id:
-        raise ScheduleCenterError(500, "schedule assignment node missing", "schedule_assignment_node_missing")
-    return {"ticket_id": ticket_id, "node_id": node_id}
 
 
 def _request_assignment_dispatch(root: Path, ticket_id: str) -> dict[str, str]:
-    overview = assignment_service.get_assignment_overview(root, ticket_id, include_test_data=True)
-    graph = dict(overview.get("graph") or overview.get("graph_overview") or {})
-    scheduler_state = str(graph.get("scheduler_state") or "").strip().lower()
-    if scheduler_state == "idle":
-        assignment_service.resume_assignment_scheduler(
-            root,
-            ticket_id_text=ticket_id,
-            operator="schedule-worker",
-            pause_note="schedule auto resume",
-            include_test_data=True,
-        )
-        return {"dispatch_status": "requested", "dispatch_message": "resume_scheduler_requested"}
-    assignment_service.dispatch_assignment_next(
-        root,
-        ticket_id_text=ticket_id,
-        operator="schedule-worker",
-        include_test_data=True,
-    )
-    return {"dispatch_status": "requested", "dispatch_message": "dispatch_requested"}
+    return _schedule_assignment_bridge.request_assignment_dispatch(root, ticket_id)
 
 
 def _schedule_payload_from_body(cfg: Any, body: dict[str, Any], *, existing: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -1822,10 +1756,16 @@ def run_schedule_scan(cfg: Any, *, operator: str = "schedule-worker", now_at: st
                 _append_schedule_event(cfg.root, {"created_at": now_text, "action": "trigger_deduped", "schedule_id": schedule["schedule_id"], "trigger_instance_id": trigger_id, "audit_id": audit_id})
                 recovered = {}
                 if not existing_ticket_id or not existing_node_id:
+                    schedule_ticket_id = ""
+                    try:
+                        schedule_ticket_id = _ensure_global_assignment_graph(cfg)
+                    except Exception:
+                        schedule_ticket_id = ""
                     recovered = _find_schedule_assignment_ref(
                         cfg.root,
                         schedule_id=schedule["schedule_id"],
                         trigger_instance_id=trigger_id,
+                        ticket_id=schedule_ticket_id,
                     )
                     if recovered:
                         existing_ticket_id = str(recovered.get("assignment_ticket_id") or "").strip()
@@ -2005,14 +1945,13 @@ def run_schedule_smoke_baseline(cfg: Any, body: dict[str, Any] | None = None) ->
     initial_ticket_id = str(initial_latest.get("assignment_ticket_id") or "").strip()
     initial_node_id = str(initial_latest.get("assignment_node_id") or "").strip()
     if initial_trigger_id and (not initial_ticket_id or not initial_node_id):
-        _process_schedule_trigger_async(
+        _start_schedule_trigger_processing(
             cfg,
             schedule=dict(initial_detail.get("schedule") or {}),
             trigger_instance_id=initial_trigger_id,
             planned_trigger_at=str(initial_latest.get("planned_trigger_at") or planned_trigger_at),
             trigger_rule_summary=str(initial_latest.get("trigger_rule_summary") or "smoke-baseline"),
             operator=operator,
-            thread_key=_schedule_trigger_thread_key(cfg.root, initial_trigger_id) + "::smoke-inline",
         )
     started_at = time.time()
     poll_count = 0
@@ -2038,6 +1977,7 @@ def run_schedule_smoke_baseline(cfg: Any, body: dict[str, Any] | None = None) ->
             str(schedule_info.get("last_trigger_at") or "").strip()
             and str(schedule_info.get("last_result_ticket_id") or "").strip()
             and str(schedule_info.get("last_result_node_id") or "").strip()
+            and str(schedule_info.get("last_result_status") or "").strip().lower() in {"queued", "running", "succeeded", "failed"}
         )
         if chain["schedule_hit"] and chain["task_created"] and chain["auto_dispatch"] and chain["status_writeback"]:
             break

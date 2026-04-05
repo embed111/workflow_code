@@ -9,6 +9,7 @@
     "node_lifecycle_actions.py",
     "task_artifact_store_core.py",
     "global_graph_singleton_runtime.py",
+    "assignment_self_iteration_runtime.py",
     "task_artifact_store_queries.py",
     "task_artifact_store_runtime_metrics.py",
     "task_artifact_store_run_runtime.py",

@@ -62,7 +62,23 @@ def _json_load(path: Path) -> dict:
 def _workboard_payload(cfg, *, include_test_data: bool) -> dict:
     resolver = getattr(ws, "resolve_artifact_root_path", None)
     if not callable(resolver):
-        return {"assignment_workboard_agents": [], "schedule_workboard_preview": [], "schedule_plan_count": 0}
+        return {
+            "assignment_workboard_agents": [],
+            "assignment_workboard_summary": {
+                "active_agent_count": 0,
+                "running_task_count": 0,
+                "queued_task_count": 0,
+                "failed_task_count": 0,
+                "blocked_task_count": 0,
+            },
+            "schedule_workboard_preview": [],
+            "schedule_plan_count": 0,
+            "schedule_total": 0,
+            "active_agent_count": 0,
+            "queued_task_count": 0,
+            "failed_task_count": 0,
+            "blocked_task_count": 0,
+        }
     artifact_root = Path(resolver(cfg.root)).resolve(strict=False)
     tasks_root = (artifact_root / "tasks").resolve(strict=False)
     groups = {}
@@ -129,18 +145,42 @@ def _workboard_payload(cfg, *, include_test_data: bool) -> dict:
             item["agent_name"],
         ),
     )
+    active_agent_count = 0
+    running_task_count = 0
+    queued_task_count = 0
+    failed_task_count = 0
+    blocked_task_count = 0
     for item in agent_items:
-        item["running"] = item["running"][:4]
-        item["queued"] = item["queued"][:4]
-        item["failed"] = item["failed"][:4]
-        item["blocked"] = item["blocked"][:4]
+        running_count = len(list(item.get("running") or []))
+        queued_count = len(list(item.get("queued") or []))
+        failed_count = len(list(item.get("failed") or []))
+        blocked_count = len(list(item.get("blocked") or []))
+        running_task_count += running_count
+        queued_task_count += queued_count
+        failed_task_count += failed_count
+        blocked_task_count += blocked_count
+        if running_count or queued_count or failed_count or blocked_count:
+            active_agent_count += 1
+        item["running"] = list(item.get("running") or [])[:4]
+        item["queued"] = list(item.get("queued") or [])[:4]
+        item["failed"] = list(item.get("failed") or [])[:4]
+        item["blocked"] = list(item.get("blocked") or [])[:4]
 
     schedule_preview = []
+    schedule_total = 0
     db_path = (Path(cfg.root) / "state" / "workflow.db").resolve(strict=False)
     if db_path.exists():
         conn = sqlite3.connect(db_path)
         conn.row_factory = sqlite3.Row
         try:
+            total_row = conn.execute(
+                """
+                SELECT COUNT(1) AS total_count
+                FROM schedule_plans
+                WHERE enabled=1 AND deleted_at=''
+                """
+            ).fetchone()
+            schedule_total = int((total_row or {"total_count": 0})["total_count"] or 0)
             rows = conn.execute(
                 """
                 SELECT schedule_id,schedule_name,enabled,next_trigger_at,last_trigger_at,last_result_status,last_result_ticket_id,last_result_node_id,updated_at
@@ -155,8 +195,20 @@ def _workboard_payload(cfg, *, include_test_data: bool) -> dict:
             conn.close()
     return {
         "assignment_workboard_agents": agent_items,
+        "assignment_workboard_summary": {
+            "active_agent_count": active_agent_count,
+            "running_task_count": running_task_count,
+            "queued_task_count": queued_task_count,
+            "failed_task_count": failed_task_count,
+            "blocked_task_count": blocked_task_count,
+        },
         "schedule_workboard_preview": schedule_preview,
-        "schedule_plan_count": len(schedule_preview),
+        "schedule_plan_count": schedule_total,
+        "schedule_total": schedule_total,
+        "active_agent_count": active_agent_count,
+        "queued_task_count": queued_task_count,
+        "failed_task_count": failed_task_count,
+        "blocked_task_count": blocked_task_count,
     }
 
 

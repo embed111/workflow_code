@@ -732,6 +732,28 @@ def _finalize_assignment_execution_run(
         run_record["updated_at"] = now_text
         run_record["codex_failure"] = {}
         _assignment_write_run_record(root, ticket_id=ticket_id, run_record=run_record)
+        try:
+            schedule_result = _assignment_queue_self_iteration_schedule(
+                root,
+                task_record=task_record,
+                node_record=node_record,
+                result_summary=str(result_payload.get("result_summary") or "").strip() or "执行完成",
+                success=True,
+            )
+            if bool(schedule_result.get("queued")):
+                _assignment_write_audit_entry(
+                    root,
+                    ticket_id=ticket_id,
+                    node_id=node_id,
+                    action="schedule_self_iteration",
+                    operator="assignment-executor",
+                    reason="queued next self-iteration schedule",
+                    target_status="succeeded",
+                    detail=schedule_result,
+                    created_at=now_text,
+                )
+        except Exception:
+            pass
     else:
         failure_text = _normalize_text(
             failure_message or _short_assignment_text(stderr_text, 500) or "assignment execution failed",
@@ -783,6 +805,28 @@ def _finalize_assignment_execution_run(
             failed_at=now_text,
         )
         _assignment_write_run_record(root, ticket_id=ticket_id, run_record=run_record)
+        try:
+            schedule_result = _assignment_queue_self_iteration_schedule(
+                root,
+                task_record=task_record,
+                node_record=node_record,
+                result_summary=failure_text,
+                success=False,
+            )
+            if bool(schedule_result.get("queued")):
+                _assignment_write_audit_entry(
+                    root,
+                    ticket_id=ticket_id,
+                    node_id=node_id,
+                    action="schedule_self_iteration",
+                    operator="assignment-executor",
+                    reason="queued next self-iteration schedule after failure",
+                    target_status="failed",
+                    detail=schedule_result,
+                    created_at=now_text,
+                )
+        except Exception:
+            pass
     try:
         dispatch_assignment_next(
             root,
