@@ -648,15 +648,23 @@
   }
 
   async function refreshDashboard() {
+    const activeTab = document.querySelector('.tab.active');
+    const activeTabName = safe(activeTab && activeTab.getAttribute('data-tab')).trim().toLowerCase();
     try {
       const d = await getJSON('/api/dashboard');
       applyShowTestDataPolicyPayload(d);
       state.dashboardMetrics = d && typeof d === 'object' ? d : {};
       state.dashboardError = '';
       renderGlobalRuntimeMetricLine();
+      if (safe(activeTabName).trim().toLowerCase() === 'task-center' && typeof renderAssignmentCenter === 'function') {
+        renderAssignmentCenter();
+      }
     } catch (err) {
       state.dashboardError = safe(err && err.message ? err.message : err);
       renderGlobalRuntimeMetricLine();
+      if (safe(activeTabName).trim().toLowerCase() === 'task-center' && typeof renderAssignmentCenter === 'function') {
+        renderAssignmentCenter();
+      }
     }
   }
 

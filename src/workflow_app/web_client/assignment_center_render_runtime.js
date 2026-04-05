@@ -390,6 +390,7 @@
   }
 
   function renderAssignmentCenter() {
+    renderAssignmentWorkboard();
     renderAssignmentGraphSelector();
     renderAssignmentScheduler();
     renderAssignmentGraph();
@@ -497,6 +498,214 @@
       '&source_workflow=' + encodeURIComponent(ASSIGNMENT_UI_SOURCE_WORKFLOW) +
       '&external_request_id=' + encodeURIComponent(ASSIGNMENT_UI_GLOBAL_GRAPH_REQUEST_ID),
     );
+  }
+
+  function assignmentWorkboardDurationText(seconds) {
+    const totalSeconds = Math.max(0, Number(seconds || 0));
+    if (!Number.isFinite(totalSeconds) || totalSeconds <= 0) return '0s';
+    if (typeof formatElapsedMs === 'function') {
+      return formatElapsedMs(totalSeconds * 1000);
+    }
+    const hours = Math.floor(totalSeconds / 3600);
+    const minutes = Math.floor((totalSeconds % 3600) / 60);
+    const secs = Math.floor(totalSeconds % 60);
+    if (hours > 0) return String(hours) + 'h ' + String(minutes) + 'm';
+    if (minutes > 0) return String(minutes) + 'm ' + String(secs) + 's';
+    return String(secs) + 's';
+  }
+
+  function assignmentWorkboardGoalTone(status, progressPct) {
+    const key = safe(status).trim().toLowerCase();
+    if (key === 'running') {
+      return Number(progressPct || 0) >= 100 ? 'done' : 'running';
+    }
+    if (key === 'stopped') return 'fail';
+    return 'future';
+  }
+
+  function assignmentWorkboardGoalSnapshot() {
+    const metrics = state.dashboardMetrics && typeof state.dashboardMetrics === 'object'
+      ? state.dashboardMetrics
+      : {};
+    const goalHours = Math.max(1, Number(metrics.prod_runtime_goal_hours || 24));
+    const status = safe(metrics.prod_runtime_status).trim().toLowerCase() || 'unknown';
+    const startedAt = safe(metrics.prod_runtime_started_at).trim();
+    const uptimeSeconds = Math.max(0, Number(metrics.prod_runtime_uptime_seconds || 0));
+    const progressPct = Math.max(0, Math.min(100, Number(metrics.prod_runtime_goal_progress_pct || 0)));
+    let title = '24h 目标待观察';
+    let detail = '当前未拿到连续运行状态';
+    if (status === 'running') {
+      title = progressPct >= 100 ? '24h 连续运行已达成' : '24h 连续运行进行中';
+      detail = '连续运行 ' + assignmentWorkboardDurationText(uptimeSeconds) + ' / ' + String(goalHours) + 'h';
+      if (startedAt) {
+        detail += ' · 启动于 ' + (typeof assignmentFormatBeijingTime === 'function' ? assignmentFormatBeijingTime(startedAt) : startedAt);
+      }
+    } else if (status === 'stopped') {
+      title = '24h 连续运行已中断';
+      detail = startedAt
+        ? '最近一次启动于 ' + (typeof assignmentFormatBeijingTime === 'function' ? assignmentFormatBeijingTime(startedAt) : startedAt)
+        : 'prod 当前未运行';
+    }
+    return {
+      goalHours: goalHours,
+      status: status,
+      startedAt: startedAt,
+      uptimeSeconds: uptimeSeconds,
+      progressPct: progressPct,
+      title: title,
+      detail: detail,
+      tone: assignmentWorkboardGoalTone(status, progressPct),
+    };
+  }
+
+  function assignmentWorkboardGroups() {
+    const graphData = state.assignmentGraphData && typeof state.assignmentGraphData === 'object'
+      ? state.assignmentGraphData
+      : {};
+    const rows = Array.isArray(graphData.nodes) ? graphData.nodes : [];
+    if (!rows.length) {
+      const metrics = state.dashboardMetrics && typeof state.dashboardMetrics === 'object'
+        ? state.dashboardMetrics
+        : {};
+      const grouped = Array.isArray(metrics.assignment_workboard_agents)
+        ? metrics.assignment_workboard_agents
+        : [];
+      return grouped.map((item) => ({
+        key: safe(item && item.agent_id).trim() || safe(item && item.agent_name).trim(),
+        agentId: safe(item && item.agent_id).trim(),
+        agentName: safe(item && item.agent_name).trim() || safe(item && item.agent_id).trim() || '未指派',
+        running: Array.isArray(item && item.running) ? item.running : [],
+        queued: Array.isArray(item && item.queued) ? item.queued : [],
+        failed: Array.isArray(item && item.failed) ? item.failed : [],
+        blocked: Array.isArray(item && item.blocked) ? item.blocked : [],
+      }));
+    }
+    const map = new Map();
+    rows.forEach((item) => {
+      const row = item && typeof item === 'object' ? item : {};
+      const status = safe(row.status).trim().toLowerCase();
+      if (!['running', 'ready', 'pending', 'failed', 'blocked'].includes(status)) return;
+      const agentId = safe(row.assigned_agent_id).trim();
+      const agentName = safe(row.assigned_agent_name).trim() || agentId || '未指派';
+      const key = agentId || agentName;
+      if (!map.has(key)) {
+        map.set(key, {
+          key: key,
+          agentId: agentId,
+          agentName: agentName,
+          running: [],
+          queued: [],
+          failed: [],
+          blocked: [],
+        });
+      }
+      const bucket = map.get(key);
+      if (status === 'running') {
+        bucket.running.push(row);
+      } else if (status === 'failed') {
+        bucket.failed.push(row);
+      } else if (status === 'blocked') {
+        bucket.blocked.push(row);
+      } else {
+        bucket.queued.push(row);
+      }
+    });
+    return Array.from(map.values()).sort((left, right) => {
+      const leftScore = left.running.length * 100 + left.queued.length * 10 + left.failed.length;
+      const rightScore = right.running.length * 100 + right.queued.length * 10 + right.failed.length;
+      if (leftScore !== rightScore) return rightScore - leftScore;
+      return safe(left.agentName).localeCompare(safe(right.agentName), 'zh-CN');
+    });
+  }
+
+  function assignmentWorkboardTaskButtons(items, toneClass) {
+    const rows = Array.isArray(items) ? items.slice(0, 4) : [];
+    if (!rows.length) {
+      return "<div class='hint'>暂无</div>";
+    }
+    return rows.map((item) => {
+      const nodeId = safe(item && item.node_id).trim();
+      const nodeName = safe(item && (item.node_name || item.node_id)).trim() || '-';
+      const priorityLabel = safe(item && (item.priority_label || item.priority)).trim() || '-';
+      return (
+        "<button class='alt running-task-item' type='button' data-assignment-workboard-node='" + escapeHtml(nodeId) + "'>" +
+        "<div class='title'>" + escapeHtml(nodeName) + '</div>' +
+        "<div class='sub'>" + escapeHtml(priorityLabel + ' · ' + toneClass) + '</div>' +
+        '</button>'
+      );
+    }).join('');
+  }
+
+  function renderAssignmentWorkboard() {
+    const host = $('assignmentWorkboard');
+    if (!host) return;
+    const metrics = state.dashboardMetrics && typeof state.dashboardMetrics === 'object'
+      ? state.dashboardMetrics
+      : {};
+    const goal = assignmentWorkboardGoalSnapshot();
+    const groups = assignmentWorkboardGroups();
+    const runningCount = groups.reduce((sum, item) => sum + item.running.length, 0);
+    const queuedCount = groups.reduce((sum, item) => sum + item.queued.length, 0);
+    const failedCount = groups.reduce((sum, item) => sum + item.failed.length, 0);
+    const activeAgents = groups.filter((item) => item.running.length > 0 || item.queued.length > 0 || item.failed.length > 0).length;
+    const schedulePreview = Array.isArray(metrics.schedule_workboard_preview) ? metrics.schedule_workboard_preview.slice(0, 4) : [];
+    const summaryHtml =
+      "<div class='assignment-panel-head'>" +
+      "<div><div class='card-title'>工作状态看板</div><div class='hint'>当前按任务中心主图聚合各小伙伴的正在执行、待执行和失败任务。</div></div>" +
+      "<div class='assignment-head-actions'>" +
+      "<span class='assignment-chip " + escapeHtml(goal.tone) + "'>" + escapeHtml(goal.title) + "</span>" +
+      "<span class='assignment-chip muted'>" + escapeHtml(goal.detail) + "</span>" +
+      "</div></div>" +
+      "<div class='assignment-detail-grid assignment-detail-grid-tight'>" +
+      assignmentStatHtml('活跃小伙伴', escapeHtml(String(activeAgents))) +
+      assignmentStatHtml('运行中任务', escapeHtml(String(runningCount))) +
+      assignmentStatHtml('待执行任务', escapeHtml(String(queuedCount))) +
+      assignmentStatHtml('失败任务', escapeHtml(String(failedCount))) +
+      "</div>";
+    if (!groups.length) {
+      host.innerHTML = summaryHtml + "<div class='hint' style='margin-top:8px'>主图当前没有可展示的运行中或待执行任务。</div>";
+      return;
+    }
+    const groupsHtml =
+      "<div class='assignment-audit-list' style='margin-top:10px'>" +
+      groups.map((group) => (
+        "<div class='assignment-audit-item'>" +
+        "<div class='row between'>" +
+        "<strong>" + escapeHtml(group.agentName) + "</strong>" +
+        "<span class='assignment-chip " + escapeHtml(group.running.length ? 'running' : (group.failed.length ? 'fail' : 'future')) + "'>" +
+        escapeHtml('运行中 ' + group.running.length + ' · 待执行 ' + group.queued.length + ' · 失败 ' + group.failed.length) +
+        "</span>" +
+        "</div>" +
+        (group.running.length
+          ? "<div class='hint' style='margin-top:6px'>正在执行</div><div class='running-task-list'>" + assignmentWorkboardTaskButtons(group.running, '运行中') + "</div>"
+          : '') +
+        (group.queued.length
+          ? "<div class='hint' style='margin-top:6px'>待执行</div><div class='running-task-list'>" + assignmentWorkboardTaskButtons(group.queued, '待执行') + "</div>"
+          : '') +
+        (group.failed.length
+          ? "<div class='hint' style='margin-top:6px'>待处理失败</div><div class='running-task-list'>" + assignmentWorkboardTaskButtons(group.failed, '失败') + "</div>"
+          : '') +
+        (group.blocked.length
+          ? "<div class='hint' style='margin-top:6px'>阻塞 " + escapeHtml(String(group.blocked.length)) + " 项</div>"
+          : '') +
+        "</div>"
+      )).join('') +
+      "</div>";
+    const scheduleHtml = schedulePreview.length
+      ? (
+        "<div class='assignment-audit-list' style='margin-top:10px'>" +
+        schedulePreview.map((item) => (
+          "<div class='assignment-audit-item'>" +
+          "<div class='row between'><strong>" + escapeHtml(safe(item && item.schedule_name).trim() || safe(item && item.schedule_id).trim() || '-') + "</strong>" +
+          "<span class='assignment-chip muted'>" + escapeHtml(safe(item && (item.last_result_status || 'pending')).trim() || 'pending') + "</span></div>" +
+          "<div class='hint' style='margin-top:6px'>下次触发: " + escapeHtml(safe(item && item.next_trigger_at).trim() || '-') + "</div>" +
+          "</div>"
+        )).join('') +
+        "</div>"
+      )
+      : "<div class='hint' style='margin-top:10px'>最近未拿到定时任务预览。</div>";
+    host.innerHTML = summaryHtml + groupsHtml +
+      "<div class='hint' style='margin-top:12px'>最近定时任务</div>" + scheduleHtml;
   }
 
   function assignmentGraphOptionLabel(item) {

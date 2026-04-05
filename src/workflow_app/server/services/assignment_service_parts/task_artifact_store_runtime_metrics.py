@@ -61,6 +61,53 @@ def _zero_assignment_runtime_metrics() -> dict[str, int]:
     }
 
 
+def _get_assignment_runtime_metrics_from_node_files(
+    root: Path,
+    *,
+    include_test_data: bool,
+) -> dict[str, int]:
+    tasks_root = _assignment_tasks_root(root)
+    if not tasks_root.exists() or not tasks_root.is_dir():
+        return _zero_assignment_runtime_metrics()
+    running_node_count = 0
+    running_agents: set[str] = set()
+    canonical_workflow_ui_ticket = _assignment_ensure_workflow_ui_global_graph_ticket(root)
+    for ticket_id in [
+        str(path.name or "").strip()
+        for path in sorted(tasks_root.iterdir(), key=lambda item: item.name.lower())
+        if path.is_dir() and str(path.name or "").strip()
+    ]:
+        task_record = _assignment_read_json(_assignment_graph_record_path(root, ticket_id))
+        if not task_record:
+            try:
+                task_record = _assignment_load_task_record(root, ticket_id)
+            except AssignmentCenterError:
+                continue
+        if not _assignment_task_visible(task_record, include_test_data=include_test_data):
+            continue
+        if _assignment_is_hidden_workflow_ui_graph_ticket(
+            root,
+            ticket_id,
+            ticket_record=task_record,
+            canonical_ticket_id=canonical_workflow_ui_ticket,
+        ):
+            continue
+        for node in _assignment_load_active_node_records_lightweight(root, ticket_id):
+            status = str(node.get("status") or "").strip().lower()
+            if status != "running":
+                continue
+            running_node_count += 1
+            agent_id = str(node.get("assigned_agent_id") or "").strip()
+            if agent_id:
+                running_agents.add(agent_id)
+    return {
+        "running_task_count": max(0, running_node_count),
+        "running_agent_count": max(0, len(running_agents)),
+        "active_execution_count": max(0, running_node_count),
+        "agent_call_count": max(0, running_node_count),
+    }
+
+
 def _get_assignment_runtime_metrics_from_files(
     root: Path,
     *,
@@ -148,7 +195,10 @@ def get_assignment_runtime_metrics(root: Path, *, include_test_data: bool = True
         if str(run_id or "").strip()
     }
     if not active_run_ids:
-        return _zero_assignment_runtime_metrics()
+        return _get_assignment_runtime_metrics_from_node_files(
+            root,
+            include_test_data=include_test_data,
+        )
     try:
         conn = connect_db(root)
         try:
@@ -184,8 +234,14 @@ def get_assignment_runtime_metrics(root: Path, *, include_test_data: bool = True
             "agent_call_count": max(0, active_execution_count),
         }
     except Exception:
-        return _get_assignment_runtime_metrics_from_files(
+        file_metrics = _get_assignment_runtime_metrics_from_files(
             root,
             active_run_ids=active_run_ids,
+            include_test_data=include_test_data,
+        )
+        if int(file_metrics.get("running_task_count") or 0) > 0:
+            return file_metrics
+        return _get_assignment_runtime_metrics_from_node_files(
+            root,
             include_test_data=include_test_data,
         )

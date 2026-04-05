@@ -9,6 +9,24 @@
       });
   }
 
+  function scheduleRepairText(value) {
+    const raw = safe(value);
+    const text = raw.trim();
+    if (!text) return '';
+    if (text.indexOf('?') >= 0 && text.replace(/\?/g, '').trim() === '') return '';
+    if (text.indexOf('\uFFFD') >= 0) return '';
+    if (!/[\u0080-\uFFFF]/.test(text)) return text;
+    const maybeMojibake = /(?:Ã.|Â.|å.|ä.|ç.|é.|è.|ê.|î.|ï.|ô.|û.)/.test(text);
+    if (!maybeMojibake) return text;
+    try {
+      const bytes = new Uint8Array(Array.from(text, (ch) => ch.charCodeAt(0) & 0xFF));
+      const repaired = new TextDecoder('utf-8', { fatal: true }).decode(bytes).trim();
+      return repaired || text;
+    } catch (_err) {
+      return text;
+    }
+  }
+
   function scheduleWeekdaySelections() {
     return Array.from(document.querySelectorAll('[data-schedule-weekday]'))
       .filter((node) => node instanceof HTMLInputElement && node.checked)
@@ -55,12 +73,12 @@
       ? 'specified'
       : 'none';
     return {
-      schedule_name: safe($('scheduleEditorNameInput') ? $('scheduleEditorNameInput').value : '').trim(),
+      schedule_name: scheduleRepairText($('scheduleEditorNameInput') ? $('scheduleEditorNameInput').value : ''),
       assigned_agent_id: safe($('scheduleEditorAgentSelect') ? $('scheduleEditorAgentSelect').value : '').trim(),
       priority: safe($('scheduleEditorPrioritySelect') ? $('scheduleEditorPrioritySelect').value : 'P1').trim() || 'P1',
-      launch_summary: safe($('scheduleEditorLaunchSummaryInput') ? $('scheduleEditorLaunchSummaryInput').value : '').trim(),
-      execution_checklist: safe($('scheduleEditorChecklistInput') ? $('scheduleEditorChecklistInput').value : '').trim(),
-      done_definition: safe($('scheduleEditorDoneDefinitionInput') ? $('scheduleEditorDoneDefinitionInput').value : '').trim(),
+      launch_summary: scheduleRepairText($('scheduleEditorLaunchSummaryInput') ? $('scheduleEditorLaunchSummaryInput').value : ''),
+      execution_checklist: scheduleRepairText($('scheduleEditorChecklistInput') ? $('scheduleEditorChecklistInput').value : ''),
+      done_definition: scheduleRepairText($('scheduleEditorDoneDefinitionInput') ? $('scheduleEditorDoneDefinitionInput').value : ''),
       expected_artifact: safe($('scheduleEditorArtifactInput') ? $('scheduleEditorArtifactInput').value : '').trim(),
       delivery_mode: deliveryMode,
       delivery_receiver_agent_id: deliveryMode === 'specified'

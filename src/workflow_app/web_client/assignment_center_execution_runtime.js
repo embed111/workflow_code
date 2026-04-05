@@ -315,7 +315,7 @@
       assignmentStatHtml('事件数', escapeHtml(String(Number(latestRun.event_count || 0)))) +
       '</div>' +
       "<div class='assignment-execution-stack'>" +
-      assignmentExecutionContentBlockHtml('完整提示词', latestRun.prompt_text, latestRun.prompt_ref, false, 'assignment-run-details-scroll assignment-run-details-prompt', 'assignment-run-scrollbox-prompt') +
+      assignmentExecutionContentBlockHtml('提示词预览', latestRun.prompt_text, latestRun.prompt_ref, false, 'assignment-run-details-scroll assignment-run-details-prompt', 'assignment-run-scrollbox-prompt') +
       assignmentExecutionPanelHtml(
         '执行过程',
         "<div class='assignment-run-scrollbox assignment-run-scrollbox-events'" + assignmentExecutionScrollAttr('events', latestRunId) + '>' +
@@ -326,9 +326,9 @@
         'events',
         latestRunId
       ) +
-      assignmentExecutionContentBlockHtml('stdout', latestRun.stdout_text, latestRun.stdout_ref, false, 'assignment-run-details-scroll') +
-      assignmentExecutionContentBlockHtml('stderr', latestRun.stderr_text, latestRun.stderr_ref, stderrOpen, 'assignment-run-details-scroll') +
-      assignmentExecutionContentBlockHtml('最终结果', latestRun.result_text, latestRun.result_ref, resultOpen, 'assignment-run-details-scroll') +
+      assignmentExecutionContentBlockHtml('stdout 预览', latestRun.stdout_text, latestRun.stdout_ref, false, 'assignment-run-details-scroll') +
+      assignmentExecutionContentBlockHtml('stderr 预览', latestRun.stderr_text, latestRun.stderr_ref, stderrOpen, 'assignment-run-details-scroll') +
+      assignmentExecutionContentBlockHtml('最终结果预览', latestRun.result_text, latestRun.result_ref, resultOpen, 'assignment-run-details-scroll') +
       assignmentExecutionHistoryHtml(recentRuns) +
       '</div>' +
       '';

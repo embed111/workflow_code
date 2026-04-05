@@ -3,6 +3,24 @@
     return "<span class='schedule-status-chip " + escapeHtml(tone) + "'>" + escapeHtml(text || '-') + '</span>';
   }
 
+  function scheduleRepairText(value) {
+    const raw = safe(value);
+    const text = raw.trim();
+    if (!text) return '';
+    if (text.indexOf('?') >= 0 && text.replace(/\?/g, '').trim() === '') return '';
+    if (text.indexOf('\uFFFD') >= 0) return '';
+    if (!/[\u0080-\uFFFF]/.test(text)) return text;
+    const maybeMojibake = /(?:Ã.|Â.|å.|ä.|ç.|é.|è.|ê.|î.|ï.|ô.|û.)/.test(text);
+    if (!maybeMojibake) return text;
+    try {
+      const bytes = new Uint8Array(Array.from(text, (ch) => ch.charCodeAt(0) & 0xFF));
+      const repaired = new TextDecoder('utf-8', { fatal: true }).decode(bytes).trim();
+      return repaired || text;
+    } catch (_err) {
+      return text;
+    }
+  }
+
   function scheduleGuidePointHtml(title, text) {
     return (
       "<div class='schedule-empty-point'>" +
@@ -149,10 +167,12 @@
     const text = !!(item && item.enabled)
       ? (safe(item && item.last_result_status_text).trim() || '待触发')
       : '已停用';
+    const scheduleName = scheduleRepairText(item && item.schedule_name) || '-';
+    const launchSummary = scheduleRepairText(item && item.launch_summary) || '-';
     return (
       "<button class='schedule-plan-item" + (isActive ? " active" : '') + "' type='button' data-schedule-select='" + escapeHtml(safe(item && item.schedule_id).trim()) + "'>" +
-        "<div class='schedule-plan-title'>" + escapeHtml(safe(item && item.schedule_name).trim() || '-') + '</div>' +
-        "<div class='schedule-plan-desc'>" + escapeHtml(safe(item && item.launch_summary).trim() || '-') + '</div>' +
+        "<div class='schedule-plan-title'>" + escapeHtml(scheduleName) + '</div>' +
+        "<div class='schedule-plan-desc'>" + escapeHtml(launchSummary) + '</div>' +
         "<div class='schedule-plan-rules'>" +
           labels.map((label) => "<span class='schedule-rule-chip'>" + escapeHtml(label) + "</span>").join('') +
         '</div>' +
@@ -213,12 +233,16 @@
     const recent = Array.isArray(detail.recent_triggers) ? detail.recent_triggers : [];
     const related = Array.isArray(detail.related_task_refs) ? detail.related_task_refs : [];
     const enabled = !!schedule.enabled;
+    const scheduleName = scheduleRepairText(schedule.schedule_name) || '-';
+    const launchSummary = scheduleRepairText(schedule.launch_summary) || '-';
+    const executionChecklist = scheduleRepairText(schedule.execution_checklist) || '-';
+    const doneDefinition = scheduleRepairText(schedule.done_definition) || '-';
     body.innerHTML =
       "<section class='schedule-hero'>" +
         "<div class='schedule-hero-head'>" +
           "<div>" +
-            "<div class='schedule-plan-title'>" + escapeHtml(safe(schedule.schedule_name).trim()) + '</div>' +
-            "<div class='schedule-plan-sub'>" + escapeHtml(safe(schedule.launch_summary).trim() || '-') + '</div>' +
+            "<div class='schedule-plan-title'>" + escapeHtml(scheduleName) + '</div>' +
+            "<div class='schedule-plan-sub'>" + escapeHtml(launchSummary) + '</div>' +
           '</div>' +
           scheduleStatusChipHtml(enabled ? safe(schedule.last_result_status).trim() : 'disabled', enabled ? (safe(schedule.last_result_status_text).trim() || '待触发') : '已停用', enabled ? '' : 'disabled') +
         '</div>' +
@@ -237,10 +261,10 @@
       "<section class='schedule-section'>" +
         "<div class='schedule-section-head'><div class='card-title'>发起任务内容预览</div></div>" +
         "<div class='schedule-section-grid'>" +
-          scheduleStatHtml('本次目标', safe(schedule.launch_summary).trim()) +
+          scheduleStatHtml('本次目标', launchSummary) +
           scheduleStatHtml('预期产物', safe(schedule.expected_artifact).trim() || '-') +
-          scheduleStatHtml('执行清单', safe(schedule.execution_checklist).trim()) +
-          scheduleStatHtml('完成标准', safe(schedule.done_definition).trim()) +
+          scheduleStatHtml('执行清单', executionChecklist) +
+          scheduleStatHtml('完成标准', doneDefinition) +
         '</div>' +
       '</section>' +
       "<section class='schedule-section'><div class='card-title'>触发规则</div><div class='schedule-plan-rules'>" +
@@ -258,7 +282,7 @@
       '</div></section>' +
       "<section class='schedule-section'><div class='card-title'>关联任务中心实例</div><div class='schedule-list'>" +
         (related.length
-          ? related.map((item) => "<div class='schedule-list-item'><div class='schedule-list-item-head'><div><div class='schedule-plan-title'>" + escapeHtml(safe(item.assignment_node_name).trim() || safe(item.assignment_node_id).trim()) + "</div><div class='schedule-plan-sub'>" + escapeHtml(scheduleFormatBeijingTime(item.planned_trigger_at)) + "</div></div>" + scheduleStatusChipHtml(safe(item.result_status).trim(), safe(item.result_status_text).trim() || '-', '') + "</div><div class='schedule-actions'><button class='alt schedule-jump-btn' type='button' data-open-task-center='1' data-ticket-id='" + escapeHtml(safe(item.assignment_ticket_id).trim()) + "' data-node-id='" + escapeHtml(safe(item.assignment_node_id).trim()) + "'>去任务中心查看</button></div></div>").join('')
+          ? related.map((item) => "<div class='schedule-list-item'><div class='schedule-list-item-head'><div><div class='schedule-plan-title'>" + escapeHtml(scheduleRepairText(item.assignment_node_name) || safe(item.assignment_node_id).trim()) + "</div><div class='schedule-plan-sub'>" + escapeHtml(scheduleFormatBeijingTime(item.planned_trigger_at)) + "</div></div>" + scheduleStatusChipHtml(safe(item.result_status).trim(), safe(item.result_status_text).trim() || '-', '') + "</div><div class='schedule-actions'><button class='alt schedule-jump-btn' type='button' data-open-task-center='1' data-ticket-id='" + escapeHtml(safe(item.assignment_ticket_id).trim()) + "' data-node-id='" + escapeHtml(safe(item.assignment_node_id).trim()) + "'>去任务中心查看</button></div></div>").join('')
           : "<div class='schedule-empty'><div class='schedule-plan-sub'>暂无关联实例</div></div>") +
       '</div></section>';
   }
@@ -338,12 +362,12 @@
       '</section>' +
       "<section class='schedule-section'><div class='card-title'>当日计划</div><div class='schedule-list'>" +
         (plans.length
-          ? plans.map((item) => "<div class='schedule-list-item'><div class='schedule-list-item-head'><div><div class='schedule-plan-title'>" + escapeHtml(safe(item.schedule_name).trim()) + "</div><div class='schedule-plan-sub'>" + escapeHtml(scheduleFormatBeijingTime(item.planned_trigger_at)) + "</div></div><button class='alt schedule-jump-btn' type='button' data-schedule-action='edit' data-schedule-id='" + escapeHtml(safe(item.schedule_id).trim()) + "'>编辑计划</button></div><div class='schedule-plan-sub'>" + escapeHtml(safe(item.trigger_rule_summary).trim()) + "</div></div>").join('')
+          ? plans.map((item) => "<div class='schedule-list-item'><div class='schedule-list-item-head'><div><div class='schedule-plan-title'>" + escapeHtml(scheduleRepairText(item.schedule_name) || '-') + "</div><div class='schedule-plan-sub'>" + escapeHtml(scheduleFormatBeijingTime(item.planned_trigger_at)) + "</div></div><button class='alt schedule-jump-btn' type='button' data-schedule-action='edit' data-schedule-id='" + escapeHtml(safe(item.schedule_id).trim()) + "'>编辑计划</button></div><div class='schedule-plan-sub'>" + escapeHtml(safe(item.trigger_rule_summary).trim()) + "</div></div>").join('')
           : "<div class='schedule-empty'><div class='schedule-plan-sub'>当日暂无未来计划</div></div>") +
       '</div></section>' +
       "<section class='schedule-section'><div class='card-title'>实际结果</div><div class='schedule-list'>" +
         (results.length
-          ? results.map((item) => "<div class='schedule-list-item'><div class='schedule-list-item-head'><div><div class='schedule-plan-title'>" + escapeHtml(safe(item.schedule_name_snapshot).trim() || safe(item.assignment_node_name).trim()) + "</div><div class='schedule-plan-sub'>" + escapeHtml(scheduleFormatBeijingTime(item.planned_trigger_at)) + "</div></div>" + scheduleStatusChipHtml(safe(item.result_status).trim(), safe(item.result_status_text).trim() || '-', '') + "</div><div class='schedule-plan-sub'>" + escapeHtml(safe(item.launch_summary_snapshot).trim() || safe(item.trigger_message).trim() || '-') + "</div><div class='schedule-actions'>" + (safe(item.assignment_ticket_id).trim() && safe(item.assignment_node_id).trim() ? "<button class='alt schedule-jump-btn' type='button' data-open-task-center='1' data-ticket-id='" + escapeHtml(safe(item.assignment_ticket_id).trim()) + "' data-node-id='" + escapeHtml(safe(item.assignment_node_id).trim()) + "'>去任务中心查看</button>" : '') + (safe(item.schedule_id).trim() ? "<button class='alt schedule-jump-btn' type='button' data-schedule-action='edit' data-schedule-id='" + escapeHtml(safe(item.schedule_id).trim()) + "'>编辑计划</button>" : '') + "</div></div>").join('')
+          ? results.map((item) => "<div class='schedule-list-item'><div class='schedule-list-item-head'><div><div class='schedule-plan-title'>" + escapeHtml(scheduleRepairText(item.schedule_name_snapshot) || scheduleRepairText(item.assignment_node_name) || '-') + "</div><div class='schedule-plan-sub'>" + escapeHtml(scheduleFormatBeijingTime(item.planned_trigger_at)) + "</div></div>" + scheduleStatusChipHtml(safe(item.result_status).trim(), safe(item.result_status_text).trim() || '-', '') + "</div><div class='schedule-plan-sub'>" + escapeHtml(scheduleRepairText(item.launch_summary_snapshot) || safe(item.trigger_message).trim() || '-') + "</div><div class='schedule-actions'>" + (safe(item.assignment_ticket_id).trim() && safe(item.assignment_node_id).trim() ? "<button class='alt schedule-jump-btn' type='button' data-open-task-center='1' data-ticket-id='" + escapeHtml(safe(item.assignment_ticket_id).trim()) + "' data-node-id='" + escapeHtml(safe(item.assignment_node_id).trim()) + "'>去任务中心查看</button>" : '') + (safe(item.schedule_id).trim() ? "<button class='alt schedule-jump-btn' type='button' data-schedule-action='edit' data-schedule-id='" + escapeHtml(safe(item.schedule_id).trim()) + "'>编辑计划</button>" : '') + "</div></div>").join('')
           : "<div class='schedule-empty'><div class='schedule-plan-sub'>当日暂无执行结果</div></div>") +
       '</div></section>';
   }
@@ -352,11 +376,11 @@
     const schedule = state.scheduleEditorMode === 'edit' ? selectedScheduleDetail() : {};
     const inputs = schedule.editor_rule_inputs || { monthly: {}, weekly: {}, daily: {}, once: {} };
     $('scheduleEditorTitle').textContent = state.scheduleEditorMode === 'edit' ? '编辑定时任务' : '新建定时任务';
-    $('scheduleEditorNameInput').value = safe(schedule.schedule_name).trim();
+    $('scheduleEditorNameInput').value = scheduleRepairText(schedule.schedule_name);
     $('scheduleEditorPrioritySelect').value = safe(schedule.priority).trim() || 'P1';
-    $('scheduleEditorLaunchSummaryInput').value = safe(schedule.launch_summary).trim();
-    $('scheduleEditorChecklistInput').value = safe(schedule.execution_checklist).trim();
-    $('scheduleEditorDoneDefinitionInput').value = safe(schedule.done_definition).trim();
+    $('scheduleEditorLaunchSummaryInput').value = scheduleRepairText(schedule.launch_summary);
+    $('scheduleEditorChecklistInput').value = scheduleRepairText(schedule.execution_checklist);
+    $('scheduleEditorDoneDefinitionInput').value = scheduleRepairText(schedule.done_definition);
     $('scheduleEditorArtifactInput').value = safe(schedule.expected_artifact).trim();
     $('scheduleEditorDeliveryModeSelect').value = safe(schedule.delivery_mode).trim() || 'none';
     $('scheduleEditorEnabledCheck').checked = state.scheduleEditorMode === 'edit' ? !!schedule.enabled : true;

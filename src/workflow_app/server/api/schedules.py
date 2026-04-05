@@ -79,6 +79,16 @@ def try_handle_post(handler, cfg, state, ctx: dict) -> bool:
             handler.send_json(exc.status_code, payload)
         return True
 
+    if path == "/api/schedules/smoke-baseline":
+        try:
+            data = ws.run_schedule_smoke_baseline(cfg, body if isinstance(body, dict) else {})
+            handler.send_json(200, {"ok": True, **data})
+        except ws.ScheduleCenterError as exc:
+            payload = {"ok": False, "error": str(exc), "code": exc.code}
+            payload.update(exc.extra)
+            handler.send_json(exc.status_code, payload)
+        return True
+
     menable = re.fullmatch(r"/api/schedules/([0-9A-Za-z._:-]+)/enable", path)
     if menable:
         try:

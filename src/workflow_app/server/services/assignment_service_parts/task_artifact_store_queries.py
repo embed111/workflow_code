@@ -648,10 +648,26 @@ def _assignment_run_summary(root: Path, row: dict[str, Any], *, include_content:
         "event_count": len(events),
         "events": events,
         "codex_failure": codex_failure,
-        "prompt_text": _read_assignment_run_text(prompt_ref) if include_content else "",
-        "stdout_text": _read_assignment_run_text(stdout_ref) if include_content else "",
-        "stderr_text": _read_assignment_run_text(stderr_ref) if include_content else "",
-        "result_text": _read_assignment_run_text(result_ref) if include_content else "",
+        "prompt_text": (
+            _read_assignment_run_text(prompt_ref, preview_chars=_assignment_run_preview_chars(prompt_ref))
+            if include_content
+            else ""
+        ),
+        "stdout_text": (
+            _read_assignment_run_text(stdout_ref, preview_chars=_assignment_run_preview_chars(stdout_ref))
+            if include_content
+            else ""
+        ),
+        "stderr_text": (
+            _read_assignment_run_text(stderr_ref, preview_chars=_assignment_run_preview_chars(stderr_ref))
+            if include_content
+            else ""
+        ),
+        "result_text": (
+            _read_assignment_run_text(result_ref, preview_chars=_assignment_run_preview_chars(result_ref))
+            if include_content
+            else ""
+        ),
     }
 
 
@@ -1184,5 +1200,4 @@ def get_assignment_status_detail(
         node_id=node_id,
         include_test_data=include_test_data,
     )
-
 

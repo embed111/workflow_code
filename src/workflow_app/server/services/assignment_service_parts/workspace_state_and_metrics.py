@@ -439,6 +439,105 @@ def _write_assignment_run_text(path: Path, text: str) -> None:
     path.write_text(str(text or ""), encoding="utf-8")
 
 
+_ASSIGNMENT_RUN_TRACE_FILE_MAX_BYTES = {
+    "stdout.txt": 96 * 1024,
+    "stderr.txt": 96 * 1024,
+    "events.log": 128 * 1024,
+}
+
+_ASSIGNMENT_RUN_PREVIEW_CHARS = {
+    "prompt.txt": 4000,
+    "stdout.txt": 6000,
+    "stderr.txt": 6000,
+    "result.json": 6000,
+    "result.md": 6000,
+}
+
+
+def _assignment_run_trace_file_limit(path: Path) -> int:
+    return int(_ASSIGNMENT_RUN_TRACE_FILE_MAX_BYTES.get(str(path.name or "").strip().lower(), 0) or 0)
+
+
+def _assignment_run_preview_chars(path_text: str) -> int:
+    name = Path(str(path_text or "").strip()).name.lower()
+    return int(_ASSIGNMENT_RUN_PREVIEW_CHARS.get(name, 0) or 0)
+
+
+def _assignment_run_preview_text(text: str, limit: int) -> str:
+    raw = str(text or "")
+    if limit <= 0 or len(raw) <= limit:
+        return raw
+    omitted = max(0, len(raw) - limit)
+    return (
+        raw[:limit].rstrip()
+        + f"\n\n...[已截断，当前仅展示前 {limit} 个字符；剩余 {omitted} 个字符请按下方引用路径查看原文件]"
+    )
+
+
+def _compact_assignment_event_detail(value: Any, *, depth: int = 0) -> Any:
+    if isinstance(value, dict):
+        items = list(value.items())
+        compact: dict[str, Any] = {}
+        for index, (key, item) in enumerate(items):
+            if index >= 8:
+                compact["__truncated__"] = f"... {len(items) - 8} more fields"
+                break
+            compact[str(key or "").strip()[:80] or f"field_{index + 1}"] = _compact_assignment_event_detail(
+                item,
+                depth=depth + 1,
+            )
+        return compact
+    if isinstance(value, list):
+        compact_items = [_compact_assignment_event_detail(item, depth=depth + 1) for item in value[:6]]
+        if len(value) > 6:
+            compact_items.append(f"... {len(value) - 6} more items")
+        return compact_items
+    if isinstance(value, str):
+        limit = 120 if depth >= 2 else 240
+        return _short_assignment_text(value, limit)
+    if isinstance(value, (int, float, bool)) or value is None:
+        return value
+    if depth >= 2:
+        try:
+            return _short_assignment_text(json.dumps(value, ensure_ascii=False), 200)
+        except Exception:
+            return _short_assignment_text(str(value), 200)
+    return _short_assignment_text(str(value), 240)
+
+
+def _append_assignment_run_raw_text(path: Path, text: str) -> None:
+    raw = str(text or "")
+    if not raw:
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    file_limit = _assignment_run_trace_file_limit(path)
+    if file_limit <= 0:
+        with path.open("a", encoding="utf-8") as handle:
+            handle.write(raw)
+        return
+    current_size = path.stat().st_size if path.exists() else 0
+    if current_size >= file_limit:
+        return
+    raw_bytes = raw.encode("utf-8")
+    notice_text = (
+        f"\n[workflow] {path.name} 已达到 {file_limit} 字节上限；后续输出不再继续落盘。"
+        "界面默认只展示精简预览，请优先结合最终结果和关键事件排查。\n"
+    )
+    notice_bytes = notice_text.encode("utf-8")
+    with path.open("ab") as handle:
+        if current_size + len(raw_bytes) <= file_limit:
+            handle.write(raw_bytes)
+            return
+        remaining = max(0, file_limit - current_size)
+        body_budget = max(0, remaining - len(notice_bytes))
+        if body_budget > 0:
+            truncated_text = raw_bytes[:body_budget].decode("utf-8", errors="ignore")
+            if truncated_text:
+                handle.write(truncated_text.encode("utf-8"))
+        if handle.tell() < file_limit:
+            handle.write(notice_bytes[: max(0, file_limit - handle.tell())])
+
+
 def _timestamp_assignment_run_log_text(text: str) -> str:
     raw = str(text or "")
     if not raw:
@@ -465,9 +564,10 @@ def _timestamp_assignment_run_log_text(text: str) -> str:
 def _append_assignment_run_text(path: Path, text: str) -> None:
     if not text:
         return
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("a", encoding="utf-8") as handle:
-        handle.write(_timestamp_assignment_run_log_text(text))
+    rendered = _timestamp_assignment_run_log_text(text)
+    if not rendered:
+        return
+    _append_assignment_run_raw_text(path, rendered)
 
 
 def _write_assignment_run_json(path: Path, payload: Any) -> None:
@@ -479,12 +579,10 @@ def _append_assignment_run_event(path: Path, *, event_type: str, message: str, c
     payload = {
         "created_at": created_at,
         "event_type": str(event_type or "").strip(),
-        "message": str(message or "").rstrip(),
-        "detail": dict(detail or {}),
+        "message": _short_assignment_text(str(message or "").rstrip(), 1200),
+        "detail": _compact_assignment_event_detail(dict(detail or {})),
     }
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("a", encoding="utf-8") as handle:
-        handle.write(json.dumps(payload, ensure_ascii=False) + "\n")
+    _append_assignment_run_raw_text(path, json.dumps(payload, ensure_ascii=False) + "\n")
 
 
 def _tail_assignment_run_events(path: Path, *, limit: int = 120) -> list[dict[str, Any]]:
@@ -507,14 +605,15 @@ def _tail_assignment_run_events(path: Path, *, limit: int = 120) -> list[dict[st
     return rows[-max(1, int(limit)) :]
 
 
-def _read_assignment_run_text(path_text: str) -> str:
+def _read_assignment_run_text(path_text: str, *, preview_chars: int = 0) -> str:
     path = Path(str(path_text or "").strip()).resolve(strict=False)
     if not path.exists() or not path.is_file():
         return ""
     try:
-        return path.read_text(encoding="utf-8")
+        text = path.read_text(encoding="utf-8")
     except Exception:
         return ""
+    return _assignment_run_preview_text(text, preview_chars)
 
 
 def _load_assignment_runs(
@@ -563,10 +662,22 @@ def _assignment_run_summary(root: Path, row: dict[str, Any], *, include_content:
     node_id = str(row.get("node_id") or "").strip()
     refs = _assignment_run_file_paths(root, ticket_id, run_id) if run_id and ticket_id else {}
     events_path = refs.get("events")
-    prompt_text = _read_assignment_run_text(str(row.get("prompt_ref") or "")) if include_content else ""
-    stdout_text = _read_assignment_run_text(str(row.get("stdout_ref") or "")) if include_content else ""
-    stderr_text = _read_assignment_run_text(str(row.get("stderr_ref") or "")) if include_content else ""
-    result_text = _read_assignment_run_text(str(row.get("result_ref") or "")) if include_content else ""
+    prompt_ref = str(row.get("prompt_ref") or "").strip()
+    stdout_ref = str(row.get("stdout_ref") or "").strip()
+    stderr_ref = str(row.get("stderr_ref") or "").strip()
+    result_ref = str(row.get("result_ref") or "").strip()
+    prompt_text = (
+        _read_assignment_run_text(prompt_ref, preview_chars=_assignment_run_preview_chars(prompt_ref)) if include_content else ""
+    )
+    stdout_text = (
+        _read_assignment_run_text(stdout_ref, preview_chars=_assignment_run_preview_chars(stdout_ref)) if include_content else ""
+    )
+    stderr_text = (
+        _read_assignment_run_text(stderr_ref, preview_chars=_assignment_run_preview_chars(stderr_ref)) if include_content else ""
+    )
+    result_text = (
+        _read_assignment_run_text(result_ref, preview_chars=_assignment_run_preview_chars(result_ref)) if include_content else ""
+    )
     events = _tail_assignment_run_events(events_path) if isinstance(events_path, Path) else []
     return {
         "run_id": run_id,
@@ -577,10 +688,10 @@ def _assignment_run_summary(root: Path, row: dict[str, Any], *, include_content:
         "status": _normalize_run_status(row.get("status") or "starting"),
         "status_text": _node_status_text("running" if str(row.get("status") or "").strip().lower() == "running" else row.get("status") or ""),
         "command_summary": str(row.get("command_summary") or "").strip(),
-        "prompt_ref": str(row.get("prompt_ref") or "").strip(),
-        "stdout_ref": str(row.get("stdout_ref") or "").strip(),
-        "stderr_ref": str(row.get("stderr_ref") or "").strip(),
-        "result_ref": str(row.get("result_ref") or "").strip(),
+        "prompt_ref": prompt_ref,
+        "stdout_ref": stdout_ref,
+        "stderr_ref": stderr_ref,
+        "result_ref": result_ref,
         "latest_event": str(row.get("latest_event") or "").strip(),
         "latest_event_at": str(row.get("latest_event_at") or "").strip(),
         "exit_code": int(row.get("exit_code") or 0),

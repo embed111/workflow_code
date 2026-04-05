@@ -620,6 +620,22 @@
       });
     }
 
+    const workboard = $('assignmentWorkboard');
+    if (workboard) {
+      workboard.addEventListener('click', (event) => {
+        const target = event.target;
+        if (!(target instanceof Element)) return;
+        const button = target.closest('[data-assignment-workboard-node]');
+        if (!button) return;
+        const nodeId = safe(button.getAttribute('data-assignment-workboard-node')).trim();
+        if (!nodeId) return;
+        state.assignmentSelectedNodeId = nodeId;
+        refreshAssignmentDetail(nodeId).catch((err) => {
+          setAssignmentDetailError(err.message || String(err));
+        });
+      });
+    }
+
     const detailBody = $('assignmentDetailBody');
     if (detailBody) {
       detailBody.addEventListener('click', (event) => {
