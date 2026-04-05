@@ -189,6 +189,80 @@ def _assignment_load_active_node_records_lightweight(root: Path, ticket_id: str)
         return []
 
 
+def _assignment_try_recover_terminal_run_from_files(
+    root: Path,
+    *,
+    ticket_id: str,
+    node_id: str,
+    run_record: dict[str, Any],
+) -> bool:
+    run_id = str(run_record.get("run_id") or "").strip()
+    if not run_id:
+        return False
+    refs = _assignment_run_file_paths(root, ticket_id, run_id)
+    result_payload = _assignment_read_json(refs["result"])
+    events = _assignment_read_jsonl(refs["events"])
+    final_event = next(
+        (
+            item
+            for item in reversed(list(events or []))
+            if str((item or {}).get("event_type") or "").strip().lower() == "final_result"
+        ),
+        {},
+    )
+    has_result_payload = bool(result_payload)
+    has_final_event = bool(final_event)
+    if not has_result_payload and not has_final_event:
+        return False
+    stdout_text = _read_assignment_run_text(refs["stdout"].as_posix())
+    stderr_text = _read_assignment_run_text(refs["stderr"].as_posix())
+    detail = dict(final_event.get("detail") or {}) if isinstance(final_event, dict) else {}
+    try:
+        exit_code = int(detail.get("exit_code") or run_record.get("exit_code") or 0)
+    except Exception:
+        exit_code = 0
+    failure_message = ""
+    if exit_code != 0:
+        failure_message = (
+            str(final_event.get("message") or "").strip()
+            or _short_assignment_text(stderr_text, 500)
+            or f"assignment execution failed with exit={exit_code}"
+        )
+    _finalize_assignment_execution_run(
+        root,
+        run_id=run_id,
+        ticket_id=ticket_id,
+        node_id=node_id,
+        exit_code=exit_code,
+        stdout_text=stdout_text,
+        stderr_text=stderr_text,
+        result_payload=result_payload if isinstance(result_payload, dict) else {},
+        failure_message=failure_message,
+    )
+    return True
+
+
+def _assignment_try_recover_terminal_node_from_files(
+    root: Path,
+    *,
+    ticket_id: str,
+    node_id: str,
+) -> bool:
+    recovered = False
+    for run in _assignment_load_run_records(root, ticket_id=ticket_id, node_id=node_id):
+        status = str(run.get("status") or "").strip().lower()
+        if status not in {"starting", "running"}:
+            continue
+        if _assignment_try_recover_terminal_run_from_files(
+            root,
+            ticket_id=ticket_id,
+            node_id=node_id,
+            run_record=run,
+        ):
+            recovered = True
+    return recovered
+
+
 def _assignment_reconcile_stale_task_state_internal(
     root: Path,
     *,
@@ -214,6 +288,18 @@ def _assignment_reconcile_stale_task_state_internal(
         node_id = str(current.get("node_id") or "").strip()
         status = str(current.get("status") or "").strip().lower()
         if status == "running" and (ticket_id, node_id) not in live_keys:
+            if _assignment_try_recover_terminal_node_from_files(
+                root,
+                ticket_id=ticket_id,
+                node_id=node_id,
+            ):
+                refreshed_task = _assignment_read_json(_assignment_graph_record_path(root, ticket_id))
+                refreshed_nodes = _assignment_load_node_records(root, ticket_id, include_deleted=True)
+                return (
+                    dict(refreshed_task or task_record),
+                    [dict(item) for item in list(refreshed_nodes or node_records)],
+                    True,
+                )
             current["status"] = "failed"
             current["status_text"] = _node_status_text("failed")
             current["completed_at"] = now_text
@@ -1200,4 +1286,3 @@ def get_assignment_status_detail(
         node_id=node_id,
         include_test_data=include_test_data,
     )
-

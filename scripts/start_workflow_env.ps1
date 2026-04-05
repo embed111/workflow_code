@@ -12,6 +12,35 @@ $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'workflow_env_common.ps1')
 
 $script:ProdUpgradeExitCode = 73
+$script:ProdWatchdogRestartDelaySeconds = 5
+
+function Resolve-WorkflowStartSourceRoot {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$ScriptRoot
+    )
+
+    $candidate = Get-WorkflowSourceRoot -ScriptRoot $ScriptRoot
+    $candidateFull = [System.IO.Path]::GetFullPath($candidate)
+    $candidateLeaf = Split-Path $candidateFull -Leaf
+    $parent = Split-Path $candidateFull -Parent
+    $parentLeaf = if ([string]::IsNullOrWhiteSpace($parent)) { '' } else { Split-Path $parent -Leaf }
+    if ($parentLeaf -ne '.running' -and $candidateLeaf -notin @('prod', 'test', 'dev')) {
+        return $candidateFull
+    }
+
+    foreach ($metaPath in @(
+            (Join-Path $candidateFull '.workflow-deployment.json'),
+            (Join-Path $candidateFull '.workflow-local-deployment.json')
+        )) {
+        $payload = Read-WorkflowJson -Path $metaPath -Default @{}
+        $sourceRoot = [string]$payload['source_root']
+        if (-not [string]::IsNullOrWhiteSpace($sourceRoot)) {
+            return [System.IO.Path]::GetFullPath($sourceRoot)
+        }
+    }
+    return $candidateFull
+}
 
 function ConvertTo-WorkflowProcessArgument {
     param(
@@ -534,7 +563,7 @@ function Restore-ProdBackup {
     } | Out-Null
 }
 
-$sourceRoot = Get-WorkflowSourceRoot -ScriptRoot $PSScriptRoot
+$sourceRoot = Resolve-WorkflowStartSourceRoot -ScriptRoot $PSScriptRoot
 $prodGitProtection = Protect-WorkflowProdGitRuntimeState -SourceRoot $sourceRoot
 if (-not [bool]$prodGitProtection.ok) {
     Write-Host "[workflow-start] warning: prod git protection skipped: $($prodGitProtection.reason) $($prodGitProtection.error)"
@@ -672,6 +701,34 @@ while ($true) {
             Remove-Item -LiteralPath (Get-WorkflowProdUpgradeRequestPath -SourceRoot $sourceRoot) -Force -ErrorAction SilentlyContinue
             throw
         }
+        continue
+    }
+
+    if ($Environment -eq 'prod') {
+        $restartReason = if ($exitCode -eq 0) {
+            'launcher exited normally but prod should remain supervised'
+        }
+        else {
+            "launcher exited with code $exitCode"
+        }
+        $restartedAt = (Get-Date).ToUniversalTime().ToString('o')
+        Write-Host "[workflow-start] prod launcher exited unexpectedly ($restartReason); watchdog restart in $($script:ProdWatchdogRestartDelaySeconds)s ..."
+        Update-ProdLastAction -SourceRoot $sourceRoot -Payload @{
+            action                = 'watchdog_restart'
+            status                = 'retrying'
+            finished_at           = $restartedAt
+            current_version       = [string]$descriptor.version
+            restart_delay_seconds = [int]$script:ProdWatchdogRestartDelaySeconds
+            reason                = $restartReason
+        }
+        Write-WorkflowDeploymentEvent -SourceRoot $sourceRoot -Payload @{
+            environment = 'prod'
+            version     = [string]$descriptor.version
+            action      = 'watchdog_restart'
+            result      = 'retrying'
+            reason      = $restartReason
+        }
+        Start-Sleep -Seconds $script:ProdWatchdogRestartDelaySeconds
         continue
     }
 
