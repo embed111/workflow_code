@@ -212,6 +212,22 @@ def _workboard_payload(cfg, *, include_test_data: bool) -> dict:
     }
 
 
+def _assignment_runtime_with_workboard_fallback(
+    assignment_runtime: dict,
+    workboard: dict,
+) -> dict:
+    runtime_payload = dict(assignment_runtime or {})
+    summary = dict((workboard or {}).get("assignment_workboard_summary") or {})
+    runtime_running = int(runtime_payload.get("running_task_count") or 0)
+    summary_running = int(summary.get("running_task_count") or 0)
+    if runtime_running <= 0 and summary_running > 0:
+        runtime_payload["running_task_count"] = summary_running
+        runtime_payload["running_agent_count"] = int(summary.get("active_agent_count") or 0)
+        runtime_payload["active_execution_count"] = summary_running
+        runtime_payload["agent_call_count"] = summary_running
+    return runtime_payload
+
+
 def try_handle_get(handler, cfg, state, ctx: dict) -> bool:
     path = str(ctx.get("path") or "")
     root_ready = bool(ctx.get("root_ready"))
@@ -224,7 +240,11 @@ def try_handle_get(handler, cfg, state, ctx: dict) -> bool:
 
     if path == "/api/status":
         include_test_data = ws.current_show_test_data(cfg, state)
-        assignment_runtime = ws.get_assignment_runtime_metrics(cfg.root, include_test_data=include_test_data)
+        workboard = _workboard_payload(cfg, include_test_data=include_test_data)
+        assignment_runtime = _assignment_runtime_with_workboard_fallback(
+            ws.get_assignment_runtime_metrics(cfg.root, include_test_data=include_test_data),
+            workboard,
+        )
         assignment_running_task_count = int(assignment_runtime.get("running_task_count") or 0)
         assignment_running_agent_count = int(assignment_runtime.get("running_agent_count") or 0)
         assignment_active_execution_count = int(assignment_runtime.get("active_execution_count") or 0)
@@ -267,7 +287,11 @@ def try_handle_get(handler, cfg, state, ctx: dict) -> bool:
 
     query = ctx.get("query") or {}
     include_test_data = ws.resolve_include_test_data(query, cfg, state)
-    assignment_runtime = ws.get_assignment_runtime_metrics(cfg.root, include_test_data=include_test_data)
+    workboard = _workboard_payload(cfg, include_test_data=include_test_data)
+    assignment_runtime = _assignment_runtime_with_workboard_fallback(
+        ws.get_assignment_runtime_metrics(cfg.root, include_test_data=include_test_data),
+        workboard,
+    )
     assignment_running_task_count = int(assignment_runtime.get("running_task_count") or 0)
     assignment_running_agent_count = int(assignment_runtime.get("running_agent_count") or 0)
     assignment_active_execution_count = int(assignment_runtime.get("active_execution_count") or 0)
@@ -276,7 +300,6 @@ def try_handle_get(handler, cfg, state, ctx: dict) -> bool:
     agent_call_count = max(0, session_running_task_count + assignment_agent_call_count)
     policy_fields = ws.show_test_data_policy_fields(cfg, state)
     runtime_goal = _runtime_goal_payload(cfg)
-    workboard = _workboard_payload(cfg, include_test_data=include_test_data)
     handler.send_json(
         200,
         {
