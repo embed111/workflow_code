@@ -386,6 +386,28 @@ def _assignment_reconcile_stale_task_state_internal(
                 detail={},
                 created_at=now_text,
             )
+            try:
+                schedule_result = _assignment_queue_self_iteration_schedule(
+                    root,
+                    task_record=task_record,
+                    node_record=current,
+                    result_summary=str(current.get("failure_reason") or "").strip() or "运行句柄缺失或 workflow 已重启，请手动重跑。",
+                    success=False,
+                )
+                if bool(schedule_result.get("queued")):
+                    _assignment_write_audit_entry(
+                        root,
+                        ticket_id=ticket_id,
+                        node_id=node_id,
+                        action="schedule_self_iteration",
+                        operator="assignment-system",
+                        reason="queued next self-iteration schedule after stale run recovery",
+                        target_status="failed",
+                        detail=schedule_result,
+                        created_at=now_text,
+                    )
+            except Exception:
+                pass
         updated_nodes.append(current)
     return dict(task_record), updated_nodes, changed
 
