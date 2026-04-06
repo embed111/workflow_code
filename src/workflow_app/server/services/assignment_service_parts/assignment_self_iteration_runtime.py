@@ -6,6 +6,8 @@ ASSIGNMENT_SELF_ITERATION_SCHEDULE_PREFIX = "[持续迭代]"
 ASSIGNMENT_SELF_ITERATION_SUCCESS_DELAY_MINUTES = 15
 ASSIGNMENT_SELF_ITERATION_FAILURE_DELAY_MINUTES = 30
 ASSIGNMENT_SELF_ITERATION_EXPECTED_ARTIFACT = "continuous-improvement-report.md"
+ASSIGNMENT_SELF_ITERATION_VERSION_PLAN_PATH = "docs/workflow/governance/PM版本推进计划.md"
+ASSIGNMENT_SELF_ITERATION_WAKE_REQUIREMENT_PATH = "docs/workflow/requirements/需求详情-pm持续唤醒与清醒维持.md"
 
 
 def _assignment_self_iteration_enabled(task_record: dict[str, Any], node_record: dict[str, Any]) -> bool:
@@ -34,13 +36,17 @@ def _assignment_self_iteration_schedule_payload(
     priority: str,
 ) -> dict[str, Any]:
     summary_text = _short_assignment_text(result_summary, 240) or "上一轮已完成，继续推进 workflow 工程质量提升。"
+    version_plan_path = ASSIGNMENT_SELF_ITERATION_VERSION_PLAN_PATH
+    wake_requirement_path = ASSIGNMENT_SELF_ITERATION_WAKE_REQUIREMENT_PATH
     return {
         "schedule_name": _assignment_self_iteration_schedule_name(agent_id),
         "enabled": True,
         "assigned_agent_id": agent_id,
         "launch_summary": "\n".join(
             [
-                "上一轮任务已经结束，请继续作为 workflow 的长期负责人推进 7x24 工程质量提升。",
+                "上一轮任务已经结束，请继续作为 workflow 的长期负责人推进 7x24 连续迭代。",
+                f"先读版本计划：{version_plan_path}",
+                f"再对照持续唤醒需求：{wake_requirement_path}",
                 f"上一轮 ticket: {ticket_id}",
                 f"上一轮 node: {node_id}",
                 f"上一轮结果: {summary_text}",
@@ -48,13 +54,24 @@ def _assignment_self_iteration_schedule_payload(
         ).strip(),
         "execution_checklist": "\n".join(
             [
-                "1. 先检查 healthz、dashboard、assignments、schedules 的真实状态，不要只看前端表象。",
-                "2. 识别当前最影响 7x24 连续运行、工程质量或可观测性的一个最高优先级问题。",
-                "3. 在代码工作区完成最小必要改动并跑对应验证。",
-                "4. 输出本轮结论、证据路径和下一轮应继续推进的点。",
+                f"1. 先读取 `{version_plan_path}`，确认当前 active 版本和当前优先任务包。",
+                f"2. 同时对照 `{wake_requirement_path}`，确保本轮推进不会把持续唤醒和 7x24 连续性做断。",
+                "3. 再检查 healthz、dashboard、assignments、schedules、runs 的真实状态，不要只看前端表象。",
+                "4. 优先推进当前 active 版本里最高优先级且未完成的工程质量/稳定性任务，不要跳版抢做新功能。",
+                "5. 若当前任务包已完成，先更新版本计划状态，再挑同版本下一个 queued 包；只有当前版本出口门槛满足后才切到下一版本。",
+                "6. 如需多人协作，给 workflow_devmate / workflow_testmate / workflow_qualitymate / workflow_bugmate 创建或续挂对应任务。",
+                "7. 在代码工作区完成最小必要改动并跑命中改动面的验证。",
+                "8. 输出本轮结论、证据路径，并确保系统已经挂上下一轮可执行任务或唤醒计划。",
             ]
         ).strip(),
-        "done_definition": "给出可交付的改进结果和验证证据，并确保系统会继续排上下一轮可执行任务。",
+        "done_definition": "\n".join(
+            [
+                f"1. 当前活跃版本对应任务包有可交付结果，且版本计划 `{version_plan_path}` 已同步最新状态。",
+                "2. 本轮附带验证证据，而不是只给方向性描述。",
+                "3. 如有需要，本轮已经给对应小伙伴挂好下一步任务或交接任务。",
+                "4. 若本轮没有新的 ready 任务，也必须保证下一次唤醒已经排上，7x24 连续推进不断链。",
+            ]
+        ),
         "priority": priority,
         "expected_artifact": ASSIGNMENT_SELF_ITERATION_EXPECTED_ARTIFACT,
         "delivery_mode": "none",

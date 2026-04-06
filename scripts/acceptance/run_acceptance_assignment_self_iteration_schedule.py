@@ -182,6 +182,13 @@ def main() -> int:
             str(schedule_item.get("expected_artifact") or "").strip() == "continuous-improvement-report.md",
             f"unexpected expected_artifact: {schedule_item}",
         )
+        launch_summary = str(schedule_item.get("launch_summary") or "").strip()
+        execution_checklist = str(schedule_item.get("execution_checklist") or "").strip()
+        done_definition = str(schedule_item.get("done_definition") or "").strip()
+        assert_true("版本推进计划.md" in launch_summary, f"launch_summary missing version plan path: {schedule_item}")
+        assert_true("需求详情-pm持续唤醒与清醒维持.md" in launch_summary, f"launch_summary missing wake requirement path: {schedule_item}")
+        assert_true("workflow_devmate" in execution_checklist, f"execution_checklist missing teammate routing: {schedule_item}")
+        assert_true("版本计划" in done_definition, f"done_definition missing version plan contract: {schedule_item}")
 
         summary.update(
             {
