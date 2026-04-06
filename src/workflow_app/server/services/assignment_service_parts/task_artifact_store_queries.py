@@ -337,7 +337,12 @@ def _assignment_reconcile_stale_task_state_internal(
             continue
         node_id = str(current.get("node_id") or "").strip()
         status = str(current.get("status") or "").strip().lower()
-        if status == "running" and (ticket_id, node_id) not in live_keys:
+        if (ticket_id, node_id) in live_keys and status in {"pending", "ready", "blocked"}:
+            current["status"] = "running"
+            current["status_text"] = _node_status_text("running")
+            current["updated_at"] = now_text
+            changed = True
+        elif status == "running" and (ticket_id, node_id) not in live_keys:
             if _assignment_try_recover_terminal_node_from_files(
                 root,
                 ticket_id=ticket_id,
