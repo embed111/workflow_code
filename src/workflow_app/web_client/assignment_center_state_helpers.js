@@ -148,6 +148,41 @@
     return safe(state.assignmentSelectedTicketId).trim();
   }
 
+  function assignmentPrimaryView() {
+    return normalizeAssignmentPrimaryView(state.assignmentPrimaryView);
+  }
+
+  function syncAssignmentPrimaryViewUi() {
+    const currentView = assignmentPrimaryView();
+    const tabs = document.querySelectorAll('[data-assignment-primary-view]');
+    tabs.forEach((node) => {
+      if (!(node instanceof HTMLElement)) return;
+      const view = normalizeAssignmentPrimaryView(node.getAttribute('data-assignment-primary-view'));
+      const active = view === currentView;
+      node.classList.toggle('active', active);
+      node.setAttribute('aria-selected', active ? 'true' : 'false');
+      node.tabIndex = active ? 0 : -1;
+    });
+    const workboardSection = $('assignmentWorkboardSection');
+    if (workboardSection) {
+      workboardSection.hidden = currentView !== 'workboard';
+    }
+    const graphSection = $('assignmentGraphSection');
+    if (graphSection) {
+      graphSection.hidden = currentView !== 'graph';
+    }
+  }
+
+  function setAssignmentPrimaryView(value, options) {
+    const opts = options && typeof options === 'object' ? options : {};
+    const next = normalizeAssignmentPrimaryView(value);
+    state.assignmentPrimaryView = next;
+    if (opts.persist !== false) {
+      writeSavedAssignmentPrimaryView(next);
+    }
+    syncAssignmentPrimaryViewUi();
+  }
+
   function assignmentGraphSourceLabel(value) {
     const key = safe(value).trim().toLowerCase();
     if (key === 'workflow-ui') return '任务中心';

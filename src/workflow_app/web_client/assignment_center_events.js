@@ -162,6 +162,13 @@
       header_note: '',
       graph_meta: '',
       detail_meta: '',
+      primary_view: '',
+      workboard_visible: false,
+      graph_visible: false,
+      workboard_tab_active: false,
+      graph_tab_active: false,
+      view_tabs_workboard_pass: false,
+      view_tabs_graph_pass: false,
       empty_visible: false,
       pause_disabled: true,
       resume_disabled: true,
@@ -218,6 +225,14 @@
   async function prepareAssignmentTaskCenterProbe() {
     switchTab('task-center');
     await refreshAssignmentGraphs({ preserveSelection: true });
+    const requestedTicketId = safe(queryParam('assignment_probe_ticket')).trim();
+    if (requestedTicketId) {
+      state.assignmentSelectedTicketId = requestedTicketId;
+      state.assignmentSelectedNodeId = '';
+      state.assignmentActiveLoaded = 0;
+      state.assignmentHistoryLoaded = 0;
+      await refreshAssignmentGraphData({ ticketId: requestedTicketId });
+    }
     const requestedNodeId = safe(queryParam('assignment_probe_node')).trim();
     if (requestedNodeId && selectedAssignmentTicketId()) {
       state.assignmentSelectedNodeId = requestedNodeId;
@@ -344,8 +359,13 @@
       : {};
     const latestRun = assignmentExecutionLatestRun(chain);
     const emptyState = $('assignmentEmptyState');
+    const workboardSection = $('assignmentWorkboardSection');
+    const graphSection = $('assignmentGraphSection');
+    const workboardTab = $('assignmentWorkboardTabBtn');
+    const graphTab = $('assignmentGraphTabBtn');
     output.show_test_data = !!state.showTestData;
     output.ticket_id = selectedAssignmentTicketId();
+    output.primary_view = assignmentPrimaryView();
     output.graph_name = safe(overview.graph_name).trim();
     output.graph_is_test_data = !!overview.is_test_data;
     output.scheduler_state = safe(overview.scheduler_state).trim().toLowerCase();
@@ -363,6 +383,10 @@
     output.header_note = safe($('assignmentHeaderNote') ? $('assignmentHeaderNote').textContent : '').trim();
     output.graph_meta = safe($('assignmentGraphMeta') ? $('assignmentGraphMeta').textContent : '').trim();
     output.detail_meta = safe($('assignmentDetailMeta') ? $('assignmentDetailMeta').textContent : '').trim();
+    output.workboard_visible = !!(workboardSection && !workboardSection.hidden);
+    output.graph_visible = !!(graphSection && !graphSection.hidden);
+    output.workboard_tab_active = !!(workboardTab && workboardTab.classList.contains('active'));
+    output.graph_tab_active = !!(graphTab && graphTab.classList.contains('active'));
     output.empty_visible = !!(emptyState && !emptyState.classList.contains('hidden'));
     output.pause_disabled = !!($('assignmentPauseBtn') && $('assignmentPauseBtn').disabled);
     output.resume_disabled = !!($('assignmentResumeBtn') && $('assignmentResumeBtn').disabled);
@@ -502,6 +526,35 @@
       output.status_line.includes('任务已创建');
   }
 
+  async function afterWaitAssignmentViewTabsProbe(output) {
+    setAssignmentPrimaryView('workboard', { persist: false });
+    await assignmentProbeWait(80);
+    output.view_tabs_workboard_pass =
+      assignmentPrimaryView() === 'workboard' &&
+      !!($('assignmentWorkboardSection') && !$('assignmentWorkboardSection').hidden) &&
+      !!($('assignmentGraphSection') && $('assignmentGraphSection').hidden) &&
+      !!($('assignmentWorkboardTabBtn') && $('assignmentWorkboardTabBtn').classList.contains('active'));
+    setAssignmentPrimaryView('graph', { persist: false });
+    await assignmentProbeWait(80);
+    output.view_tabs_graph_pass =
+      assignmentPrimaryView() === 'graph' &&
+      !!($('assignmentGraphSection') && !$('assignmentGraphSection').hidden) &&
+      !!($('assignmentWorkboardSection') && $('assignmentWorkboardSection').hidden) &&
+      !!($('assignmentGraphTabBtn') && $('assignmentGraphTabBtn').classList.contains('active'));
+  }
+
+  function assignmentViewTabsProbePass(output) {
+    return output.active_tab === 'task-center' &&
+      !!output.ticket_id &&
+      output.primary_view === 'graph' &&
+      output.graph_visible &&
+      !output.workboard_visible &&
+      output.graph_tab_active &&
+      !output.workboard_tab_active &&
+      output.view_tabs_workboard_pass &&
+      output.view_tabs_graph_pass;
+  }
+
   function createAssignmentTaskCenterProbeStrategy(evaluate, options) {
     const opts = options && typeof options === 'object' ? options : {};
     return {
@@ -530,6 +583,12 @@
         prepare: prepareAssignmentDraftPersistProbe,
         collect: collectAssignmentDraftPersistProbe,
         evaluate: assignmentDraftPersistProbePass,
+      },
+      view_tabs: {
+        prepare: prepareAssignmentTaskCenterProbe,
+        afterWait: afterWaitAssignmentViewTabsProbe,
+        collect: collectAssignmentTaskCenterProbe,
+        evaluate: assignmentViewTabsProbePass,
       },
       create_submit: {
         prepare: prepareAssignmentCreateSubmitProbe,
@@ -604,6 +663,19 @@
   }
 
   function bindAssignmentCenterEvents() {
+    const viewTabs = document.querySelector('.assignment-view-tabs');
+    if (viewTabs) {
+      viewTabs.addEventListener('click', (event) => {
+        const target = event.target;
+        if (!(target instanceof Element)) return;
+        const button = target.closest('[data-assignment-primary-view]');
+        if (!button) return;
+        const nextView = safe(button.getAttribute('data-assignment-primary-view')).trim();
+        if (!nextView || nextView === assignmentPrimaryView()) return;
+        setAssignmentPrimaryView(nextView);
+      });
+    }
+
     const graphCanvas = $('assignmentGraphCanvas');
     if (graphCanvas) {
       graphCanvas.addEventListener('click', (event) => {

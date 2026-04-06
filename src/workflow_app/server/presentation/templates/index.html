@@ -547,53 +547,93 @@
           </div>
         </div>
 
-        <div id='assignmentWorkboard' class='assignment-detail-card' style='margin:0 0 12px 0'>
-          <div class='hint'>工作状态看板加载中...</div>
-        </div>
-
         <div class='assignment-shell'>
-          <section class='assignment-graph-panel'>
-            <div class='assignment-panel-head'>
-              <div>
-                <div class='card-title'>任务图</div>
-                <div id='assignmentGraphMeta' class='hint'>全局主图待加载</div>
-              </div>
-              <div class='row'>
-                <select id='assignmentGraphSelect' class='assignment-graph-select' data-assignment-root-required='1'>
-                  <option value=''>暂无任务图</option>
-                </select>
-                <button id='assignmentRefreshBtn' class='alt' type='button' data-assignment-root-required='1'>刷新</button>
-                <button id='assignmentLoadMoreTasksBtn' class='alt' type='button' data-assignment-root-required='1'>加载更多任务</button>
-                <button id='assignmentLoadHistoryBtn' class='alt' type='button' data-assignment-root-required='1'>加载更多历史</button>
-              </div>
+          <div class='assignment-primary-column'>
+            <div class='assignment-view-tabs' role='tablist' aria-label='任务中心主视图'>
+              <button
+                id='assignmentWorkboardTabBtn'
+                class='assignment-view-tab'
+                type='button'
+                role='tab'
+                data-assignment-primary-view='workboard'
+                aria-controls='assignmentWorkboardSection'
+                aria-selected='false'
+              >
+                任务看板
+              </button>
+              <button
+                id='assignmentGraphTabBtn'
+                class='assignment-view-tab'
+                type='button'
+                role='tab'
+                data-assignment-primary-view='graph'
+                aria-controls='assignmentGraphSection'
+                aria-selected='true'
+              >
+                任务图
+              </button>
             </div>
-            <div id='assignmentGraphError' class='error'></div>
-            <div id='assignmentGraphCanvas' class='assignment-graph-canvas'>
-              <div class='assignment-graph-topbar'>
-                <div class='assignment-time-cap' aria-hidden='true'></div>
-                <div class='assignment-graph-overlay'>
-                  <div class='assignment-legend'>
-                    <span class='assignment-legend-item'><span class='assignment-legend-dot done'></span>已完成</span>
-                    <span class='assignment-legend-item'><span class='assignment-legend-dot running'></span>进行中</span>
-                    <span class='assignment-legend-item'><span class='assignment-legend-dot blocked'></span>阻塞</span>
-                    <span class='assignment-legend-item'><span class='assignment-legend-dot fail'></span>失败</span>
-                    <span class='assignment-legend-item'><span class='assignment-legend-dot future'></span>待开始</span>
+
+            <section
+              id='assignmentWorkboardSection'
+              class='assignment-tab-panel'
+              role='tabpanel'
+              aria-labelledby='assignmentWorkboardTabBtn'
+              hidden
+            >
+              <div id='assignmentWorkboard' class='assignment-workboard-panel'>
+                <div class='hint'>工作状态看板加载中...</div>
+              </div>
+            </section>
+
+            <section
+              id='assignmentGraphSection'
+              class='assignment-graph-panel assignment-tab-panel'
+              role='tabpanel'
+              aria-labelledby='assignmentGraphTabBtn'
+            >
+              <div class='assignment-panel-head'>
+                <div>
+                  <div class='card-title'>任务图</div>
+                  <div id='assignmentGraphMeta' class='hint'>全局主图待加载</div>
+                </div>
+                <div class='row'>
+                  <select id='assignmentGraphSelect' class='assignment-graph-select' data-assignment-root-required='1'>
+                    <option value=''>暂无任务图</option>
+                  </select>
+                  <button id='assignmentRefreshBtn' class='alt' type='button' data-assignment-root-required='1'>刷新</button>
+                  <button id='assignmentLoadMoreTasksBtn' class='alt' type='button' data-assignment-root-required='1'>加载更多任务</button>
+                  <button id='assignmentLoadHistoryBtn' class='alt' type='button' data-assignment-root-required='1'>加载更多历史</button>
+                </div>
+              </div>
+              <div id='assignmentGraphError' class='error'></div>
+              <div id='assignmentGraphCanvas' class='assignment-graph-canvas'>
+                <div class='assignment-graph-topbar'>
+                  <div class='assignment-time-cap' aria-hidden='true'></div>
+                  <div class='assignment-graph-overlay'>
+                    <div class='assignment-legend'>
+                      <span class='assignment-legend-item'><span class='assignment-legend-dot done'></span>已完成</span>
+                      <span class='assignment-legend-item'><span class='assignment-legend-dot running'></span>进行中</span>
+                      <span class='assignment-legend-item'><span class='assignment-legend-dot blocked'></span>阻塞</span>
+                      <span class='assignment-legend-item'><span class='assignment-legend-dot fail'></span>失败</span>
+                      <span class='assignment-legend-item'><span class='assignment-legend-dot future'></span>待开始</span>
+                    </div>
+                    <div id='assignmentHistoryChip' class='assignment-history-chip'>历史状态待刷新</div>
                   </div>
-                  <div id='assignmentHistoryChip' class='assignment-history-chip'>历史状态待刷新</div>
+                </div>
+                <div id='assignmentEmptyState' class='assignment-empty'>
+                  <div class='assignment-empty-title'>暂无任务图</div>
+                  <div class='hint'>点击“+ 创建任务”时会自动创建主图。</div>
+                </div>
+                <div id='assignmentGraphStage' class='assignment-graph-stage'>
+                  <div id='assignmentTimeColumn' class='assignment-time-column'></div>
+                  <div class='assignment-canvas-column'>
+                    <svg id='assignmentGraphSvg' class='assignment-graph-svg' aria-label='任务图'></svg>
+                  </div>
                 </div>
               </div>
-              <div id='assignmentEmptyState' class='assignment-empty'>
-                <div class='assignment-empty-title'>暂无任务图</div>
-                <div class='hint'>点击“+ 创建任务”时会自动创建主图。</div>
-              </div>
-              <div id='assignmentGraphStage' class='assignment-graph-stage'>
-                <div id='assignmentTimeColumn' class='assignment-time-column'></div>
-                <div class='assignment-canvas-column'>
-                  <svg id='assignmentGraphSvg' class='assignment-graph-svg' aria-label='任务图'></svg>
-                </div>
-              </div>
-            </div>
-          </section>
+            </section>
+          </div>
 
           <aside class='assignment-detail-panel'>
             <div class='assignment-panel-head'>

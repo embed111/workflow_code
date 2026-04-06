@@ -86,14 +86,22 @@ def wait_for_health(base_url: str, timeout_s: float = 30.0) -> dict[str, Any]:
 
 
 def load_workspace_runtime_config(workspace_root: Path) -> dict[str, Any]:
-    config_path = workspace_root / ".runtime" / "state" / "runtime-config.json"
-    if not config_path.exists():
-        return {}
-    try:
-        payload = json.loads(config_path.read_text(encoding="utf-8"))
-    except Exception:
-        return {}
-    return payload if isinstance(payload, dict) else {}
+    candidate_paths: list[Path] = [workspace_root / ".runtime" / "state" / "runtime-config.json"]
+    seen: set[Path] = set()
+    for parent in workspace_root.parents:
+        candidate_paths.append(parent / ".running" / "control" / "runtime" / "prod" / "state" / "runtime-config.json")
+    for config_path in candidate_paths:
+        resolved = config_path.resolve()
+        if resolved in seen or not resolved.exists():
+            continue
+        seen.add(resolved)
+        try:
+            payload = json.loads(resolved.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        if isinstance(payload, dict):
+            return payload
+    return {}
 
 
 def prepare_isolated_runtime_root(
@@ -471,6 +479,7 @@ def main() -> int:
                 "task_center_visible",
                 "default",
                 {
+                    "assignment_probe_ticket": ticket_id,
                     "assignment_probe_node": "T20",
                     "assignment_probe_delay_ms": "1200",
                 },
@@ -480,6 +489,25 @@ def main() -> int:
                 "image": visible_shot,
                 "probe": visible_probe_file,
                 "result": visible_probe,
+            }
+
+            view_tabs_shot, view_tabs_probe_file, view_tabs_probe = capture_probe(
+                edge_path,
+                base_url,
+                evidence_root,
+                "task_center_view_tabs",
+                "view_tabs",
+                {
+                    "assignment_probe_ticket": ticket_id,
+                    "assignment_probe_node": "T20",
+                    "assignment_probe_delay_ms": "1200",
+                },
+            )
+            assert_true(bool(view_tabs_probe.get("pass")), f"view tabs probe failed: {view_tabs_probe}")
+            evidence["screenshots"]["view_tabs"] = {
+                "image": view_tabs_shot,
+                "probe": view_tabs_probe_file,
+                "result": view_tabs_probe,
             }
 
         with running_server(

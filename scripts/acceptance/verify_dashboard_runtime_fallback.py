@@ -24,7 +24,12 @@ def main() -> int:
             "queued_task_count": 3,
             "failed_task_count": 4,
             "blocked_task_count": 0,
-        }
+        },
+        "assignment_workboard_agents": [
+            {"agent_name": "workflow", "running": [{"node_id": "n1"}]},
+            {"agent_name": "workflow_bugmate", "running": [{"node_id": "n2"}]},
+            {"agent_name": "workflow_testmate", "running": []},
+        ],
     }
     patched = _assignment_runtime_with_workboard_fallback(runtime, workboard)
     assert int(patched.get("running_task_count") or 0) == 1, patched

@@ -59,6 +59,14 @@ def _json_load(path: Path) -> dict:
     return payload if isinstance(payload, dict) else {}
 
 
+def _running_agent_count_from_workboard(workboard: dict) -> int:
+    return sum(
+        1
+        for item in list((workboard or {}).get("assignment_workboard_agents") or [])
+        if list((item or {}).get("running") or [])
+    )
+
+
 def _workboard_payload(cfg, *, include_test_data: bool) -> dict:
     resolver = getattr(ws, "resolve_artifact_root_path", None)
     if not callable(resolver):
@@ -100,6 +108,7 @@ def _workboard_payload(cfg, *, include_test_data: bool) -> dict:
     if isinstance(target_task_dir, Path):
         nodes_root = target_task_dir / "nodes"
         if nodes_root.exists() and nodes_root.is_dir():
+            raw_nodes = []
             for node_path in sorted(nodes_root.iterdir(), key=lambda item: item.name.lower()):
                 if not node_path.is_file() or node_path.suffix.lower() != ".json":
                     continue
@@ -108,6 +117,12 @@ def _workboard_payload(cfg, *, include_test_data: bool) -> dict:
                     continue
                 if str(node.get("record_state") or "active").strip().lower() == "deleted":
                     continue
+                raw_nodes.append(node)
+            for node in ws._assignment_project_live_run_status_for_nodes(
+                cfg.root,
+                ticket_id=str(target_task_dir.name or "").strip(),
+                node_records=raw_nodes,
+            ):
                 status = str(node.get("status") or "").strip().lower()
                 if status not in {"running", "ready", "pending", "failed", "blocked"}:
                     continue
@@ -222,7 +237,7 @@ def _assignment_runtime_with_workboard_fallback(
     summary_running = int(summary.get("running_task_count") or 0)
     if runtime_running <= 0 and summary_running > 0:
         runtime_payload["running_task_count"] = summary_running
-        runtime_payload["running_agent_count"] = int(summary.get("active_agent_count") or 0)
+        runtime_payload["running_agent_count"] = _running_agent_count_from_workboard(workboard)
         runtime_payload["active_execution_count"] = summary_running
         runtime_payload["agent_call_count"] = summary_running
     return runtime_payload

@@ -189,6 +189,56 @@ def _assignment_load_active_node_records_lightweight(root: Path, ticket_id: str)
         return []
 
 
+def _assignment_live_node_ids_for_ticket(root: Path, *, ticket_id: str) -> set[str]:
+    ticket_text = safe_token(str(ticket_id or ""), "", 160)
+    if not ticket_text:
+        return set()
+    active_run_ids = {
+        str(run_id or "").strip()
+        for run_id in _active_assignment_run_ids()
+        if str(run_id or "").strip()
+    }
+    now_dt = now_local()
+    live_node_ids: set[str] = set()
+    for run in _assignment_load_run_records(root, ticket_id=ticket_text):
+        status = str(run.get("status") or "").strip().lower()
+        if status not in {"starting", "running"}:
+            continue
+        if not _assignment_run_row_is_live(
+            run,
+            active_run_ids=active_run_ids,
+            now_dt=now_dt,
+            grace_seconds=DEFAULT_ASSIGNMENT_STALE_RUN_GRACE_SECONDS,
+        ):
+            continue
+        node_id = str(run.get("node_id") or "").strip()
+        if node_id:
+            live_node_ids.add(node_id)
+    return live_node_ids
+
+
+def _assignment_project_live_run_status_for_nodes(
+    root: Path,
+    *,
+    ticket_id: str,
+    node_records: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    live_node_ids = _assignment_live_node_ids_for_ticket(root, ticket_id=ticket_id)
+    updated: list[dict[str, Any]] = []
+    for row in list(node_records or []):
+        current = dict(row)
+        if str(current.get("record_state") or "active").strip().lower() == "deleted":
+            updated.append(current)
+            continue
+        node_id = str(current.get("node_id") or "").strip()
+        status = str(current.get("status") or "").strip().lower()
+        if status == "running" and node_id and node_id not in live_node_ids:
+            current["status"] = "failed"
+            current["status_text"] = _node_status_text("failed")
+        updated.append(current)
+    return updated
+
+
 def _assignment_try_recover_terminal_run_from_files(
     root: Path,
     *,
@@ -1016,7 +1066,11 @@ def list_assignments(
             continue
         if request_filter and str(graph_row.get("external_request_id") or "").strip() != request_filter:
             continue
-        node_records = _assignment_load_active_node_records_lightweight(root, ticket_id)
+        node_records = _assignment_project_live_run_status_for_nodes(
+            root,
+            ticket_id=ticket_id,
+            node_records=_assignment_load_active_node_records_lightweight(root, ticket_id),
+        )
         metrics_summary = _graph_metrics(node_records)
         items.append(
             {

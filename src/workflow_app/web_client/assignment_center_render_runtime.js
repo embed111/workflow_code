@@ -397,6 +397,7 @@
     renderAssignmentDetail();
     renderAssignmentDrawer();
     renderGlobalRuntimeMetricLine();
+    syncAssignmentPrimaryViewUi();
     setAssignmentError(state.assignmentError || '');
     setAssignmentDetailError(state.assignmentDetailError || '');
   }
@@ -656,6 +657,7 @@
       "<span class='assignment-chip " + escapeHtml(goal.tone) + "'>" + escapeHtml(goal.title) + "</span>" +
       "<span class='assignment-chip muted'>" + escapeHtml(goal.detail) + "</span>" +
       "</div></div>" +
+      "<div class='assignment-workboard-body'>" +
       "<div class='assignment-detail-grid assignment-detail-grid-tight'>" +
       assignmentStatHtml('活跃小伙伴', escapeHtml(String(activeAgents))) +
       assignmentStatHtml('运行中任务', escapeHtml(String(runningCount))) +
@@ -663,7 +665,7 @@
       assignmentStatHtml('失败任务', escapeHtml(String(failedCount))) +
       "</div>";
     if (!groups.length) {
-      host.innerHTML = summaryHtml + "<div class='hint' style='margin-top:8px'>主图当前没有可展示的运行中或待执行任务。</div>";
+      host.innerHTML = summaryHtml + "<div class='hint'>主图当前没有可展示的运行中或待执行任务。</div></div>";
       return;
     }
     const groupsHtml =
@@ -705,7 +707,7 @@
       )
       : "<div class='hint' style='margin-top:10px'>最近未拿到定时任务预览。</div>";
     host.innerHTML = summaryHtml + groupsHtml +
-      "<div class='hint' style='margin-top:12px'>最近定时任务</div>" + scheduleHtml;
+      "<div class='hint' style='margin-top:12px'>最近定时任务</div>" + scheduleHtml + "</div>";
   }
 
   function assignmentGraphOptionLabel(item) {

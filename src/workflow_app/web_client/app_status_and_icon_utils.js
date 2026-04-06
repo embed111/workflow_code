@@ -8,6 +8,7 @@
   const trainingCenterModuleCacheKey = 'workflow.p0.trainingCenter.module';
   const roleCreationSessionCacheKey = 'workflow.p0.trainingCenter.roleCreation.session';
   const assignmentCreateDraftCacheKey = 'workflow.p0.assignment.createDraft';
+  const assignmentPrimaryViewCacheKey = 'workflow.p0.assignment.primaryView';
   const requirementBugModuleCacheKey = 'workflow.p0.requirementBug.module';
   // Legacy-only keys. They are cleaned on bootstrap and never drive runtime truth.
   const showTestDataCacheKey = 'workflow.p0.settings.showTestData';
@@ -183,6 +184,7 @@
     defectTaskDraftError: '',
     assignmentGraphs: [],
     assignmentSelectedTicketId: '',
+    assignmentPrimaryView: readSavedAssignmentPrimaryView(),
     assignmentGraphData: null,
     assignmentSelectedNodeId: '',
     assignmentScheduler: null,
@@ -296,6 +298,26 @@
       return key;
     }
     return 'agents';
+  }
+
+  function normalizeAssignmentPrimaryView(value) {
+    return safe(value).trim().toLowerCase() === 'workboard' ? 'workboard' : 'graph';
+  }
+
+  function readSavedAssignmentPrimaryView() {
+    try {
+      return normalizeAssignmentPrimaryView(localStorage.getItem(assignmentPrimaryViewCacheKey));
+    } catch (_) {
+      return 'graph';
+    }
+  }
+
+  function writeSavedAssignmentPrimaryView(value) {
+    try {
+      localStorage.setItem(assignmentPrimaryViewCacheKey, normalizeAssignmentPrimaryView(value));
+    } catch (_) {
+      // ignore localStorage errors
+    }
   }
 
   function readSavedTrainingCenterModule() {
