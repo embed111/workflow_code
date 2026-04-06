@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import sys
+from datetime import timedelta
 from pathlib import Path
 
 
@@ -46,6 +47,12 @@ def main() -> int:
             "runtime_environment": "prod",
         },
     )()
+    now_minute = schedule_service._minute_floor(schedule_service._now_bj())
+    recovery_trigger_at = (now_minute - timedelta(minutes=30)).isoformat(timespec="seconds")
+    recovery_completed_at = (now_minute - timedelta(minutes=24)).isoformat(timespec="seconds")
+    newer_pending_trigger_at = (now_minute - timedelta(minutes=10)).isoformat(timespec="seconds")
+    recovery_trigger_label = recovery_trigger_at[:16].replace("T", " ")
+    newer_pending_label = newer_pending_trigger_at[:16].replace("T", " ")
 
     schedule = schedule_service.create_schedule(
         cfg,
@@ -64,7 +71,7 @@ def main() -> int:
                 "monthly": {"enabled": False},
                 "weekly": {"enabled": False},
                 "daily": {"enabled": False},
-                "once": {"enabled": True, "date_times_text": "2026-04-06T15:54:00+08:00"},
+                "once": {"enabled": True, "date_times_text": recovery_trigger_at},
             },
         },
     )
@@ -86,13 +93,13 @@ def main() -> int:
                 "monthly": {"enabled": False},
                 "weekly": {"enabled": False},
                 "daily": {"enabled": False},
-                "once": {"enabled": True, "date_times_text": "2026-04-06T16:20:00+08:00"},
+                "once": {"enabled": True, "date_times_text": newer_pending_trigger_at},
             },
         },
     )
     newer_schedule_id = str(newer_pending_schedule.get("schedule_id") or "").strip()
     trigger_id = "sti-test-smoke-recovery"
-    planned_trigger_at = "2026-04-06T15:54:00+08:00"
+    planned_trigger_at = recovery_trigger_at
 
     graph = ws.create_assignment_graph(
         cfg,
@@ -111,7 +118,7 @@ def main() -> int:
         ticket_id,
         {
             "node_id": "node-sti-test-smoke-recovery",
-            "node_name": "生产 smoke 基线 recovery / 2026-04-06 15:54:00",
+            "node_name": f"生产 smoke 基线 recovery / {recovery_trigger_label}:00",
             "assigned_agent_id": "workflow",
             "priority": "P1",
             "node_goal": "smoke baseline recovery",
@@ -120,7 +127,7 @@ def main() -> int:
             "source_schedule_id": schedule_id,
             "planned_trigger_at": planned_trigger_at,
             "trigger_instance_id": trigger_id,
-            "trigger_rule_summary": "定时 2026-04-06 15:54",
+            "trigger_rule_summary": f"定时 {recovery_trigger_label}",
             "operator": "test",
         },
         include_test_data=False,
@@ -131,9 +138,9 @@ def main() -> int:
     node_payload = ws._assignment_read_json(node_path)
     node_payload["status"] = "succeeded"
     node_payload["status_text"] = "已完成"
-    node_payload["completed_at"] = "2026-04-06T16:11:34+08:00"
+    node_payload["completed_at"] = recovery_completed_at
     node_payload["success_reason"] = "smoke passed"
-    node_payload["updated_at"] = "2026-04-06T16:11:34+08:00"
+    node_payload["updated_at"] = recovery_completed_at
     ws._assignment_write_json(node_path, node_payload)
 
     conn = schedule_service.connect_db(root)
@@ -151,7 +158,7 @@ def main() -> int:
                 trigger_id,
                 schedule_id,
                 planned_trigger_at,
-                "定时 2026-04-06 15:54",
+                f"定时 {recovery_trigger_label}",
                 "[]",
                 1,
                 "dispatch_requested",
@@ -166,8 +173,8 @@ def main() -> int:
                 "smoke-report",
                 "none",
                 "",
-                "2026-04-06T15:54:27+08:00",
-                "2026-04-06T16:03:53+08:00",
+                planned_trigger_at,
+                recovery_completed_at,
             ),
         )
         conn.execute(
@@ -181,7 +188,7 @@ def main() -> int:
                 "running",
                 ticket_id,
                 node_id,
-                "2026-04-06T16:03:53+08:00",
+                recovery_completed_at,
                 schedule_id,
             ),
         )
@@ -192,9 +199,9 @@ def main() -> int:
             WHERE schedule_id=?
             """,
             (
-                "2026-04-06T16:20:00+08:00",
+                newer_pending_trigger_at,
                 "running",
-                "2026-04-06T16:20:05+08:00",
+                newer_pending_trigger_at,
                 newer_schedule_id,
             ),
         )
@@ -209,7 +216,7 @@ def main() -> int:
             {
                 "ok": True,
                 "pass": False,
-                "executed_at": "2026-04-06T15:54:52+08:00",
+                "executed_at": planned_trigger_at,
                 "schedule_id": schedule_id,
                 "latest_result_status": "pending",
             },

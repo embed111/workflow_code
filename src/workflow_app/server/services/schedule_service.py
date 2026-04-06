@@ -73,6 +73,8 @@ SCHEDULE_ASSIGNMENT_SOURCE_WORKFLOW = "workflow-ui"
 SCHEDULE_ASSIGNMENT_GRAPH_NAME = "任务中心全局主图"
 SCHEDULE_ASSIGNMENT_GRAPH_REQUEST_ID = "workflow-ui-global-graph-v1"
 SCHEDULE_WORKER_INTERVAL_SECONDS = 8
+SCHEDULE_TRIGGER_RECOVERY_LOOKBACK_HOURS = 12
+SCHEDULE_TRIGGER_RECOVERY_BATCH_SIZE = 20
 _SCHEDULE_WORKER_THREADS: dict[str, threading.Thread] = {}
 _SCHEDULE_WORKER_LOCK = threading.Lock()
 _SCHEDULE_TRIGGER_THREADS: dict[str, threading.Thread] = {}
@@ -2078,6 +2080,86 @@ def run_schedule_scan(cfg: Any, *, operator: str = "schedule-worker", now_at: st
     }
 
 
+def _resume_pending_schedule_triggers(cfg: Any, *, operator: str = "schedule-worker-recover") -> dict[str, Any]:
+    _ensure_schedule_tables(cfg.root)
+    now_dt = _minute_floor(_now_bj())
+    lookback_floor = (now_dt - timedelta(hours=max(1, int(SCHEDULE_TRIGGER_RECOVERY_LOOKBACK_HOURS)))).isoformat(timespec="seconds")
+    conn = connect_db(cfg.root)
+    try:
+        rows = conn.execute(
+            """
+            SELECT p.*,t.trigger_instance_id,t.planned_trigger_at,t.trigger_rule_summary,t.trigger_status,
+                   t.assignment_ticket_id,t.assignment_node_id,t.updated_at AS trigger_updated_at
+            FROM schedule_trigger_instances t
+            JOIN schedule_plans p ON p.schedule_id=t.schedule_id
+            WHERE p.deleted_at=''
+              AND t.planned_trigger_at>=?
+              AND t.planned_trigger_at<=?
+              AND t.trigger_status IN ('trigger_hit','queued','running','dispatch_failed')
+            ORDER BY t.updated_at ASC, t.planned_trigger_at ASC
+            LIMIT ?
+            """,
+            (
+                lookback_floor,
+                now_dt.isoformat(timespec="seconds"),
+                max(1, int(SCHEDULE_TRIGGER_RECOVERY_BATCH_SIZE)),
+            ),
+        ).fetchall()
+    finally:
+        conn.close()
+    resumed = []
+    for row in rows:
+        schedule = _row_to_schedule(row)
+        trigger_id = str(row["trigger_instance_id"] or "").strip()
+        planned_trigger_at = str(row["planned_trigger_at"] or "").strip()
+        assignment_ticket_id = str(row["assignment_ticket_id"] or "").strip()
+        assignment_node_id = str(row["assignment_node_id"] or "").strip()
+        if not trigger_id or not planned_trigger_at:
+            continue
+        if assignment_ticket_id and assignment_node_id:
+            result_status = _assignment_runtime_status(
+                cfg.root,
+                ticket_id=assignment_ticket_id,
+                node_id=assignment_node_id,
+            )
+            assignment_status = str(result_status.get("assignment_status") or "").strip().lower()
+            result_state = str(result_status.get("result_status") or "").strip().lower()
+            if result_state in {"succeeded", "failed"}:
+                continue
+            if assignment_status == "running":
+                continue
+        started = _start_schedule_trigger_processing(
+            cfg,
+            schedule=schedule,
+            trigger_instance_id=trigger_id,
+            planned_trigger_at=planned_trigger_at,
+            trigger_rule_summary=str(row["trigger_rule_summary"] or "").strip(),
+            operator=operator,
+        )
+        if started:
+            resumed.append(
+                {
+                    "schedule_id": str(schedule.get("schedule_id") or "").strip(),
+                    "trigger_instance_id": trigger_id,
+                    "planned_trigger_at": planned_trigger_at,
+                    "assignment_ticket_id": assignment_ticket_id,
+                    "assignment_node_id": assignment_node_id,
+                }
+            )
+            _append_schedule_event(
+                cfg.root,
+                {
+                    "created_at": _now_text(),
+                    "action": "trigger_resume_requested",
+                    "schedule_id": str(schedule.get("schedule_id") or "").strip(),
+                    "trigger_instance_id": trigger_id,
+                    "assignment_ticket_id": assignment_ticket_id,
+                    "assignment_node_id": assignment_node_id,
+                },
+            )
+    return {"resumed_count": len(resumed), "items": resumed}
+
+
 def _write_schedule_smoke_baseline(root: Path, payload: dict[str, Any]) -> str:
     path = (Path(root) / SCHEDULE_SMOKE_BASELINE_FILE).resolve(strict=False)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -2222,6 +2304,7 @@ def start_schedule_trigger_worker(cfg: Any, state: Any) -> threading.Thread:
                     if current_minute != last_minute:
                         run_schedule_scan(cfg, operator="schedule-worker", now_at=current_minute)
                         last_minute = current_minute
+                    _resume_pending_schedule_triggers(cfg, operator="schedule-worker-recover")
                 except Exception as exc:
                     _append_schedule_event(cfg.root, {"created_at": _now_text(), "action": "worker_error", "error": str(exc)})
                 if state.stop_event.wait(SCHEDULE_WORKER_INTERVAL_SECONDS):

@@ -18,6 +18,7 @@ def main() -> int:
     runtime_root = workspace_root / ".test" / "runtime-schedule-smoke-guard-scope"
     if runtime_root.exists():
         shutil.rmtree(runtime_root, ignore_errors=True)
+    (runtime_root / "state").mkdir(parents=True, exist_ok=True)
     (runtime_root / ".test").mkdir(parents=True, exist_ok=True)
     (runtime_root / ".test" / "schedule_smoke_baseline.latest.json").write_text(
         json.dumps(
