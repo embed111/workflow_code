@@ -736,6 +736,96 @@ def _load_latest_smoke_baseline(root: Path) -> dict[str, Any]:
     return payload if isinstance(payload, dict) else {}
 
 
+def _schedule_is_smoke_baseline(schedule: dict[str, Any]) -> bool:
+    schedule_name = str(schedule.get("schedule_name") or "").strip()
+    launch_summary = str(schedule.get("launch_summary") or "").strip()
+    combined_text = "\n".join(item for item in [schedule_name, launch_summary] if item)
+    return "生产 smoke 基线" in combined_text or "生产基线 smoke" in combined_text
+
+
+def _latest_smoke_schedule_report(root: Path) -> dict[str, Any]:
+    _ensure_schedule_tables(root)
+    conn = connect_db(root)
+    try:
+        rows = conn.execute(
+            "SELECT * FROM schedule_plans WHERE deleted_at='' ORDER BY updated_at DESC, created_at DESC"
+        ).fetchall()
+    finally:
+        conn.close()
+    smoke_schedules = []
+    for row in rows:
+        schedule = _row_to_schedule(row)
+        if _schedule_is_smoke_baseline(schedule):
+            smoke_schedules.append(schedule)
+    if not smoke_schedules:
+        return {}
+    smoke_schedules.sort(
+        key=lambda item: (
+            str(item.get("last_trigger_at") or "").strip(),
+            str(item.get("updated_at") or "").strip(),
+            str(item.get("schedule_id") or "").strip(),
+        ),
+        reverse=True,
+    )
+    latest_schedule = smoke_schedules[0]
+    detail = get_schedule_detail(root, str(latest_schedule.get("schedule_id") or "").strip())
+    schedule_payload = dict(detail.get("schedule") or {})
+    recent = list(detail.get("recent_triggers") or [])
+    latest_trigger = dict(recent[0] or {}) if recent else {}
+    result_status = str(
+        latest_trigger.get("result_status")
+        or schedule_payload.get("last_result_status")
+        or "pending"
+    ).strip().lower() or "pending"
+    planned_trigger_at = str(
+        latest_trigger.get("planned_trigger_at")
+        or schedule_payload.get("last_trigger_at")
+        or ""
+    ).strip()
+    if not planned_trigger_at:
+        return {}
+    report = {
+        "pass": result_status == "succeeded",
+        "executed_at": str(schedule_payload.get("updated_at") or planned_trigger_at).strip(),
+        "environment": "prod",
+        "schedule_id": str(schedule_payload.get("schedule_id") or "").strip(),
+        "assigned_agent_id": str(schedule_payload.get("assigned_agent_id") or "").strip(),
+        "chain": {
+            "schedule_hit": bool(str(latest_trigger.get("trigger_instance_id") or "").strip()),
+            "task_created": bool(
+                str(latest_trigger.get("assignment_ticket_id") or "").strip()
+                and str(latest_trigger.get("assignment_node_id") or "").strip()
+            ),
+            "auto_dispatch": result_status in {"running", "succeeded", "failed"},
+            "status_writeback": bool(
+                str(schedule_payload.get("last_trigger_at") or "").strip()
+                and str(schedule_payload.get("last_result_ticket_id") or "").strip()
+                and str(schedule_payload.get("last_result_node_id") or "").strip()
+            ),
+        },
+        "latest_trigger_instance_id": str(latest_trigger.get("trigger_instance_id") or "").strip(),
+        "latest_assignment_ticket_id": str(latest_trigger.get("assignment_ticket_id") or "").strip(),
+        "latest_assignment_node_id": str(latest_trigger.get("assignment_node_id") or "").strip(),
+        "latest_result_status": result_status,
+        "latest_assignment_status": str(latest_trigger.get("assignment_status") or "").strip().lower(),
+        "latest_result_summary": str(
+            latest_trigger.get("trigger_message")
+            or latest_trigger.get("assignment_status_text")
+            or schedule_payload.get("last_result_summary")
+            or ""
+        ).strip(),
+    }
+    return report
+
+
+def _sync_smoke_baseline_report_from_schedule(root: Path) -> dict[str, Any]:
+    report = _latest_smoke_schedule_report(root)
+    if not report:
+        return {}
+    _write_schedule_smoke_baseline(root, report)
+    return report
+
+
 def _schedule_is_self_iteration(schedule: dict[str, Any], guard: dict[str, Any]) -> bool:
     assigned_agent_id = _safe_token(schedule.get("assigned_agent_id"), max_len=120).lower()
     assigned_agent_name = _safe_token(schedule.get("assigned_agent_name"), max_len=120).lower()
@@ -770,9 +860,15 @@ def _schedule_is_self_iteration(schedule: dict[str, Any], guard: dict[str, Any])
 def _smoke_baseline_valid(root: Path, *, max_age_minutes: int) -> tuple[bool, str, dict[str, Any]]:
     report = _load_latest_smoke_baseline(root)
     if not report:
-        return False, "smoke baseline report missing", {}
+        report = _sync_smoke_baseline_report_from_schedule(root)
+        if not report:
+            return False, "smoke baseline report missing", {}
     if not bool(report.get("pass")):
-        return False, "smoke baseline last run not passed", report
+        recovered = _sync_smoke_baseline_report_from_schedule(root)
+        if recovered and bool(recovered.get("pass")):
+            report = recovered
+        else:
+            return False, "smoke baseline last run not passed", report
     ts_text = str(report.get("executed_at") or "").strip()
     if not ts_text:
         return False, "smoke baseline timestamp missing", report
@@ -783,6 +879,17 @@ def _smoke_baseline_valid(root: Path, *, max_age_minutes: int) -> tuple[bool, st
     age_seconds = max(0.0, (_now_bj() - ts).total_seconds())
     max_age_seconds = max(60, int(max_age_minutes) * 60)
     if age_seconds > max_age_seconds:
+        recovered = _sync_smoke_baseline_report_from_schedule(root)
+        if recovered and bool(recovered.get("pass")):
+            report = recovered
+            ts_text = str(report.get("executed_at") or "").strip()
+            try:
+                ts = _parse_datetime_token(ts_text, field="smoke_executed_at")
+            except Exception:
+                return False, "smoke baseline timestamp invalid", report
+            age_seconds = max(0.0, (_now_bj() - ts).total_seconds())
+            if age_seconds <= max_age_seconds:
+                return True, "", report
         return False, "smoke baseline expired", report
     return True, "", report
 
