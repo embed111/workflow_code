@@ -39,7 +39,7 @@ def main() -> int:
     original_load_agents = schedule_service._load_available_agents
     schedule_service._load_available_agents = lambda _cfg: [{"agent_id": "workflow", "agent_name": "workflow"}]
 
-    try:
+    def create_schedule(date_text: str) -> str:
         schedule = schedule_service.create_schedule(
             cfg,
             {
@@ -57,11 +57,18 @@ def main() -> int:
                     "monthly": {"enabled": False},
                     "weekly": {"enabled": False},
                     "daily": {"enabled": False},
-                    "once": {"enabled": True, "date_times_text": "2026-04-06T20:00:00+08:00"},
+                    "once": {"enabled": True, "date_times_text": date_text},
                 },
             },
         )
-        schedule_id = str(schedule.get("schedule_id") or "").strip()
+        return str(schedule.get("schedule_id") or "").strip()
+
+    try:
+        schedule_missing_id = create_schedule("2026-04-06T20:00:00+08:00")
+        schedule_active_id = create_schedule("2026-04-06T20:05:00+08:00")
+        schedule_done_id = create_schedule("2026-04-06T20:10:00+08:00")
+        schedule_running_id = create_schedule("2026-04-06T20:15:00+08:00")
+        schedule_recent_failed_id = create_schedule("2026-04-06T20:20:00+08:00")
     finally:
         schedule_service._load_available_agents = original_load_agents
 
@@ -77,6 +84,7 @@ def main() -> int:
         rows = [
             (
                 "sti-recover-missing",
+                schedule_missing_id,
                 trigger_missing_at,
                 f"定时 {trigger_missing_at[:16].replace('T', ' ')}",
                 "dispatch_failed",
@@ -88,6 +96,7 @@ def main() -> int:
             ),
             (
                 "sti-recover-active",
+                schedule_active_id,
                 trigger_active_at,
                 f"定时 {trigger_active_at[:16].replace('T', ' ')}",
                 "queued",
@@ -99,6 +108,7 @@ def main() -> int:
             ),
             (
                 "sti-recover-done",
+                schedule_done_id,
                 trigger_done_at,
                 f"定时 {trigger_done_at[:16].replace('T', ' ')}",
                 "queued",
@@ -110,6 +120,7 @@ def main() -> int:
             ),
             (
                 "sti-recover-running",
+                schedule_running_id,
                 trigger_running_at,
                 f"定时 {trigger_running_at[:16].replace('T', ' ')}",
                 "running",
@@ -121,6 +132,7 @@ def main() -> int:
             ),
             (
                 "sti-recover-recent-failed",
+                schedule_recent_failed_id,
                 trigger_recent_failed_at,
                 f"定时 {trigger_recent_failed_at[:16].replace('T', ' ')}",
                 "dispatch_failed",
@@ -143,7 +155,7 @@ def main() -> int:
             [
                 (
                     trigger_id,
-                    schedule_id,
+                    schedule_ref,
                     planned_trigger_at,
                     trigger_rule_summary,
                     "[]",
@@ -165,6 +177,7 @@ def main() -> int:
                 )
                 for (
                     trigger_id,
+                    schedule_ref,
                     planned_trigger_at,
                     trigger_rule_summary,
                     trigger_status,

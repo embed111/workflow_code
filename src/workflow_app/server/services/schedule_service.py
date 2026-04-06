@@ -2092,18 +2092,26 @@ def _resume_pending_schedule_triggers(cfg: Any, *, operator: str = "schedule-wor
     try:
         rows = conn.execute(
             """
-            SELECT p.*,t.trigger_instance_id,t.planned_trigger_at,t.trigger_rule_summary,t.trigger_status,
-                   t.assignment_ticket_id,t.assignment_node_id,t.updated_at AS trigger_updated_at
-            FROM schedule_trigger_instances t
-            JOIN schedule_plans p ON p.schedule_id=t.schedule_id
-            WHERE p.deleted_at=''
-              AND t.planned_trigger_at>=?
-              AND t.planned_trigger_at<=?
-              AND t.trigger_status IN ('trigger_hit','queued','running','dispatch_failed')
+            SELECT *
+            FROM (
+                SELECT p.*,t.trigger_instance_id,t.planned_trigger_at,t.trigger_rule_summary,t.trigger_status,
+                       t.assignment_ticket_id,t.assignment_node_id,t.updated_at AS trigger_updated_at,
+                       ROW_NUMBER() OVER (
+                           PARTITION BY t.schedule_id
+                           ORDER BY t.planned_trigger_at DESC, t.updated_at DESC, t.trigger_instance_id DESC
+                       ) AS recovery_rank
+                FROM schedule_trigger_instances t
+                JOIN schedule_plans p ON p.schedule_id=t.schedule_id
+                WHERE p.deleted_at=''
+                  AND t.planned_trigger_at>=?
+                  AND t.planned_trigger_at<=?
+                  AND t.trigger_status IN ('trigger_hit','queued','running','dispatch_failed')
+            ) ranked
+            WHERE recovery_rank=1
             ORDER BY
-                CASE WHEN t.trigger_status='dispatch_failed' THEN 1 ELSE 0 END ASC,
-                t.updated_at ASC,
-                t.planned_trigger_at ASC
+                CASE WHEN trigger_status='dispatch_failed' THEN 1 ELSE 0 END ASC,
+                trigger_updated_at ASC,
+                planned_trigger_at ASC
             LIMIT ?
             """,
             (
