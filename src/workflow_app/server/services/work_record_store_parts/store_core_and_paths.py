@@ -18,6 +18,11 @@ _DEFAULT_ARTIFACT_ROOT = (_WORKFLOW_PROJECT_ROOT.parent / ".output").resolve(str
 _ABSOLUTE_RECORD_REF_TOP_LEVELS = {"sessions", "analysis", "runs", "audit", "system"}
 
 
+def _is_db_locked_error(exc: BaseException) -> bool:
+    msg = str(exc or "").lower()
+    return "database is locked" in msg or "database table is locked" in msg or "database schema is locked" in msg
+
+
 def _now_ts() -> str:
     return datetime.now().astimezone().isoformat(timespec="seconds")
 
@@ -407,7 +412,12 @@ def _sync_policy_patch_index(root: Path, patch_task_id: str) -> None:
 
 
 def sync_assignment_task_bundle(root: Path, ticket_id: str) -> None:
-    _record_index.sync_assignment_task_bundle(root, ticket_id)
+    try:
+        _record_index.sync_assignment_task_bundle(root, ticket_id)
+    except Exception as exc:
+        if _is_db_locked_error(exc):
+            return
+        raise
 
 
 def ensure_store(root: Path) -> None:
@@ -421,7 +431,12 @@ def ensure_store(root: Path) -> None:
         ):
             path.mkdir(parents=True, exist_ok=True)
         write_structure_file(root)
-        _record_index.ensure_sqlite_index(root)
+        try:
+            _record_index.ensure_sqlite_index(root)
+        except Exception as exc:
+            if _is_db_locked_error(exc):
+                return
+            raise
         index_paths = (
             sessions_index_path(root),
             analysis_index_path(root),
