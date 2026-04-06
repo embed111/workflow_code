@@ -75,6 +75,7 @@ SCHEDULE_ASSIGNMENT_GRAPH_REQUEST_ID = "workflow-ui-global-graph-v1"
 SCHEDULE_WORKER_INTERVAL_SECONDS = 8
 SCHEDULE_TRIGGER_RECOVERY_LOOKBACK_HOURS = 12
 SCHEDULE_TRIGGER_RECOVERY_BATCH_SIZE = 20
+SCHEDULE_TRIGGER_RECOVERY_RETRY_COOLDOWN_SECONDS = 60
 _SCHEDULE_WORKER_THREADS: dict[str, threading.Thread] = {}
 _SCHEDULE_WORKER_LOCK = threading.Lock()
 _SCHEDULE_TRIGGER_THREADS: dict[str, threading.Thread] = {}
@@ -2084,6 +2085,7 @@ def _resume_pending_schedule_triggers(cfg: Any, *, operator: str = "schedule-wor
     _ensure_schedule_tables(cfg.root)
     now_dt = _minute_floor(_now_bj())
     lookback_floor = (now_dt - timedelta(hours=max(1, int(SCHEDULE_TRIGGER_RECOVERY_LOOKBACK_HOURS)))).isoformat(timespec="seconds")
+    retry_cooldown_seconds = max(1, int(SCHEDULE_TRIGGER_RECOVERY_RETRY_COOLDOWN_SECONDS))
     conn = connect_db(cfg.root)
     try:
         rows = conn.execute(
@@ -2096,7 +2098,10 @@ def _resume_pending_schedule_triggers(cfg: Any, *, operator: str = "schedule-wor
               AND t.planned_trigger_at>=?
               AND t.planned_trigger_at<=?
               AND t.trigger_status IN ('trigger_hit','queued','running','dispatch_failed')
-            ORDER BY t.updated_at ASC, t.planned_trigger_at ASC
+            ORDER BY
+                CASE WHEN t.trigger_status='dispatch_failed' THEN 1 ELSE 0 END ASC,
+                t.updated_at ASC,
+                t.planned_trigger_at ASC
             LIMIT ?
             """,
             (
@@ -2112,10 +2117,19 @@ def _resume_pending_schedule_triggers(cfg: Any, *, operator: str = "schedule-wor
         schedule = _row_to_schedule(row)
         trigger_id = str(row["trigger_instance_id"] or "").strip()
         planned_trigger_at = str(row["planned_trigger_at"] or "").strip()
+        trigger_status = str(row["trigger_status"] or "").strip().lower()
+        trigger_updated_at = _parse_datetime_token(str(row["trigger_updated_at"] or "").strip(), field="trigger_updated_at")
         assignment_ticket_id = str(row["assignment_ticket_id"] or "").strip()
         assignment_node_id = str(row["assignment_node_id"] or "").strip()
         if not trigger_id or not planned_trigger_at:
             continue
+        if trigger_status == "dispatch_failed" and trigger_updated_at is not None:
+            try:
+                retry_age_seconds = max(0.0, (now_dt - trigger_updated_at).total_seconds())
+            except Exception:
+                retry_age_seconds = float(retry_cooldown_seconds)
+            if retry_age_seconds <= retry_cooldown_seconds:
+                continue
         if assignment_ticket_id and assignment_node_id:
             result_status = _assignment_runtime_status(
                 cfg.root,

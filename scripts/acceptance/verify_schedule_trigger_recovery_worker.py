@@ -70,6 +70,7 @@ def main() -> int:
     trigger_active_at = (now_minute - timedelta(minutes=4)).isoformat(timespec="seconds")
     trigger_running_at = (now_minute - timedelta(minutes=3)).isoformat(timespec="seconds")
     trigger_done_at = (now_minute - timedelta(minutes=2)).isoformat(timespec="seconds")
+    trigger_recent_failed_at = (now_minute - timedelta(minutes=1)).isoformat(timespec="seconds")
 
     conn = schedule_service.connect_db(root)
     try:
@@ -117,6 +118,17 @@ def main() -> int:
                 "node-running",
                 trigger_running_at,
                 (now_minute - timedelta(minutes=2, seconds=30)).isoformat(timespec="seconds"),
+            ),
+            (
+                "sti-recover-recent-failed",
+                trigger_recent_failed_at,
+                f"定时 {trigger_recent_failed_at[:16].replace('T', ' ')}",
+                "dispatch_failed",
+                "smoke baseline expired",
+                "",
+                "",
+                trigger_recent_failed_at,
+                (now_minute - timedelta(seconds=20)).isoformat(timespec="seconds"),
             ),
         ]
         conn.executemany(
