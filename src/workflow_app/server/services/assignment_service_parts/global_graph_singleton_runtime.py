@@ -2,6 +2,33 @@ from __future__ import annotations
 
 
 ASSIGNMENT_GLOBAL_GRAPH_TICKET_SETTING_KEY = "workflow_ui_global_graph_ticket_id"
+ASSIGNMENT_GLOBAL_GRAPH_TICKET_MARKER_FILE = ".workflow-ui-global-ticket.txt"
+
+
+def _assignment_global_graph_ticket_marker_path(root: Path) -> Path:
+    return (_assignment_artifact_root(root) / ASSIGNMENT_GLOBAL_GRAPH_TICKET_MARKER_FILE).resolve(strict=False)
+
+
+def _assignment_bound_workflow_ui_global_graph_ticket_marker(root: Path) -> str:
+    path = _assignment_global_graph_ticket_marker_path(root)
+    if not path.exists() or not path.is_file():
+        return ""
+    try:
+        text = path.read_text(encoding="utf-8").strip()
+    except Exception:
+        return ""
+    return safe_token(text, "", 160)
+
+
+def _assignment_write_workflow_ui_global_graph_ticket_marker(root: Path, ticket_id: str) -> str:
+    ticket_text = safe_token(str(ticket_id or ""), "", 160)
+    path = _assignment_global_graph_ticket_marker_path(root)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(ticket_text + "\n", encoding="utf-8")
+    except Exception:
+        return ticket_text
+    return ticket_text
 
 
 def _assignment_is_workflow_ui_global_graph_record(task_record: dict[str, Any]) -> bool:
@@ -64,6 +91,9 @@ def _assignment_workflow_ui_global_graph_sort_key(candidate: dict[str, Any]) -> 
 
 
 def _assignment_bound_workflow_ui_global_graph_ticket(root: Path) -> str:
+    marker_ticket_id = _assignment_bound_workflow_ui_global_graph_ticket_marker(root)
+    if marker_ticket_id:
+        return marker_ticket_id
     _ensure_assignment_support_tables(root)
     now_text = iso_ts(now_local())
     conn = connect_db(root)
@@ -81,21 +111,25 @@ def _assignment_bound_workflow_ui_global_graph_ticket(root: Path) -> str:
 
 
 def _assignment_set_bound_workflow_ui_global_graph_ticket(root: Path, ticket_id: str) -> str:
-    _ensure_assignment_support_tables(root)
-    now_text = iso_ts(now_local())
     ticket_text = safe_token(str(ticket_id or ""), "", 160)
-    conn = connect_db(root)
+    _assignment_write_workflow_ui_global_graph_ticket_marker(root, ticket_text)
     try:
-        conn.execute("BEGIN IMMEDIATE")
-        _set_assignment_setting_text(
-            conn,
-            key=ASSIGNMENT_GLOBAL_GRAPH_TICKET_SETTING_KEY,
-            value=ticket_text,
-            now_text=now_text,
-        )
-        conn.commit()
-    finally:
-        conn.close()
+        _ensure_assignment_support_tables(root)
+        now_text = iso_ts(now_local())
+        conn = connect_db(root)
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            _set_assignment_setting_text(
+                conn,
+                key=ASSIGNMENT_GLOBAL_GRAPH_TICKET_SETTING_KEY,
+                value=ticket_text,
+                now_text=now_text,
+            )
+            conn.commit()
+        finally:
+            conn.close()
+    except Exception:
+        pass
     return ticket_text
 
 
@@ -137,7 +171,13 @@ def _assignment_ensure_workflow_ui_global_graph_ticket(root: Path) -> str:
         except Exception:
             bound_record = {}
         if _assignment_is_workflow_ui_global_graph_record(bound_record):
-            _assignment_normalize_workflow_ui_global_graph_header(root, bound_ticket_id)
+            if (
+                str(bound_record.get("graph_name") or "").strip() != ASSIGNMENT_GLOBAL_GRAPH_NAME
+                or str(bound_record.get("source_workflow") or "").strip() != ASSIGNMENT_GLOBAL_GRAPH_SOURCE_WORKFLOW
+                or str(bound_record.get("summary") or "").strip() != ASSIGNMENT_GLOBAL_GRAPH_SUMMARY
+                or str(bound_record.get("external_request_id") or "").strip() != ASSIGNMENT_GLOBAL_GRAPH_REQUEST_ID
+            ):
+                _assignment_normalize_workflow_ui_global_graph_header(root, bound_ticket_id)
             return bound_ticket_id
     candidates = _assignment_workflow_ui_global_graph_candidates(root)
     if not candidates:

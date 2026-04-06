@@ -72,11 +72,16 @@ def _get_assignment_runtime_metrics_from_node_files(
     running_node_count = 0
     running_agents: set[str] = set()
     canonical_workflow_ui_ticket = _assignment_ensure_workflow_ui_global_graph_ticket(root)
-    for ticket_id in [
-        str(path.name or "").strip()
-        for path in sorted(tasks_root.iterdir(), key=lambda item: item.name.lower())
-        if path.is_dir() and str(path.name or "").strip()
-    ]:
+    ticket_ids = []
+    if canonical_workflow_ui_ticket:
+        ticket_ids = [canonical_workflow_ui_ticket]
+    else:
+        ticket_ids = [
+            str(path.name or "").strip()
+            for path in sorted(tasks_root.iterdir(), key=lambda item: item.name.lower())
+            if path.is_dir() and str(path.name or "").strip()
+        ]
+    for ticket_id in ticket_ids:
         task_record = _assignment_read_json(_assignment_graph_record_path(root, ticket_id))
         if not task_record:
             try:
@@ -121,11 +126,16 @@ def _get_assignment_runtime_metrics_from_files(
     running_node_count = 0
     running_agents: set[str] = set()
     canonical_workflow_ui_ticket = _assignment_ensure_workflow_ui_global_graph_ticket(root)
-    for ticket_id in [
-        str(path.name or "").strip()
-        for path in sorted(tasks_root.iterdir(), key=lambda item: item.name.lower())
-        if path.is_dir() and str(path.name or "").strip()
-    ]:
+    ticket_ids = []
+    if canonical_workflow_ui_ticket:
+        ticket_ids = [canonical_workflow_ui_ticket]
+    else:
+        ticket_ids = [
+            str(path.name or "").strip()
+            for path in sorted(tasks_root.iterdir(), key=lambda item: item.name.lower())
+            if path.is_dir() and str(path.name or "").strip()
+        ]
+    for ticket_id in ticket_ids:
         task_record = _assignment_read_json(_assignment_graph_record_path(root, ticket_id))
         if not task_record:
             try:

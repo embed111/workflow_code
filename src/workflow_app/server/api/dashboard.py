@@ -281,7 +281,6 @@ def try_handle_get(handler, cfg, state, ctx: dict) -> bool:
         else:
             ab = {"active_version": "disabled", "active_slot": "disabled"}
         runtime_goal = _runtime_goal_payload(cfg)
-        workboard = _workboard_payload(cfg, include_test_data=include_test_data)
         handler.send_json(
             200,
             {
