@@ -137,6 +137,15 @@ def find_schedule_assignment_ref(
 
 
 def ensure_global_assignment_graph(cfg: Any) -> str:
+    canonical_ticket_fn = _runtime_symbol("_assignment_ensure_workflow_ui_global_graph_ticket")
+    if callable(canonical_ticket_fn):
+        try:
+            canonical_ticket_id = str(canonical_ticket_fn(cfg.root) or "").strip()
+        except Exception:
+            canonical_ticket_id = ""
+        if canonical_ticket_id:
+            return canonical_ticket_id
+
     graph_name = str(_runtime_symbol("SCHEDULE_ASSIGNMENT_GRAPH_NAME") or "任务中心全局主图").strip() or "任务中心全局主图"
     source_workflow = str(_runtime_symbol("SCHEDULE_ASSIGNMENT_SOURCE_WORKFLOW") or "workflow-ui").strip() or "workflow-ui"
     request_id = str(_runtime_symbol("SCHEDULE_ASSIGNMENT_GRAPH_REQUEST_ID") or "workflow-ui-global-graph-v1").strip() or "workflow-ui-global-graph-v1"
