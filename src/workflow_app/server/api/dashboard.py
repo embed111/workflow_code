@@ -67,6 +67,40 @@ def _running_agent_count_from_workboard(workboard: dict) -> int:
     )
 
 
+def _schedule_preview_payload(cfg) -> tuple[list[dict], int]:
+    db_path = (Path(cfg.root) / "state" / "workflow.db").resolve(strict=False)
+    if not db_path.exists():
+        return [], 0
+    try:
+        from ..services import schedule_service
+
+        preview_payload = schedule_service.list_schedule_preview(Path(cfg.root), limit=8)
+        return list(preview_payload.get("items") or []), int(preview_payload.get("total") or 0)
+    except Exception:
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+        try:
+            total_row = conn.execute(
+                """
+                SELECT COUNT(1) AS total_count
+                FROM schedule_plans
+                WHERE enabled=1 AND deleted_at=''
+                """
+            ).fetchone()
+            rows = conn.execute(
+                """
+                SELECT schedule_id,schedule_name,enabled,next_trigger_at,last_trigger_at,last_result_status,last_result_ticket_id,last_result_node_id,updated_at
+                FROM schedule_plans
+                WHERE enabled=1 AND deleted_at=''
+                ORDER BY updated_at DESC
+                LIMIT 8
+                """
+            ).fetchall()
+            return [dict(row) for row in rows], int((total_row or {"total_count": 0})["total_count"] or 0)
+        finally:
+            conn.close()
+
+
 def _workboard_payload(cfg, *, include_test_data: bool) -> dict:
     resolver = getattr(ws, "resolve_artifact_root_path", None)
     if not callable(resolver):
@@ -181,33 +215,7 @@ def _workboard_payload(cfg, *, include_test_data: bool) -> dict:
         item["failed"] = list(item.get("failed") or [])[:4]
         item["blocked"] = list(item.get("blocked") or [])[:4]
 
-    schedule_preview = []
-    schedule_total = 0
-    db_path = (Path(cfg.root) / "state" / "workflow.db").resolve(strict=False)
-    if db_path.exists():
-        conn = sqlite3.connect(db_path)
-        conn.row_factory = sqlite3.Row
-        try:
-            total_row = conn.execute(
-                """
-                SELECT COUNT(1) AS total_count
-                FROM schedule_plans
-                WHERE enabled=1 AND deleted_at=''
-                """
-            ).fetchone()
-            schedule_total = int((total_row or {"total_count": 0})["total_count"] or 0)
-            rows = conn.execute(
-                """
-                SELECT schedule_id,schedule_name,enabled,next_trigger_at,last_trigger_at,last_result_status,last_result_ticket_id,last_result_node_id,updated_at
-                FROM schedule_plans
-                WHERE enabled=1 AND deleted_at=''
-                ORDER BY updated_at DESC
-                LIMIT 8
-                """
-            ).fetchall()
-            schedule_preview = [dict(row) for row in rows]
-        finally:
-            conn.close()
+    schedule_preview, schedule_total = _schedule_preview_payload(cfg)
     return {
         "assignment_workboard_agents": agent_items,
         "assignment_workboard_summary": {

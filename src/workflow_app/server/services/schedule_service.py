@@ -1376,31 +1376,45 @@ def _schedule_trigger_projection(schedule: dict[str, Any]) -> dict[str, Any]:
     return {"next_trigger_at": next_at, "next_trigger_text": next_at}
 
 
-def list_schedules(root: Path) -> dict[str, Any]:
-    _ensure_schedule_tables(root)
-    conn = connect_db(root)
-    try:
-        rows = conn.execute(
-            "SELECT * FROM schedule_plans WHERE deleted_at='' ORDER BY enabled DESC, updated_at DESC, created_at DESC"
-        ).fetchall()
-        latest_rows = {
-            str(item["schedule_id"] or "").strip(): item
-            for item in conn.execute(
-                """
-                SELECT t.*
-                FROM schedule_trigger_instances t
-                JOIN (
-                    SELECT schedule_id, MAX(planned_trigger_at) AS latest_planned
-                    FROM schedule_trigger_instances
-                    GROUP BY schedule_id
-                ) latest
-                  ON latest.schedule_id=t.schedule_id AND latest.latest_planned=t.planned_trigger_at
-                """
-            ).fetchall()
-        }
-    finally:
-        conn.close()
+def _load_latest_trigger_rows(
+    conn: sqlite3.Connection,
+    *,
+    schedule_ids: list[str] | None = None,
+) -> dict[str, sqlite3.Row]:
+    params: list[str] = []
+    where_sql = ""
+    if schedule_ids is not None:
+        ids = [str(item or "").strip() for item in schedule_ids if str(item or "").strip()]
+        if not ids:
+            return {}
+        placeholders = ",".join("?" for _ in ids)
+        where_sql = f"WHERE schedule_id IN ({placeholders})"
+        params.extend(ids)
+    rows = conn.execute(
+        f"""
+        SELECT t.*
+        FROM schedule_trigger_instances t
+        JOIN (
+            SELECT schedule_id, MAX(planned_trigger_at) AS latest_planned
+            FROM schedule_trigger_instances
+            {where_sql}
+            GROUP BY schedule_id
+        ) latest
+          ON latest.schedule_id=t.schedule_id AND latest.latest_planned=t.planned_trigger_at
+        """,
+        tuple(params),
+    ).fetchall()
+    return {str(item["schedule_id"] or "").strip(): item for item in rows}
+
+
+def _build_schedule_items(
+    root: Path,
+    rows: list[sqlite3.Row],
+    *,
+    latest_rows: dict[str, sqlite3.Row] | None = None,
+) -> list[dict[str, Any]]:
     items = []
+    latest_rows = dict(latest_rows or {})
     for row in rows:
         schedule = _row_to_schedule(row)
         schedule.update(_schedule_trigger_projection(schedule))
@@ -1415,6 +1429,54 @@ def list_schedules(root: Path) -> dict[str, Any]:
         else:
             schedule["last_result_summary"] = ""
         items.append(schedule)
+    return items
+
+
+def list_schedule_preview(root: Path, *, limit: int = 8) -> dict[str, Any]:
+    _ensure_schedule_tables(root)
+    preview_limit = max(1, int(limit or 0))
+    conn = connect_db(root)
+    try:
+        total_row = conn.execute(
+            """
+            SELECT COUNT(1) AS total_count
+            FROM schedule_plans
+            WHERE enabled=1 AND deleted_at=''
+            """
+        ).fetchone()
+        rows = conn.execute(
+            """
+            SELECT *
+            FROM schedule_plans
+            WHERE enabled=1 AND deleted_at=''
+            ORDER BY updated_at DESC, created_at DESC
+            LIMIT ?
+            """,
+            (preview_limit,),
+        ).fetchall()
+        latest_rows = _load_latest_trigger_rows(
+            conn,
+            schedule_ids=[str(item["schedule_id"] or "").strip() for item in rows],
+        )
+    finally:
+        conn.close()
+    return {
+        "items": _build_schedule_items(root, rows, latest_rows=latest_rows),
+        "total": int((total_row or {"total_count": 0})["total_count"] or 0),
+    }
+
+
+def list_schedules(root: Path) -> dict[str, Any]:
+    _ensure_schedule_tables(root)
+    conn = connect_db(root)
+    try:
+        rows = conn.execute(
+            "SELECT * FROM schedule_plans WHERE deleted_at='' ORDER BY enabled DESC, updated_at DESC, created_at DESC"
+        ).fetchall()
+        latest_rows = _load_latest_trigger_rows(conn)
+    finally:
+        conn.close()
+    items = _build_schedule_items(root, rows, latest_rows=latest_rows)
     return {"items": items, "total": len(items), "timezone": SCHEDULE_TIMEZONE}
 
 
