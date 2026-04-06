@@ -39,11 +39,20 @@ def _assignment_run_row_is_live(
     grace_seconds: int,
 ) -> bool:
     run_id = str((row["run_id"] if isinstance(row, sqlite3.Row) else row.get("run_id")) or "").strip()
+    status = str((row["status"] if isinstance(row, sqlite3.Row) else row.get("status")) or "").strip().lower()
     if run_id and run_id in active_run_ids:
         return True
     raw_pid = row["provider_pid"] if isinstance(row, sqlite3.Row) else row.get("provider_pid")
-    if _assignment_process_pid_is_live(raw_pid):
+    pid_is_live = _assignment_process_pid_is_live(raw_pid)
+    if pid_is_live:
         return True
+    effective_grace_seconds = max(1, int(grace_seconds))
+    if status == "starting":
+        effective_grace_seconds = max(effective_grace_seconds, DEFAULT_ASSIGNMENT_PROVIDER_START_GRACE_SECONDS)
+    elif not raw_pid:
+        # Codex cold start can take far longer than the stale-running default window.
+        # Keep a dispatch-created run alive until provider pid or the first real heartbeat lands.
+        effective_grace_seconds = max(effective_grace_seconds, DEFAULT_ASSIGNMENT_PROVIDER_START_GRACE_SECONDS)
     for field in ("latest_event_at", "updated_at", "started_at", "created_at"):
         raw_value = row[field] if isinstance(row, sqlite3.Row) else row.get(field)
         parsed = _parse_assignment_iso_datetime(raw_value)
@@ -55,7 +64,7 @@ def _assignment_run_row_is_live(
             age_seconds = abs((now_dt - parsed).total_seconds())
         except Exception:
             continue
-        if age_seconds <= max(1, int(grace_seconds)):
+        if age_seconds <= effective_grace_seconds:
             return True
     return False
 
