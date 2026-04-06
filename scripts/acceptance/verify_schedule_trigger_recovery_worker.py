@@ -183,6 +183,7 @@ def main() -> int:
     calls = []
     original_start = schedule_service._start_schedule_trigger_processing
     original_assignment_runtime_status = schedule_service._assignment_runtime_status
+    original_start_limit = schedule_service.SCHEDULE_TRIGGER_RECOVERY_START_LIMIT_PER_PASS
 
     def fake_start(cfg_obj, **kwargs):
         calls.append(
@@ -205,11 +206,13 @@ def main() -> int:
 
     schedule_service._start_schedule_trigger_processing = fake_start
     schedule_service._assignment_runtime_status = fake_assignment_runtime_status
+    schedule_service.SCHEDULE_TRIGGER_RECOVERY_START_LIMIT_PER_PASS = 10
     try:
         result = schedule_service._resume_pending_schedule_triggers(cfg, operator="test-recover")
     finally:
         schedule_service._start_schedule_trigger_processing = original_start
         schedule_service._assignment_runtime_status = original_assignment_runtime_status
+        schedule_service.SCHEDULE_TRIGGER_RECOVERY_START_LIMIT_PER_PASS = original_start_limit
 
     resumed_ids = {item["trigger_instance_id"] for item in result.get("items") or []}
     assert int(result.get("resumed_count") or 0) == 2, result

@@ -76,6 +76,7 @@ SCHEDULE_WORKER_INTERVAL_SECONDS = 8
 SCHEDULE_TRIGGER_RECOVERY_LOOKBACK_HOURS = 12
 SCHEDULE_TRIGGER_RECOVERY_BATCH_SIZE = 20
 SCHEDULE_TRIGGER_RECOVERY_RETRY_COOLDOWN_SECONDS = 60
+SCHEDULE_TRIGGER_RECOVERY_START_LIMIT_PER_PASS = 1
 _SCHEDULE_WORKER_THREADS: dict[str, threading.Thread] = {}
 _SCHEDULE_WORKER_LOCK = threading.Lock()
 _SCHEDULE_TRIGGER_THREADS: dict[str, threading.Thread] = {}
@@ -2086,6 +2087,7 @@ def _resume_pending_schedule_triggers(cfg: Any, *, operator: str = "schedule-wor
     now_dt = _minute_floor(_now_bj())
     lookback_floor = (now_dt - timedelta(hours=max(1, int(SCHEDULE_TRIGGER_RECOVERY_LOOKBACK_HOURS)))).isoformat(timespec="seconds")
     retry_cooldown_seconds = max(1, int(SCHEDULE_TRIGGER_RECOVERY_RETRY_COOLDOWN_SECONDS))
+    start_limit_per_pass = max(1, int(SCHEDULE_TRIGGER_RECOVERY_START_LIMIT_PER_PASS))
     conn = connect_db(cfg.root)
     try:
         rows = conn.execute(
@@ -2113,7 +2115,10 @@ def _resume_pending_schedule_triggers(cfg: Any, *, operator: str = "schedule-wor
     finally:
         conn.close()
     resumed = []
+    started_count = 0
     for row in rows:
+        if started_count >= start_limit_per_pass:
+            break
         schedule = _row_to_schedule(row)
         trigger_id = str(row["trigger_instance_id"] or "").strip()
         planned_trigger_at = str(row["planned_trigger_at"] or "").strip()
@@ -2151,6 +2156,7 @@ def _resume_pending_schedule_triggers(cfg: Any, *, operator: str = "schedule-wor
             operator=operator,
         )
         if started:
+            started_count += 1
             resumed.append(
                 {
                     "schedule_id": str(schedule.get("schedule_id") or "").strip(),
