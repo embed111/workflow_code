@@ -513,20 +513,74 @@ def _assignment_dispatch_candidates(snapshot: dict[str, Any]) -> list[dict[str, 
     return rows
 
 
+def _assignment_dispatch_snapshot(
+    root: Path,
+    *,
+    ticket_id: str,
+    include_test_data: bool,
+    reconcile_running: bool,
+) -> dict[str, Any]:
+    task_record = _assignment_load_task_record(root, ticket_id)
+    if not _assignment_task_visible(task_record, include_test_data=include_test_data):
+        raise AssignmentCenterError(
+            404,
+            "assignment graph not found",
+            "assignment_graph_not_found",
+            {"ticket_id": ticket_id},
+        )
+    node_records = _assignment_load_node_records(root, ticket_id, include_deleted=True)
+    task_record, node_records, changed = _assignment_recompute_task_state(
+        root,
+        task_record=task_record,
+        node_records=node_records,
+        reconcile_running=reconcile_running,
+    )
+    if changed:
+        _assignment_store_snapshot(root, task_record=task_record, node_records=node_records)
+    active_nodes = _assignment_active_node_records(node_records)
+    settings = get_assignment_concurrency_settings(root)
+    system_counts = _assignment_system_running_counts(root, include_test_data=include_test_data)
+    scheduler_payload = _assignment_scheduler_payload(
+        task_record,
+        active_nodes,
+        system_limit=int(settings.get("global_concurrency_limit") or DEFAULT_ASSIGNMENT_CONCURRENCY_LIMIT),
+        settings_updated_at=str(settings.get("updated_at") or ""),
+        system_counts=system_counts,
+    )
+    edges = _assignment_active_edges(task_record, active_nodes)
+    node_map_by_id = _node_map(active_nodes)
+    upstream_map, downstream_map = _edge_maps(edges)
+    return {
+        "graph_row": task_record,
+        "nodes": active_nodes,
+        "all_nodes": node_records,
+        "edges": edges,
+        "node_map_by_id": node_map_by_id,
+        "upstream_map": upstream_map,
+        "downstream_map": downstream_map,
+        "metrics_summary": _graph_metrics(active_nodes),
+        "scheduler": scheduler_payload,
+        "serialized_nodes": [],
+    }
+
+
 def _prepare_assignment_execution_run(
     root: Path,
     *,
     ticket_id: str,
     node_id: str,
     now_text: str,
+    snapshot_override: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     _ensure_assignment_support_tables(root)
-    snapshot = _assignment_snapshot_from_files(
-        root,
-        ticket_id,
-        include_test_data=True,
-        reconcile_running=True,
-    )
+    snapshot = dict(snapshot_override or {})
+    if not snapshot:
+        snapshot = _assignment_snapshot_from_files(
+            root,
+            ticket_id,
+            include_test_data=True,
+            reconcile_running=True,
+        )
     serialized_node = next(
         (
             node
@@ -535,6 +589,22 @@ def _prepare_assignment_execution_run(
         ),
         {},
     )
+    if not serialized_node:
+        target_node = next(
+            (
+                dict(node)
+                for node in list(snapshot.get("nodes") or [])
+                if str(node.get("node_id") or "").strip() == node_id
+            ),
+            {},
+        )
+        if target_node:
+            serialized_node = _serialize_node(
+                target_node,
+                node_map_by_id=dict(snapshot.get("node_map_by_id") or {}),
+                upstream_map=dict(snapshot.get("upstream_map") or {}),
+                downstream_map=dict(snapshot.get("downstream_map") or {}),
+            )
     if not serialized_node:
         raise AssignmentCenterError(404, "assignment node not found", "assignment_node_not_found", {"node_id": node_id})
     upstream_nodes = [

@@ -13,12 +13,21 @@ def dispatch_assignment_next(
         raise AssignmentCenterError(400, "ticket_id required", "ticket_id_required")
     operator_text = _default_assignment_operator(operator)
     now_text = iso_ts(now_local())
-    snapshot = _assignment_snapshot_from_files(
-        root,
-        ticket_id,
-        include_test_data=include_test_data,
-        reconcile_running=True,
-    )
+    use_lightweight_snapshot = operator_text == "schedule-worker"
+    if use_lightweight_snapshot:
+        snapshot = _assignment_dispatch_snapshot(
+            root,
+            ticket_id=ticket_id,
+            include_test_data=include_test_data,
+            reconcile_running=True,
+        )
+    else:
+        snapshot = _assignment_snapshot_from_files(
+            root,
+            ticket_id,
+            include_test_data=include_test_data,
+            reconcile_running=True,
+        )
     ticket_id = str(snapshot["graph_row"].get("ticket_id") or ticket_id).strip()
     task_record = dict(snapshot["graph_row"])
     node_records = [dict(item) for item in list(snapshot["all_nodes"] or [])]
@@ -88,6 +97,7 @@ def dispatch_assignment_next(
                 ticket_id=ticket_id,
                 node_id=node_id,
                 now_text=now_text,
+                snapshot_override=snapshot if use_lightweight_snapshot else None,
             )
         except AssignmentCenterError as exc:
             for row in node_records:
