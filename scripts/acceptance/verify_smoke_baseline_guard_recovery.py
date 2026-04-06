@@ -69,6 +69,28 @@ def main() -> int:
         },
     )
     schedule_id = str(schedule.get("schedule_id") or "").strip()
+    newer_pending_schedule = schedule_service.create_schedule(
+        cfg,
+        {
+            "operator": "test",
+            "schedule_name": "生产 smoke 基线 newer-pending",
+            "enabled": True,
+            "assigned_agent_id": "workflow",
+            "launch_summary": "生产基线 smoke：验证定时命中到任务中心真实执行链",
+            "execution_checklist": "1) 命中 schedule\n2) 建单并生成节点\n3) 自动派发\n4) 状态回写到计划详情",
+            "done_definition": "计划详情可看到 trigger、assignment_ticket/node、最近结果状态和回写时间",
+            "priority": "P1",
+            "expected_artifact": "smoke-report",
+            "delivery_mode": "none",
+            "rule_sets": {
+                "monthly": {"enabled": False},
+                "weekly": {"enabled": False},
+                "daily": {"enabled": False},
+                "once": {"enabled": True, "date_times_text": "2026-04-06T16:20:00+08:00"},
+            },
+        },
+    )
+    newer_schedule_id = str(newer_pending_schedule.get("schedule_id") or "").strip()
     trigger_id = "sti-test-smoke-recovery"
     planned_trigger_at = "2026-04-06T15:54:00+08:00"
 
@@ -163,6 +185,19 @@ def main() -> int:
                 schedule_id,
             ),
         )
+        conn.execute(
+            """
+            UPDATE schedule_plans
+            SET last_trigger_at=?,last_result_status=?,updated_at=?
+            WHERE schedule_id=?
+            """,
+            (
+                "2026-04-06T16:20:00+08:00",
+                "running",
+                "2026-04-06T16:20:05+08:00",
+                newer_schedule_id,
+            ),
+        )
         conn.commit()
     finally:
         conn.close()
@@ -188,6 +223,7 @@ def main() -> int:
     ok, reason, report = schedule_service._smoke_baseline_valid(root, max_age_minutes=240)
     assert ok, {"reason": reason, "report": report}
     assert bool(report.get("pass")), report
+    assert str(report.get("schedule_id") or "").strip() == schedule_id, report
     assert str(report.get("latest_result_status") or "").strip().lower() == "succeeded", report
 
     updated = json.loads(latest_path.read_text(encoding="utf-8"))

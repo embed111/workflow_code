@@ -767,55 +767,62 @@ def _latest_smoke_schedule_report(root: Path) -> dict[str, Any]:
         ),
         reverse=True,
     )
-    latest_schedule = smoke_schedules[0]
-    detail = get_schedule_detail(root, str(latest_schedule.get("schedule_id") or "").strip())
-    schedule_payload = dict(detail.get("schedule") or {})
-    recent = list(detail.get("recent_triggers") or [])
-    latest_trigger = dict(recent[0] or {}) if recent else {}
-    result_status = str(
-        latest_trigger.get("result_status")
-        or schedule_payload.get("last_result_status")
-        or "pending"
-    ).strip().lower() or "pending"
-    planned_trigger_at = str(
-        latest_trigger.get("planned_trigger_at")
-        or schedule_payload.get("last_trigger_at")
-        or ""
-    ).strip()
-    if not planned_trigger_at:
-        return {}
-    report = {
-        "pass": result_status == "succeeded",
-        "executed_at": str(schedule_payload.get("updated_at") or planned_trigger_at).strip(),
-        "environment": "prod",
-        "schedule_id": str(schedule_payload.get("schedule_id") or "").strip(),
-        "assigned_agent_id": str(schedule_payload.get("assigned_agent_id") or "").strip(),
-        "chain": {
-            "schedule_hit": bool(str(latest_trigger.get("trigger_instance_id") or "").strip()),
-            "task_created": bool(
-                str(latest_trigger.get("assignment_ticket_id") or "").strip()
-                and str(latest_trigger.get("assignment_node_id") or "").strip()
-            ),
-            "auto_dispatch": result_status in {"running", "succeeded", "failed"},
-            "status_writeback": bool(
-                str(schedule_payload.get("last_trigger_at") or "").strip()
-                and str(schedule_payload.get("last_result_ticket_id") or "").strip()
-                and str(schedule_payload.get("last_result_node_id") or "").strip()
-            ),
-        },
-        "latest_trigger_instance_id": str(latest_trigger.get("trigger_instance_id") or "").strip(),
-        "latest_assignment_ticket_id": str(latest_trigger.get("assignment_ticket_id") or "").strip(),
-        "latest_assignment_node_id": str(latest_trigger.get("assignment_node_id") or "").strip(),
-        "latest_result_status": result_status,
-        "latest_assignment_status": str(latest_trigger.get("assignment_status") or "").strip().lower(),
-        "latest_result_summary": str(
-            latest_trigger.get("trigger_message")
-            or latest_trigger.get("assignment_status_text")
-            or schedule_payload.get("last_result_summary")
+    latest_report: dict[str, Any] = {}
+    latest_success_report: dict[str, Any] = {}
+    for latest_schedule in smoke_schedules:
+        detail = get_schedule_detail(root, str(latest_schedule.get("schedule_id") or "").strip())
+        schedule_payload = dict(detail.get("schedule") or {})
+        recent = list(detail.get("recent_triggers") or [])
+        latest_trigger = dict(recent[0] or {}) if recent else {}
+        result_status = str(
+            latest_trigger.get("result_status")
+            or schedule_payload.get("last_result_status")
+            or "pending"
+        ).strip().lower() or "pending"
+        planned_trigger_at = str(
+            latest_trigger.get("planned_trigger_at")
+            or schedule_payload.get("last_trigger_at")
             or ""
-        ).strip(),
-    }
-    return report
+        ).strip()
+        if not planned_trigger_at:
+            continue
+        report = {
+            "pass": result_status == "succeeded",
+            "executed_at": str(schedule_payload.get("updated_at") or planned_trigger_at).strip(),
+            "environment": "prod",
+            "schedule_id": str(schedule_payload.get("schedule_id") or "").strip(),
+            "assigned_agent_id": str(schedule_payload.get("assigned_agent_id") or "").strip(),
+            "chain": {
+                "schedule_hit": bool(str(latest_trigger.get("trigger_instance_id") or "").strip()),
+                "task_created": bool(
+                    str(latest_trigger.get("assignment_ticket_id") or "").strip()
+                    and str(latest_trigger.get("assignment_node_id") or "").strip()
+                ),
+                "auto_dispatch": result_status in {"running", "succeeded", "failed"},
+                "status_writeback": bool(
+                    str(schedule_payload.get("last_trigger_at") or "").strip()
+                    and str(schedule_payload.get("last_result_ticket_id") or "").strip()
+                    and str(schedule_payload.get("last_result_node_id") or "").strip()
+                ),
+            },
+            "latest_trigger_instance_id": str(latest_trigger.get("trigger_instance_id") or "").strip(),
+            "latest_assignment_ticket_id": str(latest_trigger.get("assignment_ticket_id") or "").strip(),
+            "latest_assignment_node_id": str(latest_trigger.get("assignment_node_id") or "").strip(),
+            "latest_result_status": result_status,
+            "latest_assignment_status": str(latest_trigger.get("assignment_status") or "").strip().lower(),
+            "latest_result_summary": str(
+                latest_trigger.get("trigger_message")
+                or latest_trigger.get("assignment_status_text")
+                or schedule_payload.get("last_result_summary")
+                or ""
+            ).strip(),
+        }
+        if not latest_report:
+            latest_report = report
+        if report["pass"]:
+            latest_success_report = report
+            break
+    return latest_success_report or latest_report
 
 
 def _sync_smoke_baseline_report_from_schedule(root: Path) -> dict[str, Any]:
