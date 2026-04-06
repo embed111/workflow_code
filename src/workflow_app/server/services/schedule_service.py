@@ -746,7 +746,25 @@ def _schedule_is_self_iteration(schedule: dict[str, Any], guard: dict[str, Any])
     }
     if not targets:
         targets = {"workflow"}
-    return assigned_agent_id in targets or assigned_agent_name in targets
+    if assigned_agent_id not in targets and assigned_agent_name not in targets:
+        return False
+    schedule_name = str(schedule.get("schedule_name") or "").strip()
+    expected_artifact = str(schedule.get("expected_artifact") or "").strip()
+    launch_summary = str(schedule.get("launch_summary") or "").strip()
+    execution_checklist = str(schedule.get("execution_checklist") or "").strip()
+    done_definition = str(schedule.get("done_definition") or "").strip()
+    combined_text = "\n".join(
+        item
+        for item in [schedule_name, launch_summary, execution_checklist, done_definition]
+        if item
+    )
+    if schedule_name.startswith("[持续迭代]"):
+        return True
+    if expected_artifact == "continuous-improvement-report.md" and (
+        "持续迭代" in combined_text or "自迭代" in combined_text
+    ):
+        return True
+    return False
 
 
 def _smoke_baseline_valid(root: Path, *, max_age_minutes: int) -> tuple[bool, str, dict[str, Any]]:
