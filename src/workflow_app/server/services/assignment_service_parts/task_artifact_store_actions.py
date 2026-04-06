@@ -191,12 +191,32 @@ def create_assignment_node(
         raise AssignmentCenterError(400, "ticket_id required", "ticket_id_required")
     operator = _default_assignment_operator(body.get("operator"))
     now_text = iso_ts(now_local())
-    snapshot = _assignment_snapshot_from_files(
-        cfg.root,
-        ticket_id,
-        include_test_data=include_test_data,
-        reconcile_running=True,
+    schedule_trigger_node = bool(
+        str((body or {}).get("source_schedule_id") or "").strip()
+        and str((body or {}).get("trigger_instance_id") or "").strip()
     )
+    if schedule_trigger_node:
+        task_record = _assignment_load_task_record(cfg.root, ticket_id)
+        if not _assignment_task_visible(task_record, include_test_data=include_test_data):
+            raise AssignmentCenterError(
+                404,
+                "assignment graph not found",
+                "assignment_graph_not_found",
+                {"ticket_id": ticket_id},
+            )
+        node_records = _assignment_load_node_records(cfg.root, ticket_id, include_deleted=True)
+        snapshot = _assignment_response_snapshot_from_records(
+            task_record=task_record,
+            node_records=node_records,
+            scheduler_payload={},
+        )
+    else:
+        snapshot = _assignment_snapshot_from_files(
+            cfg.root,
+            ticket_id,
+            include_test_data=include_test_data,
+            reconcile_running=True,
+        )
     ticket_id = str(snapshot["graph_row"].get("ticket_id") or ticket_id).strip()
     conn = connect_db(cfg.root)
     try:
