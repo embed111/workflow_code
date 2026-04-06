@@ -267,10 +267,15 @@ def create_schedule_node(
 
 
 def request_assignment_dispatch(root: Path, ticket_id: str) -> dict[str, str]:
-    overview = assignment_service.get_assignment_overview(root, ticket_id, include_test_data=True)
-    graph = dict(overview.get("graph") or overview.get("graph_overview") or {})
+    dispatch_result = assignment_service.dispatch_assignment_next(
+        root,
+        ticket_id_text=ticket_id,
+        operator="schedule-worker",
+        include_test_data=True,
+    )
+    graph = dict(dispatch_result.get("graph_overview") or {})
     scheduler_state = str(graph.get("scheduler_state") or "").strip().lower()
-    if scheduler_state == "idle":
+    if str(dispatch_result.get("message") or "").strip().lower() == "scheduler_not_running" or scheduler_state == "idle":
         assignment_service.resume_assignment_scheduler(
             root,
             ticket_id_text=ticket_id,
@@ -279,10 +284,4 @@ def request_assignment_dispatch(root: Path, ticket_id: str) -> dict[str, str]:
             include_test_data=True,
         )
         return {"dispatch_status": "requested", "dispatch_message": "resume_scheduler_requested"}
-    assignment_service.dispatch_assignment_next(
-        root,
-        ticket_id_text=ticket_id,
-        operator="schedule-worker",
-        include_test_data=True,
-    )
-    return {"dispatch_status": "requested", "dispatch_message": "dispatch_requested"}
+    return {"dispatch_status": "requested", "dispatch_message": str(dispatch_result.get("message") or "dispatch_requested").strip() or "dispatch_requested"}
