@@ -98,6 +98,12 @@ SCHEDULE_SELF_ITER_GUARD_DEFAULTS: dict[str, Any] = {
     "smoke_max_age_minutes": 240,
     "self_iter_agent_ids": ["workflow"],
 }
+SCHEDULE_SELF_ITER_AUTO_RECOVERY_REASONS = {
+    "smoke baseline report missing",
+    "smoke baseline timestamp missing",
+    "smoke baseline timestamp invalid",
+    "smoke baseline expired",
+}
 
 
 def _now_bj() -> datetime:
@@ -498,7 +504,8 @@ def _process_schedule_trigger_async(
                 planned_trigger_at=planned_trigger_at,
             )
             return
-        if str(gate.get("guard_state") or "").strip() == "degraded_fail_open":
+        guard_state = str(gate.get("guard_state") or "").strip()
+        if guard_state.startswith("degraded_"):
             _append_schedule_event(
                 cfg.root,
                 {
@@ -507,7 +514,7 @@ def _process_schedule_trigger_async(
                     "schedule_id": str(schedule.get("schedule_id") or "").strip(),
                     "trigger_instance_id": str(trigger_instance_id or "").strip(),
                     "detail": {
-                        "guard_state": "degraded_fail_open",
+                        "guard_state": guard_state,
                         "message": str(gate.get("message") or "").strip(),
                     },
                 },
@@ -926,20 +933,29 @@ def _check_self_iter_gate(cfg: Any, schedule: dict[str, Any]) -> dict[str, Any]:
     )
     if smoke_ok:
         return {"allow": True, "guard_state": "smoke_ok", "guard": guard, "smoke": smoke_report}
+    reason_text = str(reason or "").strip()
+    if reason_text == "smoke baseline expired":
+        return {
+            "allow": True,
+            "guard_state": "degraded_expired_smoke",
+            "guard": guard,
+            "smoke": smoke_report,
+            "message": reason_text,
+        }
     if bool(guard.get("fail_open")) or not bool(guard.get("block_without_smoke")):
         return {
             "allow": True,
             "guard_state": "degraded_fail_open",
             "guard": guard,
             "smoke": smoke_report,
-            "message": reason or "smoke baseline unavailable",
+            "message": reason_text or "smoke baseline unavailable",
         }
     return {
         "allow": False,
         "guard_state": "blocked_without_smoke",
         "guard": guard,
         "smoke": smoke_report,
-        "message": reason or "smoke baseline unavailable",
+        "message": reason_text or "smoke baseline unavailable",
     }
 
 
