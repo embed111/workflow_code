@@ -1,5 +1,6 @@
 [
     "assignment_core.py",
+    "assignment_execution_timeout_policy.py",
     "running_state_reconciliation.py",
     "workspace_state_and_metrics.py",
     "graph_model_and_payloads.py",

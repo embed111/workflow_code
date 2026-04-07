@@ -1048,6 +1048,8 @@ def _assignment_execution_worker(
     observed_result_payload: dict[str, Any] = {}
     observed_turn_completed_at = 0.0
     forced_result_short_circuit = False
+    activity_lock = threading.Lock()
+    last_activity_monotonic = 0.0
 
     def record_observed_result(payload: dict[str, Any]) -> None:
         nonlocal observed_result_payload
@@ -1070,6 +1072,16 @@ def _assignment_execution_worker(
         with observed_result_lock:
             return float(observed_turn_completed_at or 0.0)
 
+    def mark_activity(activity_monotonic: float | None = None) -> None:
+        nonlocal last_activity_monotonic
+        stamp = float(activity_monotonic or time.monotonic())
+        with activity_lock:
+            last_activity_monotonic = stamp
+
+    def last_activity_monotonic_value() -> float:
+        with activity_lock:
+            return float(last_activity_monotonic or 0.0)
+
     def read_stream(name: str, pipe: Any, collector: list[str]) -> None:
         if pipe is None:
             return
@@ -1077,6 +1089,7 @@ def _assignment_execution_worker(
             for line in iter(pipe.readline, ""):
                 if line == "":
                     break
+                mark_activity()
                 collector.append(line)
                 _append_assignment_run_text(files[name], line)
                 message_text = line.rstrip("\n")
@@ -1129,6 +1142,7 @@ def _assignment_execution_worker(
             observed_turn_completed_at = 0.0
         attempt_started_at = iso_ts(now_local())
         attempt_started_monotonic = time.monotonic()
+        mark_activity(attempt_started_monotonic)
         attempt_stdout_index = len(stdout_chunks)
         attempt_stderr_index = len(stderr_chunks)
         attempt_agent_message_index = len(agent_messages)
@@ -1174,7 +1188,7 @@ def _assignment_execution_worker(
             t_err = threading.Thread(target=read_stream, args=("stderr", proc.stderr, stderr_chunks), daemon=True)
             t_out.start()
             t_err.start()
-            execution_timeout_s = _assignment_execution_timeout_s()
+            execution_timeout_s = _assignment_execution_activity_timeout_s()
             final_result_grace_s = _assignment_final_result_exit_grace_seconds()
             while True:
                 try:
@@ -1199,14 +1213,26 @@ def _assignment_execution_worker(
                             pass
                         exit_code = 0
                         break
-                    if (now_monotonic - attempt_started_monotonic) >= execution_timeout_s:
-                        failure_message = f"assignment execution timeout after {execution_timeout_s}s"
+                    last_activity_at = last_activity_monotonic_value()
+                    inactivity_age_s = _assignment_execution_activity_age_seconds(
+                        last_activity_monotonic=last_activity_at,
+                        now_monotonic=now_monotonic,
+                    )
+                    if _assignment_execution_activity_timed_out(
+                        last_activity_monotonic=last_activity_at,
+                        now_monotonic=now_monotonic,
+                        timeout_s=execution_timeout_s,
+                    ):
+                        failure_message = _assignment_execution_timeout_message(execution_timeout_s)
                         _append_assignment_run_event(
                             files["events"],
                             event_type="execution_timeout",
                             message="执行超时，已终止 provider。",
                             created_at=iso_ts(now_local()),
-                            detail={"timeout_seconds": execution_timeout_s},
+                            detail={
+                                "timeout_seconds": execution_timeout_s,
+                                "inactivity_seconds": round(inactivity_age_s, 3),
+                            },
                         )
                         _terminate_assignment_process(proc)
                         try:
