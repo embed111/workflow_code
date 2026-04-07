@@ -932,7 +932,7 @@ def main() -> None:
     QuietDisconnectHTTPServer.allow_reuse_address = True
     server = QuietDisconnectHTTPServer((cfg.host, cfg.port), make_handler(cfg, state))
     setattr(state, "_runtime_server_shutdown", server.shutdown)
-    runtime_upgrade.runtime_process_start(host=cfg.host, port=cfg.port)
+    runtime_upgrade.runtime_process_start(host=cfg.host, port=cfg.port, runtime_root=cfg.root)
     print(f"web> http://{cfg.host}:{cfg.port}")
     try:
         server.serve_forever()
@@ -943,7 +943,7 @@ def main() -> None:
         scheduler.join(timeout=3)
         schedule_worker.join(timeout=3)
         server.server_close()
-        runtime_upgrade.runtime_process_stop()
+        runtime_upgrade.runtime_process_stop(runtime_root=cfg.root)
     exit_code = runtime_upgrade.requested_shutdown_code(state)
     if exit_code:
         raise SystemExit(exit_code)

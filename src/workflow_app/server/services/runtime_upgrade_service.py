@@ -117,6 +117,64 @@ def _env_path(name: str) -> Path | None:
     return Path(text).resolve(strict=False)
 
 
+def _normalize_runtime_root(value: Path | str | None) -> Path | None:
+    if isinstance(value, Path):
+        return value.resolve(strict=False)
+    text = str(value or "").strip()
+    if not text:
+        return None
+    return Path(text).resolve(strict=False)
+
+
+def _resolve_runtime_process_context(runtime_root: Path | str | None = None) -> dict[str, Any]:
+    resolved_root = _normalize_runtime_root(runtime_root)
+    runtime_env = current_runtime_environment()
+    if runtime_env == "source" and isinstance(resolved_root, Path) and resolved_root.parent.name == "runtime":
+        fallback_env = str(resolved_root.name or "").strip().lower()
+        if fallback_env:
+            runtime_env = fallback_env
+
+    control_root = current_runtime_control_root()
+    if not isinstance(control_root, Path) and isinstance(resolved_root, Path) and resolved_root.parent.name == "runtime":
+        control_root = resolved_root.parent.parent.resolve(strict=False)
+
+    manifest_path = current_runtime_manifest_path()
+    if not isinstance(manifest_path, Path) and isinstance(control_root, Path) and runtime_env:
+        manifest_path = (control_root / "envs" / f"{runtime_env}.json").resolve(strict=False)
+
+    manifest = _read_json(manifest_path) if isinstance(manifest_path, Path) else {}
+
+    deploy_root = _env_path(RUNTIME_DEPLOY_ROOT_VAR)
+    if not isinstance(deploy_root, Path):
+        deploy_root_text = str(manifest.get("deploy_root") or "").strip()
+        if deploy_root_text:
+            deploy_root = Path(deploy_root_text).resolve(strict=False)
+        elif isinstance(control_root, Path) and control_root.parent.name == ".running" and runtime_env:
+            deploy_root = (control_root.parent / runtime_env).resolve(strict=False)
+
+    pid_path = _env_path(RUNTIME_PID_FILE_VAR)
+    if not isinstance(pid_path, Path) and isinstance(control_root, Path) and runtime_env:
+        pid_path = (control_root / "pids" / f"{runtime_env}.pid").resolve(strict=False)
+
+    instance_path = _env_path(RUNTIME_INSTANCE_FILE_VAR)
+    if not isinstance(instance_path, Path) and isinstance(control_root, Path) and runtime_env:
+        instance_path = (control_root / "instances" / f"{runtime_env}.json").resolve(strict=False)
+
+    version = str(os.getenv(RUNTIME_VERSION_VAR) or manifest.get("current_version") or manifest.get("version") or "").strip()
+
+    return {
+        "runtime_root": resolved_root,
+        "environment": runtime_env,
+        "control_root": control_root,
+        "manifest_path": manifest_path,
+        "manifest": manifest,
+        "deploy_root": deploy_root,
+        "pid_path": pid_path,
+        "instance_path": instance_path,
+        "version": version,
+    }
+
+
 def _parse_timestamp(value: Any) -> float | None:
     text = str(value or "").strip()
     if not text:
@@ -636,16 +694,21 @@ def runtime_process_start(
     *,
     host: str,
     port: int,
+    runtime_root: Path | str | None = None,
 ) -> None:
-    pid_path = _env_path(RUNTIME_PID_FILE_VAR)
-    instance_path = _env_path(RUNTIME_INSTANCE_FILE_VAR)
-    runtime_env = current_runtime_environment()
+    context = _resolve_runtime_process_context(runtime_root)
+    pid_path = context.get("pid_path")
+    instance_path = context.get("instance_path")
+    runtime_env = str(context.get("environment") or "").strip()
+    control_root = context.get("control_root")
+    manifest_path = context.get("manifest_path")
+    deploy_root = context.get("deploy_root")
     payload = {
         "environment": runtime_env,
-        "version": str(os.getenv(RUNTIME_VERSION_VAR) or "").strip(),
-        "control_root": str(os.getenv(RUNTIME_CONTROL_ROOT_VAR) or "").strip(),
-        "manifest_path": str(os.getenv(RUNTIME_MANIFEST_PATH_VAR) or "").strip(),
-        "deploy_root": str(os.getenv(RUNTIME_DEPLOY_ROOT_VAR) or "").strip(),
+        "version": str(context.get("version") or "").strip(),
+        "control_root": str(control_root) if isinstance(control_root, Path) else str(os.getenv(RUNTIME_CONTROL_ROOT_VAR) or "").strip(),
+        "manifest_path": str(manifest_path) if isinstance(manifest_path, Path) else str(os.getenv(RUNTIME_MANIFEST_PATH_VAR) or "").strip(),
+        "deploy_root": str(deploy_root) if isinstance(deploy_root, Path) else str(os.getenv(RUNTIME_DEPLOY_ROOT_VAR) or "").strip(),
         "pid": os.getpid(),
         "host": str(host or ""),
         "port": int(port or 0),
@@ -659,9 +722,10 @@ def runtime_process_start(
         _write_json(instance_path, payload)
 
 
-def runtime_process_stop() -> None:
-    pid_path = _env_path(RUNTIME_PID_FILE_VAR)
-    instance_path = _env_path(RUNTIME_INSTANCE_FILE_VAR)
+def runtime_process_stop(runtime_root: Path | str | None = None) -> None:
+    context = _resolve_runtime_process_context(runtime_root)
+    pid_path = context.get("pid_path")
+    instance_path = context.get("instance_path")
     _remove_file(pid_path)
     if isinstance(instance_path, Path):
         current = _read_json(instance_path)
