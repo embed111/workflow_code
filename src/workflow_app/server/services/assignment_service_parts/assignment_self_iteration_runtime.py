@@ -177,6 +177,13 @@ def _assignment_keep_earliest_future_trigger(*, existing_next: str, candidate_ne
     return candidate_text
 
 
+def _assignment_persisted_schedule_next_trigger_at(result: dict[str, Any], fallback: str) -> str:
+    payload = result if isinstance(result, dict) else {}
+    schedule = payload.get("schedule") if isinstance(payload.get("schedule"), dict) else {}
+    next_trigger_at = str(schedule.get("next_trigger_at") or payload.get("next_trigger_at") or "").strip()
+    return next_trigger_at or str(fallback or "").strip()
+
+
 def _assignment_pm_wake_schedule_payload(
     *,
     agent_id: str,
@@ -258,10 +265,11 @@ def _assignment_queue_pm_wake_schedule(
         data = schedule_service.update_schedule(cfg, str(existing.get("schedule_id") or "").strip(), payload)
     else:
         data = schedule_service.create_schedule(cfg, payload)
+    persisted_next_trigger_at = _assignment_persisted_schedule_next_trigger_at(data, next_trigger_at)
     return {
         "queued": True,
         "schedule_id": str(data.get("schedule_id") or "").strip(),
-        "next_trigger_at": next_trigger_at,
+        "next_trigger_at": persisted_next_trigger_at,
         "agent_id": agent_text,
     }
 
@@ -303,16 +311,17 @@ def _assignment_queue_self_iteration_schedule(
         data = schedule_service.update_schedule(cfg, str(existing.get("schedule_id") or "").strip(), payload)
     else:
         data = schedule_service.create_schedule(cfg, payload)
+    persisted_next_trigger_at = _assignment_persisted_schedule_next_trigger_at(data, next_trigger_at)
     backup = _assignment_queue_pm_wake_schedule(
         root,
         agent_id=agent_id,
         result_summary=result_summary,
-        primary_next_trigger_at=next_trigger_at,
+        primary_next_trigger_at=persisted_next_trigger_at,
     )
     return {
         "queued": True,
         "schedule_id": str(data.get("schedule_id") or "").strip(),
-        "next_trigger_at": next_trigger_at,
+        "next_trigger_at": persisted_next_trigger_at,
         "agent_id": agent_id,
         "backup_schedule_id": str(backup.get("schedule_id") or "").strip(),
         "backup_next_trigger_at": str(backup.get("next_trigger_at") or "").strip(),
