@@ -195,7 +195,11 @@ function Publish-ProdCandidate {
         Remove-Item -LiteralPath $candidateRoot -Recurse -Force
     }
     New-Item -ItemType Directory -Path $candidateRoot -Force | Out-Null
-    Copy-WorkflowTree -SourcePath ([string]$Descriptor.deploy_root) -TargetPath $candidateAppRoot
+    Copy-WorkflowTree `
+        -SourcePath ([string]$Descriptor.deploy_root) `
+        -TargetPath $candidateAppRoot `
+        -ExcludeDirs $script:WorkflowCopyExcludeDirs `
+        -ExcludeFiles $script:WorkflowCopyExcludeFiles
     Write-WorkflowJson -Path $candidateMetaPath -Payload @{
         version            = $Version
         version_rank       = $Version
@@ -291,6 +295,7 @@ elseif ($existingRuntimeConfig.ContainsKey('show_test_data')) {
 }
 $runtimeConfigPatch['show_test_data'] = $showTestData
 $runtimeConfig = Write-WorkflowRuntimeConfig -RuntimeRoot ([string]$descriptor.runtime_root) -Patch $runtimeConfigPatch
+$deployRuntimeState = Repair-WorkflowDeployRuntimeState -Descriptor $descriptor -RuntimeConfig $runtimeConfig
 Write-Host "[workflow-deploy] show_test_data policy: $showTestData"
 
 if ($Environment -eq 'prod') {
@@ -324,6 +329,7 @@ $deployReport = @{
     artifact_root       = [string]$descriptor.artifact_root
     show_test_data      = [bool]$showTestData
     runtime_config_path = [string](Get-WorkflowRuntimeConfigPath -RuntimeRoot ([string]$descriptor.runtime_root))
+    deploy_runtime_config_path = [string]$deployRuntimeState.runtime_config_path
     deployment_metadata_path = $metadataPath
     local_deployment_marker_path = $localDeploymentMarkerPath
     result              = 'success'

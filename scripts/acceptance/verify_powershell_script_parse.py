@@ -9,6 +9,7 @@ from pathlib import Path
 
 FILES = [
     "scripts/start_workflow_env.ps1",
+    "scripts/deploy_workflow_env.ps1",
     "scripts/launch_workflow.ps1",
     "scripts/workflow_env_common.ps1",
 ]

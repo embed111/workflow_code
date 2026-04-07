@@ -169,6 +169,50 @@ function Get-WorkflowGovernanceRoot {
     return $resolvedSourceRoot
 }
 
+function Get-WorkflowDefaultDeveloperId {
+    foreach ($scope in @('Process', 'User', 'Machine')) {
+        $value = [Environment]::GetEnvironmentVariable('WORKFLOW_DEVELOPER_ID', $scope)
+        if (-not [string]::IsNullOrWhiteSpace($value)) {
+            return $value.Trim()
+        }
+    }
+    return 'pm-main'
+}
+
+function Get-WorkflowPreferredWorkspaceRoot {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$GovernanceRoot
+    )
+
+    $workspaceRoot = Join-Path (Join-Path ([System.IO.Path]::GetFullPath($GovernanceRoot)) '.repository') (Get-WorkflowDefaultDeveloperId)
+    if (-not (Test-Path -LiteralPath (Join-Path $workspaceRoot 'scripts\start_workflow_env.ps1'))) {
+        return ''
+    }
+    return [System.IO.Path]::GetFullPath($workspaceRoot)
+}
+
+function Test-WorkflowCompatibleSourceRoot {
+    param(
+        [Parameter()]
+        [AllowEmptyString()]
+        [string]$ExpectedSourceRoot,
+        [Parameter()]
+        [AllowEmptyString()]
+        [string]$ObservedSourceRoot
+    )
+
+    if (Test-WorkflowSamePath -Left $ExpectedSourceRoot -Right $ObservedSourceRoot) {
+        return $true
+    }
+    if ([string]::IsNullOrWhiteSpace($ExpectedSourceRoot) -or [string]::IsNullOrWhiteSpace($ObservedSourceRoot)) {
+        return $false
+    }
+    return (Test-WorkflowSamePath `
+            -Left (Get-WorkflowGovernanceRoot -SourceRoot $ExpectedSourceRoot) `
+            -Right (Get-WorkflowGovernanceRoot -SourceRoot $ObservedSourceRoot))
+}
+
 function Get-WorkflowRunningRoot {
     param(
         [Parameter(Mandatory = $true)]
@@ -1020,6 +1064,44 @@ function Write-WorkflowRuntimeConfig {
     }
     Write-WorkflowJson -Path $path -Payload $next
     return (Resolve-WorkflowRuntimeConfigPayload -RuntimeRoot $RuntimeRoot -Payload $next)
+}
+
+function Repair-WorkflowDeployRuntimeState {
+    param(
+        [Parameter(Mandatory = $true)]
+        [hashtable]$Descriptor,
+        [Parameter()]
+        [System.Collections.IDictionary]$RuntimeConfig = @{}
+    )
+
+    $deployRoot = [string]$Descriptor.deploy_root
+    $nestedRunningRoot = Join-Path $deployRoot '.running'
+    if (Test-Path -LiteralPath $nestedRunningRoot) {
+        Remove-Item -LiteralPath $nestedRunningRoot -Recurse -Force -ErrorAction SilentlyContinue
+    }
+
+    $deployRuntimeRoot = Join-Path $deployRoot '.runtime'
+    $runtimePatch = @{}
+    if ($RuntimeConfig -is [System.Collections.IDictionary]) {
+        foreach ($pair in $RuntimeConfig.GetEnumerator()) {
+            $runtimePatch[[string]$pair.Key] = ConvertTo-WorkflowPlainData $pair.Value
+        }
+    }
+    if (-not [string]::IsNullOrWhiteSpace([string]$Descriptor.agent_search_root)) {
+        $runtimePatch['agent_search_root'] = [string]$Descriptor.agent_search_root
+    }
+    if (-not [string]::IsNullOrWhiteSpace([string]$Descriptor.artifact_root)) {
+        $runtimePatch['artifact_root'] = [string]$Descriptor.artifact_root
+        if (-not $runtimePatch.ContainsKey('task_artifact_root')) {
+            $runtimePatch['task_artifact_root'] = [string]$Descriptor.artifact_root
+        }
+    }
+    $mirroredConfig = Write-WorkflowRuntimeConfig -RuntimeRoot $deployRuntimeRoot -Patch $runtimePatch
+    return @{
+        runtime_root        = [System.IO.Path]::GetFullPath($deployRuntimeRoot)
+        runtime_config_path = Get-WorkflowRuntimeConfigPath -RuntimeRoot $deployRuntimeRoot
+        runtime_config      = $mirroredConfig
+    }
 }
 
 function Ensure-WorkflowControlDirs {

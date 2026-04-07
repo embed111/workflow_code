@@ -29,6 +29,12 @@ function Resolve-WorkflowStartSourceRoot {
         return $candidateFull
     }
 
+    $governanceRoot = [System.IO.Path]::GetFullPath((Join-Path $candidateFull '..'))
+    $preferredWorkspaceRoot = Get-WorkflowPreferredWorkspaceRoot -GovernanceRoot $governanceRoot
+    if (-not [string]::IsNullOrWhiteSpace($preferredWorkspaceRoot)) {
+        return $preferredWorkspaceRoot
+    }
+
     foreach ($metaPath in @(
             (Join-Path $candidateFull '.workflow-deployment.json'),
             (Join-Path $candidateFull '.workflow-local-deployment.json')
@@ -100,7 +106,7 @@ function Test-EnvironmentDeploymentTrusted {
     if ([string]$deploymentMetadata['environment'] -ne $Environment) {
         return @{ ok = $false; reason = 'deployment_environment_mismatch'; descriptor = $descriptor }
     }
-    if (-not (Test-WorkflowSamePath -Left ([string]$deploymentMetadata['source_root']) -Right $SourceRoot)) {
+    if (-not (Test-WorkflowCompatibleSourceRoot -ExpectedSourceRoot $SourceRoot -ObservedSourceRoot ([string]$deploymentMetadata['source_root']))) {
         return @{ ok = $false; reason = 'deployment_source_root_mismatch'; descriptor = $descriptor }
     }
     if (-not (Test-WorkflowSamePath -Left ([string]$deploymentMetadata['control_root']) -Right ([string]$descriptor.control_root))) {
@@ -115,7 +121,7 @@ function Test-EnvironmentDeploymentTrusted {
     if ([string]$localMarker['environment'] -ne $Environment) {
         return @{ ok = $false; reason = 'local_marker_environment_mismatch'; descriptor = $descriptor }
     }
-    if (-not (Test-WorkflowSamePath -Left ([string]$localMarker['source_root']) -Right $SourceRoot)) {
+    if (-not (Test-WorkflowCompatibleSourceRoot -ExpectedSourceRoot $SourceRoot -ObservedSourceRoot ([string]$localMarker['source_root']))) {
         return @{ ok = $false; reason = 'local_marker_source_root_mismatch'; descriptor = $descriptor }
     }
     if (-not (Test-WorkflowSamePath -Left ([string]$localMarker['deploy_root']) -Right ([string]$descriptor.deploy_root))) {
@@ -498,6 +504,8 @@ function Prepare-ProdUpgrade {
         control_root  = [string]$Descriptor.control_root
         manifest_path = [string]$Descriptor.manifest_path
     }
+    $runtimeConfig = Get-WorkflowRuntimeConfig -RuntimeRoot ([string]$Descriptor.runtime_root)
+    Repair-WorkflowDeployRuntimeState -Descriptor $Descriptor -RuntimeConfig $runtimeConfig | Out-Null
     Write-WorkflowEnvironmentManifest -Descriptor $Descriptor -Extra @{
         current_version      = [string]$candidate['version']
         current_version_rank = [string]$candidate['version_rank']
@@ -550,6 +558,8 @@ function Restore-ProdBackup {
     Copy-WorkflowTree -SourcePath $backupAppRoot -TargetPath ([string]$Descriptor.deploy_root)
     $descriptor.version = [string]$UpgradeContext.previous_version
     $localDeploymentMarkerPath = Write-WorkflowLocalDeploymentMarker -Descriptor $Descriptor -Version ([string]$UpgradeContext.previous_version) -DeployedAt ((Get-Date).ToUniversalTime().ToString('o'))
+    $runtimeConfig = Get-WorkflowRuntimeConfig -RuntimeRoot ([string]$Descriptor.runtime_root)
+    Repair-WorkflowDeployRuntimeState -Descriptor $Descriptor -RuntimeConfig $runtimeConfig | Out-Null
     Write-WorkflowEnvironmentManifest -Descriptor $Descriptor -Extra @{
         current_version      = [string]$UpgradeContext.previous_version
         current_version_rank = [string]$UpgradeContext.previous_version
