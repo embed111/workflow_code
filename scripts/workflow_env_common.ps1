@@ -650,6 +650,86 @@ function Sync-WorkflowProdCandidateFromTest {
     return $preferred
 }
 
+function Get-WorkflowPendingProdUpgradeContext {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$SourceRoot,
+        [Parameter()]
+        [AllowEmptyString()]
+        [string]$CurrentVersion = ''
+    )
+
+    $requestPath = Get-WorkflowProdUpgradeRequestPath -SourceRoot $SourceRoot
+    $request = Read-WorkflowJson -Path $requestPath -Default @{}
+    $requestVersion = [string]$request['candidate_version']
+    if ([string]::IsNullOrWhiteSpace($requestVersion)) {
+        return @{
+            pending       = $false
+            reason        = 'request_missing'
+            request_path  = $requestPath
+            request       = @{}
+            candidate     = @{}
+            current_version = [string]$CurrentVersion
+        }
+    }
+
+    $candidate = Sync-WorkflowProdCandidateFromTest -SourceRoot $SourceRoot
+    if (-not (Test-WorkflowCandidateComplete -Candidate $candidate)) {
+        return @{
+            pending       = $false
+            reason        = 'candidate_incomplete'
+            request_path  = $requestPath
+            request       = $request
+            candidate     = $candidate
+            current_version = [string]$CurrentVersion
+        }
+    }
+
+    $candidateVersion = [string]$candidate['version']
+    if ([string]::IsNullOrWhiteSpace($candidateVersion) -or ($requestVersion.Trim() -ne $candidateVersion.Trim())) {
+        return @{
+            pending       = $false
+            reason        = 'request_candidate_mismatch'
+            request_path  = $requestPath
+            request       = $request
+            candidate     = $candidate
+            current_version = [string]$CurrentVersion
+        }
+    }
+
+    $currentVersionText = [string]$CurrentVersion
+    if ([string]::IsNullOrWhiteSpace($currentVersionText)) {
+        $prodManifestPath = Get-WorkflowEnvironmentManifestPath -SourceRoot $SourceRoot -Environment 'prod'
+        $prodManifest = Read-WorkflowJson -Path $prodManifestPath -Default @{}
+        $currentVersionText = [string]$prodManifest['current_version']
+        if ([string]::IsNullOrWhiteSpace($currentVersionText)) {
+            $currentVersionText = [string]$prodManifest['version']
+        }
+    }
+    $currentVersionText = $currentVersionText.Trim()
+    $candidateRank = Get-WorkflowCandidateVersionRank -Candidate $candidate
+    if ((-not [string]::IsNullOrWhiteSpace($currentVersionText)) -and (-not [string]::IsNullOrWhiteSpace($candidateRank)) -and ($candidateRank -le $currentVersionText)) {
+        return @{
+            pending         = $false
+            reason          = 'candidate_not_newer'
+            request_path    = $requestPath
+            request         = $request
+            candidate       = $candidate
+            current_version = $currentVersionText
+        }
+    }
+
+    return @{
+        pending           = $true
+        reason            = 'request_ready'
+        request_path      = $requestPath
+        request           = $request
+        candidate         = $candidate
+        current_version   = $currentVersionText
+        candidate_version = $candidateVersion.Trim()
+    }
+}
+
 function Get-WorkflowProdUpgradeRequestPath {
     param(
         [Parameter(Mandatory = $true)]

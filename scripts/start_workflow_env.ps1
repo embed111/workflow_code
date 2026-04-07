@@ -681,8 +681,23 @@ while ($true) {
     $launcher.WaitForExit()
     $exitCode = $launcher.ExitCode
 
+    $pendingUpgradeContext = if ($Environment -eq 'prod') {
+        Get-WorkflowPendingProdUpgradeContext -SourceRoot $sourceRoot -CurrentVersion ([string]$descriptor.version)
+    }
+    else {
+        @{ pending = $false }
+    }
+
+    $upgradeSwitchReason = ''
     if ($Environment -eq 'prod' -and $exitCode -eq $script:ProdUpgradeExitCode) {
-        Write-Host '[workflow-start] prod upgrade requested, switching candidate ...'
+        $upgradeSwitchReason = 'prod upgrade requested'
+    }
+    elseif ($Environment -eq 'prod' -and [bool]$pendingUpgradeContext.pending) {
+        $upgradeSwitchReason = 'pending prod upgrade request detected after launcher exit'
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($upgradeSwitchReason)) {
+        Write-Host "[workflow-start] $upgradeSwitchReason, switching candidate ..."
         try {
             $pendingUpgrade = Prepare-ProdUpgrade -Descriptor $descriptor
         }

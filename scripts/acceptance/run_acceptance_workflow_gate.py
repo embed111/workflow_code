@@ -604,6 +604,32 @@ def run_assignment_self_iteration_schedule_alignment_probe(repo_root: Path) -> t
     return ok, detail
 
 
+def run_prod_watchdog_pending_upgrade_probe(repo_root: Path) -> tuple[bool, dict[str, object]]:
+    probe = (repo_root / "scripts" / "acceptance" / "verify_prod_watchdog_pending_upgrade_fallback.py").resolve()
+    proc = subprocess.run(
+        [sys.executable, str(probe)],
+        cwd=str(repo_root),
+        capture_output=True,
+        text=True,
+    )
+    detail: dict[str, object] = {
+        "script": probe.as_posix(),
+        "returncode": int(proc.returncode),
+    }
+    stdout = str(proc.stdout or "").strip()
+    stderr = str(proc.stderr or "").strip()
+    if stdout:
+        try:
+            detail["payload"] = json.loads(stdout)
+        except Exception:
+            detail["stdout"] = stdout
+    if stderr:
+        detail["stderr"] = stderr
+    payload = detail.get("payload") if isinstance(detail.get("payload"), dict) else {}
+    ok = proc.returncode == 0 and bool((payload or {}).get("ok", proc.returncode == 0))
+    return ok, detail
+
+
 def write_gate_acceptance_report(
     *,
     repo_root: Path,
@@ -852,6 +878,16 @@ def main() -> int:
         )
         if not self_iteration_alignment_ok:
             errors.append("assignment self iteration schedule alignment probe failed")
+        pending_upgrade_probe_ok, pending_upgrade_probe_detail = run_prod_watchdog_pending_upgrade_probe(repo_root)
+        results.append(
+            (
+                "prod_watchdog_pending_upgrade_fallback",
+                pending_upgrade_probe_ok,
+                pending_upgrade_probe_detail,
+            )
+        )
+        if not pending_upgrade_probe_ok:
+            errors.append("prod watchdog pending upgrade fallback probe failed")
 
         status, agents_data = call(base, "GET", "/api/agents")
         if status != 200 or not agents_data.get("ok"):
