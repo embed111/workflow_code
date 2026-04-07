@@ -218,7 +218,7 @@ def dispatch_assignment_next(
         for execution_run in pending_execution_runs:
             try:
                 thread = threading.Thread(
-                    target=_assignment_execution_worker,
+                    target=_assignment_execution_worker_guarded,
                     kwargs={
                         "root": root,
                         "run_id": str(execution_run.get("run_id") or "").strip(),
@@ -228,8 +228,9 @@ def dispatch_assignment_next(
                         "command": list(execution_run.get("command") or []),
                         "command_summary": str(execution_run.get("command_summary") or "").strip(),
                         "prompt_text": str(execution_run.get("prompt_text") or ""),
+                        "operator": operator_text,
                     },
-                    daemon=True,
+                    daemon=_assignment_execution_thread_should_daemon(operator_text),
                 )
                 thread.start()
             except Exception as exc:

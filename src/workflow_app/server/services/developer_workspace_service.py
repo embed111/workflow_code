@@ -476,19 +476,24 @@ def _ensure_origin_remote(workspace: Path, source_repo: Path) -> str:
 
 def _workspace_is_git_repo(workspace: Path) -> bool:
     git_dir = workspace / ".git"
-    if git_dir.exists():
-        return True
     git_bin = _git_available()
     if not git_bin or not workspace.exists():
         return False
+    if not git_dir.exists():
+        return False
     proc = subprocess.run(
-        [git_bin, "rev-parse", "--is-inside-work-tree"],
+        [git_bin, "rev-parse", "--show-toplevel"],
         cwd=str(workspace),
         capture_output=True,
         text=True,
         encoding="utf-8",
     )
-    return proc.returncode == 0 and str(proc.stdout or "").strip().lower() == "true"
+    if proc.returncode != 0:
+        return False
+    top_level = str(proc.stdout or "").strip()
+    if not top_level:
+        return False
+    return Path(top_level).resolve(strict=False) == workspace.resolve(strict=False)
 
 
 def _workspace_is_clean(workspace: Path) -> bool:

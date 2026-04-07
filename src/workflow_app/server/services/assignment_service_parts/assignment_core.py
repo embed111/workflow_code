@@ -9,6 +9,7 @@ import sqlite3
 import subprocess
 import threading
 import time
+import traceback
 import uuid
 from collections import deque
 from pathlib import Path

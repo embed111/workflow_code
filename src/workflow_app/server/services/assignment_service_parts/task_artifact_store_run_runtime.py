@@ -14,6 +14,76 @@ def _assignment_active_run_record(root: Path, *, ticket_id: str, node_id: str) -
     return {}
 
 
+def _assignment_execution_thread_should_daemon(operator: str) -> bool:
+    raw = str(os.getenv("WORKFLOW_ASSIGNMENT_EXECUTION_THREAD_DAEMON") or "").strip().lower()
+    if raw in {"1", "true", "yes", "on"}:
+        return True
+    if raw in {"0", "false", "no", "off"}:
+        return False
+    operator_text = str(operator or "").strip().lower()
+    if operator_text == "pm-manual-recovery":
+        return False
+    return True
+
+
+def _assignment_execution_worker_guarded(
+    root: Path,
+    *,
+    run_id: str,
+    ticket_id: str,
+    node_id: str,
+    workspace_path: Path,
+    command: list[str],
+    command_summary: str,
+    prompt_text: str,
+    operator: str = "",
+) -> None:
+    try:
+        _assignment_execution_worker(
+            root,
+            run_id=run_id,
+            ticket_id=ticket_id,
+            node_id=node_id,
+            workspace_path=workspace_path,
+            command=command,
+            command_summary=command_summary,
+            prompt_text=prompt_text,
+        )
+    except Exception as exc:
+        failed_at = iso_ts(now_local())
+        failure_message = f"assignment execution worker bootstrap failed: {exc}"
+        traceback_text = traceback.format_exc()
+        try:
+            files = _assignment_run_file_paths(root, ticket_id, run_id)
+            _append_assignment_run_event(
+                files["events"],
+                event_type="provider_start_failed",
+                message=f"Provider 启动前异常: {exc}",
+                created_at=failed_at,
+                detail={
+                    "exception_type": type(exc).__name__,
+                    "operator": str(operator or "").strip(),
+                },
+            )
+            _append_assignment_run_text(files["stderr"], traceback_text)
+        except Exception:
+            pass
+        try:
+            _finalize_assignment_execution_run(
+                root,
+                run_id=run_id,
+                ticket_id=ticket_id,
+                node_id=node_id,
+                exit_code=1,
+                stdout_text="",
+                stderr_text=traceback_text,
+                result_payload={},
+                failure_message=failure_message,
+            )
+        except Exception:
+            pass
+
+
 def _assignment_touch_run_latest_event(
     root: Path,
     *,
@@ -1005,7 +1075,7 @@ def _assignment_execution_worker(
         run_record["latest_event"] = "Provider 已启动，执行中。"
         run_record["latest_event_at"] = started_at
         run_record["updated_at"] = started_at
-        _assignment_write_run_record(root, ticket_id=ticket_id, run_record=run_record)
+        _assignment_write_run_record(root, ticket_id=ticket_id, run_record=run_record, sync_index=False)
     _append_assignment_run_event(
         files["events"],
         event_type="provider_start",
@@ -1029,7 +1099,7 @@ def _assignment_execution_worker(
         if run_record:
             run_record["provider_pid"] = max(0, int(getattr(proc, "pid", 0) or 0))
             run_record["updated_at"] = iso_ts(now_local())
-            _assignment_write_run_record(root, ticket_id=ticket_id, run_record=run_record)
+            _assignment_write_run_record(root, ticket_id=ticket_id, run_record=run_record, sync_index=False)
         _register_assignment_run_process(run_id, proc)
         assert proc.stdin is not None
         proc.stdin.write(prompt_text)
