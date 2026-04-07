@@ -852,6 +852,7 @@ def _finalize_assignment_execution_run(
         _assignment_write_run_record(root, ticket_id=ticket_id, run_record=run_record)
         return
     success = int(exit_code or 0) == 0 and not str(failure_message or "").strip()
+    upgrade_request_result: dict[str, Any] = {}
     if success:
         markdown_text = str(result_payload.get("artifact_markdown") or "").strip()
         artifact_source_paths = _resolve_assignment_artifact_source_paths(
@@ -1016,14 +1017,35 @@ def _finalize_assignment_execution_run(
         except Exception:
             pass
     try:
-        dispatch_assignment_next(
+        upgrade_request_result = _assignment_maybe_request_prod_upgrade_after_finalize(
             root,
-            ticket_id_text=ticket_id,
-            operator="assignment-executor",
-            include_test_data=True,
+            task_record=task_record,
+            node_record=node_record,
         )
+        if bool(upgrade_request_result.get("requested")):
+            _assignment_write_audit_entry(
+                root,
+                ticket_id=ticket_id,
+                node_id=node_id,
+                action="request_prod_upgrade",
+                operator="assignment-executor",
+                reason="queued prod upgrade after self-iteration finalize",
+                target_status=str(node_record.get("status") or "").strip().lower() or "succeeded",
+                detail=upgrade_request_result,
+                created_at=now_text,
+            )
     except Exception:
-        pass
+        upgrade_request_result = {}
+    if not bool(upgrade_request_result.get("suppress_dispatch")):
+        try:
+            dispatch_assignment_next(
+                root,
+                ticket_id_text=ticket_id,
+                operator="assignment-executor",
+                include_test_data=True,
+            )
+        except Exception:
+            pass
 
 
 def _assignment_execution_worker(

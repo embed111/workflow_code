@@ -370,6 +370,32 @@ def run_runtime_upgrade_self_exclusion_probe(repo_root: Path) -> tuple[bool, dic
     return ok, detail
 
 
+def run_assignment_self_upgrade_loopback_probe(repo_root: Path) -> tuple[bool, dict[str, object]]:
+    probe = (repo_root / "scripts" / "acceptance" / "verify_assignment_self_upgrade_loopback.py").resolve()
+    proc = subprocess.run(
+        [sys.executable, str(probe)],
+        cwd=str(repo_root),
+        capture_output=True,
+        text=True,
+    )
+    detail: dict[str, object] = {
+        "script": probe.as_posix(),
+        "returncode": int(proc.returncode),
+    }
+    stdout = str(proc.stdout or "").strip()
+    stderr = str(proc.stderr or "").strip()
+    if stdout:
+        try:
+            detail["payload"] = json.loads(stdout)
+        except Exception:
+            detail["stdout"] = stdout
+    if stderr:
+        detail["stderr"] = stderr
+    payload = detail.get("payload") if isinstance(detail.get("payload"), dict) else {}
+    ok = proc.returncode == 0 and bool((payload or {}).get("ok", proc.returncode == 0))
+    return ok, detail
+
+
 def run_schedule_trigger_recovery_probe(repo_root: Path) -> tuple[bool, dict[str, object]]:
     probe = (repo_root / "scripts" / "acceptance" / "verify_schedule_trigger_recovery_worker.py").resolve()
     proc = subprocess.run(
@@ -736,6 +762,16 @@ def main() -> int:
         )
         if not runtime_upgrade_self_exclusion_ok:
             errors.append("runtime upgrade self exclusion probe failed")
+        self_upgrade_loopback_ok, self_upgrade_loopback_detail = run_assignment_self_upgrade_loopback_probe(repo_root)
+        results.append(
+            (
+                "assignment_self_upgrade_loopback",
+                self_upgrade_loopback_ok,
+                self_upgrade_loopback_detail,
+            )
+        )
+        if not self_upgrade_loopback_ok:
+            errors.append("assignment self upgrade loopback probe failed")
         runtime_process_instance_ok, runtime_process_instance_detail = run_runtime_process_instance_probe(repo_root)
         results.append(
             (

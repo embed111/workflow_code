@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import json
+from urllib import error as urllib_error
+from urllib import parse as urllib_parse
+from urllib import request as urllib_request
 
 ASSIGNMENT_SELF_ITERATION_AGENT_IDS = {"workflow"}
 ASSIGNMENT_SELF_ITERATION_SCHEDULE_PREFIX = "[持续迭代]"
@@ -11,6 +15,8 @@ ASSIGNMENT_PM_WAKE_EXPECTED_ARTIFACT = "workflow-pm-wake-summary"
 ASSIGNMENT_SELF_ITERATION_EXPECTED_ARTIFACT = "continuous-improvement-report.md"
 ASSIGNMENT_SELF_ITERATION_VERSION_PLAN_PATH = "docs/workflow/governance/PM版本推进计划.md"
 ASSIGNMENT_SELF_ITERATION_WAKE_REQUIREMENT_PATH = "docs/workflow/requirements/需求详情-pm持续唤醒与清醒维持.md"
+ASSIGNMENT_SELF_UPGRADE_OPERATOR = "assignment-self-upgrade"
+ASSIGNMENT_SELF_UPGRADE_TIMEOUT_SECONDS = 8.0
 ASSIGNMENT_SELF_UPGRADE_HINT = (
     "若只剩当前主线/巡检节点占用 running 槽，可带 `exclude_assignment_ticket_id` / "
     "`exclude_assignment_node_id` 再复核 `/api/runtime-upgrade/status`，确认后直接调用 "
@@ -332,4 +338,169 @@ def _assignment_queue_self_iteration_schedule(
         "agent_id": agent_id,
         "backup_schedule_id": str(backup.get("schedule_id") or "").strip(),
         "backup_next_trigger_at": str(backup.get("next_trigger_at") or "").strip(),
+    }
+
+
+def _assignment_runtime_upgrade_loopback_base_url() -> str:
+    from workflow_app.server.services import runtime_upgrade_service
+
+    if str(runtime_upgrade_service.current_runtime_environment() or "").strip().lower() != "prod":
+        return ""
+    instance = runtime_upgrade_service.current_runtime_instance()
+    manifest = runtime_upgrade_service.current_runtime_manifest()
+    host = str((instance or {}).get("host") or (manifest or {}).get("host") or "").strip()
+    port_text = str((instance or {}).get("port") or (manifest or {}).get("port") or "").strip()
+    if not host or not port_text:
+        return ""
+    try:
+        port = int(port_text)
+    except Exception:
+        return ""
+    if port <= 0:
+        return ""
+    return f"http://{host}:{port}"
+
+
+def _assignment_runtime_upgrade_json_request(
+    *,
+    base_url: str,
+    method: str,
+    path: str,
+    payload: dict[str, Any] | None = None,
+    timeout_seconds: float = ASSIGNMENT_SELF_UPGRADE_TIMEOUT_SECONDS,
+) -> tuple[int, dict[str, Any]]:
+    url = f"{str(base_url or '').rstrip('/')}{str(path or '').strip()}"
+    headers = {"Accept": "application/json"}
+    data = None
+    if payload is not None:
+        headers["Content-Type"] = "application/json; charset=utf-8"
+        data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    request = urllib_request.Request(
+        url,
+        data=data,
+        headers=headers,
+        method=str(method or "GET").strip().upper() or "GET",
+    )
+    try:
+        with urllib_request.urlopen(request, timeout=max(1.0, float(timeout_seconds or 0.0))) as response:
+            status = int(getattr(response, "status", 0) or response.getcode() or 0)
+            raw = response.read().decode("utf-8", "replace")
+    except urllib_error.HTTPError as exc:
+        status = int(exc.code or 0)
+        raw = exc.read().decode("utf-8", "replace")
+    except Exception as exc:
+        return 0, {
+            "ok": False,
+            "error": str(exc),
+            "code": "runtime_upgrade_loopback_request_failed",
+        }
+    try:
+        payload_data = json.loads(raw) if raw else {}
+    except Exception:
+        payload_data = {
+            "ok": False,
+            "error": "runtime upgrade loopback response invalid json",
+            "code": "runtime_upgrade_loopback_invalid_json",
+            "raw_body": raw[:1000],
+        }
+    if not isinstance(payload_data, dict):
+        payload_data = {
+            "ok": False,
+            "error": "runtime upgrade loopback response payload invalid",
+            "code": "runtime_upgrade_loopback_invalid_payload",
+        }
+    return status, payload_data
+
+
+def _assignment_maybe_request_prod_upgrade_after_finalize(
+    root: Path,
+    *,
+    task_record: dict[str, Any],
+    node_record: dict[str, Any],
+) -> dict[str, Any]:
+    if not _assignment_self_iteration_enabled(task_record, node_record):
+        return {
+            "requested": False,
+            "suppress_dispatch": False,
+            "reason": "agent_not_enabled",
+        }
+    base_url = _assignment_runtime_upgrade_loopback_base_url()
+    if not base_url:
+        return {
+            "requested": False,
+            "suppress_dispatch": False,
+            "reason": "runtime_upgrade_loopback_unavailable",
+        }
+    ticket_id = str(task_record.get("ticket_id") or "").strip()
+    node_id = str(node_record.get("node_id") or "").strip()
+    query = urllib_parse.urlencode(
+        {
+            "exclude_assignment_ticket_id": ticket_id,
+            "exclude_assignment_node_id": node_id,
+        }
+    )
+    status_code, status_payload = _assignment_runtime_upgrade_json_request(
+        base_url=base_url,
+        method="GET",
+        path=f"/api/runtime-upgrade/status?{query}",
+    )
+    if status_code != 200 or not bool((status_payload or {}).get("ok")):
+        return {
+            "requested": False,
+            "suppress_dispatch": False,
+            "reason": "runtime_upgrade_status_unavailable",
+            "status_code": int(status_code or 0),
+            "status_payload": status_payload,
+        }
+    request_pending = bool((status_payload or {}).get("request_pending"))
+    if request_pending:
+        return {
+            "requested": False,
+            "suppress_dispatch": True,
+            "reason": "runtime_upgrade_already_requested",
+            "status_code": int(status_code or 0),
+            "status_payload": status_payload,
+            "current_version": str((status_payload or {}).get("current_version") or "").strip(),
+            "candidate_version": str((status_payload or {}).get("candidate_version") or "").strip(),
+        }
+    if not bool((status_payload or {}).get("can_upgrade")):
+        return {
+            "requested": False,
+            "suppress_dispatch": False,
+            "reason": str((status_payload or {}).get("blocking_reason_code") or "runtime_upgrade_blocked").strip()
+            or "runtime_upgrade_blocked",
+            "status_code": int(status_code or 0),
+            "status_payload": status_payload,
+            "current_version": str((status_payload or {}).get("current_version") or "").strip(),
+            "candidate_version": str((status_payload or {}).get("candidate_version") or "").strip(),
+        }
+    apply_body = {
+        "operator": ASSIGNMENT_SELF_UPGRADE_OPERATOR,
+        "exclude_assignment_ticket_id": ticket_id,
+        "exclude_assignment_node_id": node_id,
+    }
+    apply_status, apply_payload = _assignment_runtime_upgrade_json_request(
+        base_url=base_url,
+        method="POST",
+        path="/api/runtime-upgrade/apply",
+        payload=apply_body,
+    )
+    requested = int(apply_status or 0) == 202 and bool((apply_payload or {}).get("ok"))
+    apply_code = str((apply_payload or {}).get("code") or "").strip()
+    suppress_dispatch = requested or apply_code == "runtime_upgrade_already_requested" or bool(
+        (apply_payload or {}).get("request_pending")
+    )
+    return {
+        "requested": requested,
+        "suppress_dispatch": bool(suppress_dispatch),
+        "reason": "prod_upgrade_requested" if requested else (apply_code or "runtime_upgrade_apply_failed"),
+        "base_url": base_url,
+        "ticket_id": ticket_id,
+        "node_id": node_id,
+        "status_code": int(status_code or 0),
+        "apply_status": int(apply_status or 0),
+        "current_version": str((status_payload or {}).get("current_version") or "").strip(),
+        "candidate_version": str((status_payload or {}).get("candidate_version") or "").strip(),
+        "status_payload": status_payload,
+        "apply_payload": apply_payload,
     }
