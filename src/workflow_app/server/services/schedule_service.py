@@ -1543,6 +1543,43 @@ def _assignment_runtime_status(root: Path, *, ticket_id: str, node_id: str) -> d
         return {"result_status": "queued", "result_status_text": SCHEDULE_RESULT_TEXT["queued"]}
 
 
+def _assignment_ticket_has_other_running_nodes(
+    root: Path,
+    *,
+    ticket_id: str,
+    exclude_node_id: str = "",
+) -> bool:
+    if not ticket_id:
+        return False
+    try:
+        resolver = globals().get("resolve_artifact_root_path")
+        if not callable(resolver):
+            raise RuntimeError("artifact root resolver unavailable")
+        nodes_root = (
+            Path(resolver(root)).resolve(strict=False)
+            / "tasks"
+            / str(ticket_id).strip()
+            / "nodes"
+        ).resolve(strict=False)
+        if not nodes_root.exists() or not nodes_root.is_dir():
+            return False
+        excluded = str(exclude_node_id or "").strip()
+        for node_path in sorted(nodes_root.glob("*.json")):
+            try:
+                payload = json.loads(node_path.read_text(encoding="utf-8"))
+            except Exception:
+                continue
+            if str(payload.get("record_state") or "active").strip().lower() == "deleted":
+                continue
+            if str(payload.get("node_id") or "").strip() == excluded:
+                continue
+            if str(payload.get("status") or "").strip().lower() == "running":
+                return True
+    except Exception:
+        return False
+    return False
+
+
 def _enrich_trigger(
     root: Path,
     row: sqlite3.Row | dict[str, Any],
@@ -2384,6 +2421,12 @@ def _resume_pending_schedule_triggers(cfg: Any, *, operator: str = "schedule-wor
             if result_state in {"succeeded", "failed"}:
                 continue
             if assignment_status == "running":
+                continue
+            if result_state == "queued" and _assignment_ticket_has_other_running_nodes(
+                cfg.root,
+                ticket_id=assignment_ticket_id,
+                exclude_node_id=assignment_node_id,
+            ):
                 continue
         started = _start_schedule_trigger_processing(
             cfg,

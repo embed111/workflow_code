@@ -4,9 +4,21 @@ from ..bootstrap import web_server_runtime as ws
 from ..services import runtime_upgrade_service as rus
 
 
+def _assignment_runtime_with_workboard_fallback(cfg, state) -> dict:
+    include_test_data = ws.current_show_test_data(cfg, state)
+    assignment_metrics = ws.get_assignment_runtime_metrics(cfg.root, include_test_data=include_test_data)
+    try:
+        from . import dashboard as dashboard_api
+
+        workboard = dashboard_api._workboard_payload(cfg, include_test_data=include_test_data)
+        return dashboard_api._assignment_runtime_with_workboard_fallback(assignment_metrics, workboard)
+    except Exception:
+        return assignment_metrics
+
+
 def _running_gate_payload(cfg, state) -> tuple[int, int]:
     session_running = int(ws.active_runtime_task_count(state, root=cfg.root))
-    assignment_metrics = ws.get_assignment_runtime_metrics(cfg.root, include_test_data=True)
+    assignment_metrics = _assignment_runtime_with_workboard_fallback(cfg, state)
     assignment_running = int(assignment_metrics.get("running_task_count") or 0)
     assignment_calls = int(assignment_metrics.get("agent_call_count") or 0)
     running_task_count = max(0, session_running + assignment_running)

@@ -69,6 +69,7 @@ def main() -> int:
         schedule_done_id = create_schedule("2026-04-06T20:10:00+08:00")
         schedule_running_id = create_schedule("2026-04-06T20:15:00+08:00")
         schedule_recent_failed_id = create_schedule("2026-04-06T20:20:00+08:00")
+        schedule_busy_id = create_schedule("2026-04-06T20:25:00+08:00")
     finally:
         schedule_service._load_available_agents = original_load_agents
 
@@ -78,6 +79,7 @@ def main() -> int:
     trigger_running_at = (now_minute - timedelta(minutes=3)).isoformat(timespec="seconds")
     trigger_done_at = (now_minute - timedelta(minutes=2)).isoformat(timespec="seconds")
     trigger_recent_failed_at = (now_minute - timedelta(minutes=1)).isoformat(timespec="seconds")
+    trigger_busy_at = (now_minute - timedelta(minutes=6)).isoformat(timespec="seconds")
 
     conn = schedule_service.connect_db(root)
     try:
@@ -142,6 +144,18 @@ def main() -> int:
                 trigger_recent_failed_at,
                 (now_minute - timedelta(seconds=20)).isoformat(timespec="seconds"),
             ),
+            (
+                "sti-recover-busy",
+                schedule_busy_id,
+                trigger_busy_at,
+                f"定时 {trigger_busy_at[:16].replace('T', ' ')}",
+                "queued",
+                "global_or_graph_concurrency_limit_reached",
+                "asg-busy",
+                "node-busy",
+                trigger_busy_at,
+                (now_minute - timedelta(minutes=5, seconds=30)).isoformat(timespec="seconds"),
+            ),
         ]
         conn.executemany(
             """
@@ -196,6 +210,7 @@ def main() -> int:
     calls = []
     original_start = schedule_service._start_schedule_trigger_processing
     original_assignment_runtime_status = schedule_service._assignment_runtime_status
+    original_has_other_running = schedule_service._assignment_ticket_has_other_running_nodes
     original_start_limit = schedule_service.SCHEDULE_TRIGGER_RECOVERY_START_LIMIT_PER_PASS
 
     def fake_start(cfg_obj, **kwargs):
@@ -211,20 +226,27 @@ def main() -> int:
         key = (str(ticket_id or "").strip(), str(node_id or "").strip())
         if key == ("asg-active", "node-active"):
             return {"assignment_status": "ready", "assignment_status_text": "待开始", "result_status": "queued"}
+        if key == ("asg-busy", "node-busy"):
+            return {"assignment_status": "ready", "assignment_status_text": "待开始", "result_status": "queued"}
         if key == ("asg-running", "node-running"):
             return {"assignment_status": "running", "assignment_status_text": "进行中", "result_status": "running"}
         if key == ("asg-done", "node-done"):
             return {"assignment_status": "failed", "assignment_status_text": "失败", "result_status": "failed"}
         return {}
 
+    def fake_has_other_running(root_path, *, ticket_id: str, exclude_node_id: str = "") -> bool:
+        return str(ticket_id or "").strip() == "asg-busy" and str(exclude_node_id or "").strip() == "node-busy"
+
     schedule_service._start_schedule_trigger_processing = fake_start
     schedule_service._assignment_runtime_status = fake_assignment_runtime_status
+    schedule_service._assignment_ticket_has_other_running_nodes = fake_has_other_running
     schedule_service.SCHEDULE_TRIGGER_RECOVERY_START_LIMIT_PER_PASS = 10
     try:
         result = schedule_service._resume_pending_schedule_triggers(cfg, operator="test-recover")
     finally:
         schedule_service._start_schedule_trigger_processing = original_start
         schedule_service._assignment_runtime_status = original_assignment_runtime_status
+        schedule_service._assignment_ticket_has_other_running_nodes = original_has_other_running
         schedule_service.SCHEDULE_TRIGGER_RECOVERY_START_LIMIT_PER_PASS = original_start_limit
 
     resumed_ids = {item["trigger_instance_id"] for item in result.get("items") or []}

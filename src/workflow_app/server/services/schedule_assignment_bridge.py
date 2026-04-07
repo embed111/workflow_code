@@ -267,6 +267,20 @@ def create_schedule_node(
 
 
 def request_assignment_dispatch(root: Path, ticket_id: str) -> dict[str, str]:
+    def _dispatch_message(result: dict[str, Any]) -> str:
+        if not isinstance(result, dict):
+            return ""
+        skipped = list(result.get("skipped") or [])
+        if skipped:
+            first = dict(skipped[0] or {})
+            return (
+                str(first.get("message") or "").strip()
+                or str(first.get("code") or "").strip()
+            )
+        if list(result.get("dispatched") or []):
+            return "dispatch_requested"
+        return str(result.get("message") or "").strip()
+
     dispatch_result = assignment_service.dispatch_assignment_next(
         root,
         ticket_id_text=ticket_id,
@@ -276,12 +290,18 @@ def request_assignment_dispatch(root: Path, ticket_id: str) -> dict[str, str]:
     graph = dict(dispatch_result.get("graph_overview") or {})
     scheduler_state = str(graph.get("scheduler_state") or "").strip().lower()
     if str(dispatch_result.get("message") or "").strip().lower() == "scheduler_not_running" or scheduler_state == "idle":
-        assignment_service.resume_assignment_scheduler(
+        resume_result = assignment_service.resume_assignment_scheduler(
             root,
             ticket_id_text=ticket_id,
             operator="schedule-worker",
             pause_note="schedule auto resume",
             include_test_data=True,
         )
+        resume_message = _dispatch_message(dict(resume_result.get("dispatch_result") or {}))
+        if resume_message:
+            return {"dispatch_status": "requested", "dispatch_message": resume_message}
         return {"dispatch_status": "requested", "dispatch_message": "resume_scheduler_requested"}
-    return {"dispatch_status": "requested", "dispatch_message": str(dispatch_result.get("message") or "dispatch_requested").strip() or "dispatch_requested"}
+    return {
+        "dispatch_status": "requested",
+        "dispatch_message": _dispatch_message(dispatch_result) or "dispatch_requested",
+    }
