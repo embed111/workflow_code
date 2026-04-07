@@ -7,6 +7,7 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 from datetime import datetime
 from pathlib import Path
@@ -494,19 +495,20 @@ def main() -> int:
     parser.add_argument(
         "--runtime-root",
         default="",
-        help="isolated runtime root for acceptance data (default: <root>/.test/runtime/workflow-gate)",
+        help="isolated runtime root for acceptance data (default: <root>/.test/runtime/workflow-gate-<unique>)",
     )
     args = parser.parse_args()
 
     repo_root = Path(args.root).resolve()
-    runtime_root = (
-        Path(args.runtime_root).resolve()
-        if str(args.runtime_root or "").strip()
-        else (repo_root / ".test" / "runtime" / "workflow-gate").resolve()
-    )
-    if runtime_root.exists():
-        shutil.rmtree(runtime_root, ignore_errors=True)
-    runtime_root.mkdir(parents=True, exist_ok=True)
+    runtime_parent = (repo_root / ".test" / "runtime").resolve()
+    runtime_parent.mkdir(parents=True, exist_ok=True)
+    if str(args.runtime_root or "").strip():
+        runtime_root = Path(args.runtime_root).resolve()
+        if runtime_root.exists():
+            shutil.rmtree(runtime_root, ignore_errors=True)
+        runtime_root.mkdir(parents=True, exist_ok=True)
+    else:
+        runtime_root = Path(tempfile.mkdtemp(prefix="workflow-gate-", dir=runtime_parent.as_posix())).resolve()
     fixture_root = write_agents_fixture(runtime_root)
     code_root_fixture = init_code_root_fixture(fixture_root)
     runtime_config_path = write_runtime_config_fixture(runtime_root, fixture_root)
