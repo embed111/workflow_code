@@ -13,6 +13,14 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from ..infra.db.connection import connect_db
 from . import schedule_assignment_bridge as _schedule_assignment_bridge
+from .schedule_text_repair import (
+    SCHEDULE_TEXT_FIELDS,
+    _coerce_schedule_body_text_fields,
+    _load_schedule_plan_text_fallbacks,
+    _load_schedule_snapshot_text_fallbacks,
+    _normalize_text_for_schedule_display,
+    _repair_schedule_text_fields,
+)
 
 
 def bind_runtime_symbols(symbols: dict[str, object]) -> None:
@@ -163,30 +171,6 @@ def _json_loads_list(raw: Any) -> list[Any]:
     except Exception:
         return []
     return payload if isinstance(payload, list) else []
-
-
-def _normalize_text_for_schedule_display(value: Any, *, max_len: int = 8000) -> str:
-    text = str(value or "").strip()
-    if not text:
-        return ""
-    if len(text) > max_len:
-        text = text[:max_len]
-    if "?" in text and any("\u4e00" <= ch <= "\u9fff" for ch in text):
-        return text
-    if "?" in text and text.count("?") >= max(3, len(text) // 3):
-        return ""
-    if "\ufffd" in text:
-        return ""
-    if any(ord(ch) >= 128 for ch in text):
-        # Try to recover from common mojibake path: utf-8 bytes decoded as latin-1/cp1252.
-        for codec in ("latin-1", "cp1252"):
-            try:
-                repaired = text.encode(codec, errors="strict").decode("utf-8", errors="strict").strip()
-            except Exception:
-                continue
-            if repaired and repaired != text:
-                return repaired[:max_len]
-    return text
 
 
 def _normalize_text(
@@ -773,13 +757,13 @@ def _latest_smoke_schedule_report(root: Path) -> dict[str, Any]:
         rows = conn.execute(
             "SELECT * FROM schedule_plans WHERE deleted_at='' ORDER BY updated_at DESC, created_at DESC"
         ).fetchall()
+        smoke_schedules = []
+        for row in rows:
+            schedule = _row_to_schedule(row, conn=conn)
+            if _schedule_is_smoke_baseline(schedule):
+                smoke_schedules.append(schedule)
     finally:
         conn.close()
-    smoke_schedules = []
-    for row in rows:
-        schedule = _row_to_schedule(row)
-        if _schedule_is_smoke_baseline(schedule):
-            smoke_schedules.append(schedule)
     if not smoke_schedules:
         return {}
     smoke_schedules.sort(
@@ -1387,18 +1371,24 @@ def _month_bounds(month_text: str | None) -> tuple[datetime, datetime, str]:
     return grid_start, grid_end, current.strftime("%Y-%m")
 
 
-def _row_to_schedule(row: sqlite3.Row | dict[str, Any]) -> dict[str, Any]:
+def _row_to_schedule(
+    row: sqlite3.Row | dict[str, Any],
+    *,
+    conn: sqlite3.Connection | None = None,
+    snapshot_cache: dict[str, dict[str, str]] | None = None,
+) -> dict[str, Any]:
     item = dict(row or {})
     rule_sets = _json_loads_list(item.get("rule_sets_json"))
+    repaired = _repair_schedule_text_fields(item, conn=conn, snapshot_cache=snapshot_cache)
     return {
         "schedule_id": str(item.get("schedule_id") or "").strip(),
-        "schedule_name": _normalize_text_for_schedule_display(item.get("schedule_name")),
+        "schedule_name": repaired["schedule_name"],
         "enabled": bool(item.get("enabled")),
         "assigned_agent_id": str(item.get("assigned_agent_id") or "").strip(),
         "assigned_agent_name": str(item.get("assigned_agent_name") or item.get("assigned_agent_id") or "").strip(),
-        "launch_summary": _normalize_text_for_schedule_display(item.get("launch_summary")),
-        "execution_checklist": _normalize_text_for_schedule_display(item.get("execution_checklist")),
-        "done_definition": _normalize_text_for_schedule_display(item.get("done_definition")),
+        "launch_summary": repaired["launch_summary"],
+        "execution_checklist": repaired["execution_checklist"],
+        "done_definition": repaired["done_definition"],
         "priority": _priority_label(item.get("priority")),
         "priority_value": int(item.get("priority") or 1),
         "expected_artifact": str(item.get("expected_artifact") or "").strip(),
@@ -1421,11 +1411,33 @@ def _row_to_schedule(row: sqlite3.Row | dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _row_to_trigger(row: sqlite3.Row | dict[str, Any]) -> dict[str, Any]:
+def _row_to_trigger(
+    row: sqlite3.Row | dict[str, Any],
+    *,
+    conn: sqlite3.Connection | None = None,
+    plan_cache: dict[str, dict[str, str]] | None = None,
+    snapshot_cache: dict[str, dict[str, str]] | None = None,
+) -> dict[str, Any]:
     item = dict(row or {})
+    schedule_id = str(item.get("schedule_id") or "").strip()
+    snapshot_fallbacks = (
+        _load_schedule_snapshot_text_fallbacks(conn, schedule_id, cache=snapshot_cache)
+        if conn is not None and schedule_id
+        else {}
+    )
+    plan_fallbacks = (
+        _load_schedule_plan_text_fallbacks(
+            conn,
+            schedule_id,
+            plan_cache=plan_cache,
+            snapshot_cache=snapshot_cache,
+        )
+        if conn is not None and schedule_id
+        else {}
+    )
     return {
         "trigger_instance_id": str(item.get("trigger_instance_id") or "").strip(),
-        "schedule_id": str(item.get("schedule_id") or "").strip(),
+        "schedule_id": schedule_id,
         "planned_trigger_at": str(item.get("planned_trigger_at") or "").strip(),
         "trigger_rule_summary": str(item.get("trigger_rule_summary") or "").strip(),
         "trigger_rule_keys": _json_loads_list(item.get("trigger_rule_keys_json")),
@@ -1434,11 +1446,27 @@ def _row_to_trigger(row: sqlite3.Row | dict[str, Any]) -> dict[str, Any]:
         "trigger_message": str(item.get("trigger_message") or "").strip(),
         "assignment_ticket_id": str(item.get("assignment_ticket_id") or "").strip(),
         "assignment_node_id": str(item.get("assignment_node_id") or "").strip(),
-        "schedule_name_snapshot": _normalize_text_for_schedule_display(item.get("schedule_name_snapshot")),
+        "schedule_name_snapshot": (
+            _normalize_text_for_schedule_display(item.get("schedule_name_snapshot"))
+            or str(snapshot_fallbacks.get("schedule_name") or "").strip()
+            or str(plan_fallbacks.get("schedule_name") or "").strip()
+        ),
         "assigned_agent_id_snapshot": str(item.get("assigned_agent_id_snapshot") or "").strip(),
-        "launch_summary_snapshot": _normalize_text_for_schedule_display(item.get("launch_summary_snapshot")),
-        "execution_checklist_snapshot": _normalize_text_for_schedule_display(item.get("execution_checklist_snapshot")),
-        "done_definition_snapshot": _normalize_text_for_schedule_display(item.get("done_definition_snapshot")),
+        "launch_summary_snapshot": (
+            _normalize_text_for_schedule_display(item.get("launch_summary_snapshot"))
+            or str(snapshot_fallbacks.get("launch_summary") or "").strip()
+            or str(plan_fallbacks.get("launch_summary") or "").strip()
+        ),
+        "execution_checklist_snapshot": (
+            _normalize_text_for_schedule_display(item.get("execution_checklist_snapshot"))
+            or str(snapshot_fallbacks.get("execution_checklist") or "").strip()
+            or str(plan_fallbacks.get("execution_checklist") or "").strip()
+        ),
+        "done_definition_snapshot": (
+            _normalize_text_for_schedule_display(item.get("done_definition_snapshot"))
+            or str(snapshot_fallbacks.get("done_definition") or "").strip()
+            or str(plan_fallbacks.get("done_definition") or "").strip()
+        ),
         "expected_artifact_snapshot": str(item.get("expected_artifact_snapshot") or "").strip(),
         "delivery_mode_snapshot": str(item.get("delivery_mode_snapshot") or "none").strip().lower() or "none",
         "delivery_receiver_agent_id_snapshot": str(item.get("delivery_receiver_agent_id_snapshot") or "").strip(),
@@ -1497,8 +1525,20 @@ def _assignment_runtime_status(root: Path, *, ticket_id: str, node_id: str) -> d
         return {"result_status": "queued", "result_status_text": SCHEDULE_RESULT_TEXT["queued"]}
 
 
-def _enrich_trigger(root: Path, row: sqlite3.Row | dict[str, Any]) -> dict[str, Any]:
-    payload = _row_to_trigger(row)
+def _enrich_trigger(
+    root: Path,
+    row: sqlite3.Row | dict[str, Any],
+    *,
+    conn: sqlite3.Connection | None = None,
+    plan_cache: dict[str, dict[str, str]] | None = None,
+    snapshot_cache: dict[str, dict[str, str]] | None = None,
+) -> dict[str, Any]:
+    payload = _row_to_trigger(
+        row,
+        conn=conn,
+        plan_cache=plan_cache,
+        snapshot_cache=snapshot_cache,
+    )
     payload.update(_assignment_runtime_status(root, ticket_id=payload["assignment_ticket_id"], node_id=payload["assignment_node_id"]))
     if payload["trigger_status"] in {"create_failed", "dispatch_failed"} and payload.get("result_status") == "pending":
         payload["result_status"] = "failed"
@@ -1551,14 +1591,27 @@ def _build_schedule_items(
     rows: list[sqlite3.Row],
     *,
     latest_rows: dict[str, sqlite3.Row] | None = None,
+    conn: sqlite3.Connection | None = None,
 ) -> list[dict[str, Any]]:
     items = []
     latest_rows = dict(latest_rows or {})
+    plan_cache: dict[str, dict[str, str]] = {}
+    snapshot_cache: dict[str, dict[str, str]] = {}
     for row in rows:
-        schedule = _row_to_schedule(row)
+        schedule = _row_to_schedule(row, conn=conn, snapshot_cache=snapshot_cache)
         schedule.update(_schedule_trigger_projection(schedule))
         latest = latest_rows.get(schedule["schedule_id"])
-        enriched = _enrich_trigger(root, latest) if latest is not None else None
+        enriched = (
+            _enrich_trigger(
+                root,
+                latest,
+                conn=conn,
+                plan_cache=plan_cache,
+                snapshot_cache=snapshot_cache,
+            )
+            if latest is not None
+            else None
+        )
         if enriched:
             schedule["last_result_status"] = str(enriched.get("result_status") or "pending")
             schedule["last_result_status_text"] = str(enriched.get("result_status_text") or SCHEDULE_RESULT_TEXT["pending"])
@@ -1597,10 +1650,11 @@ def list_schedule_preview(root: Path, *, limit: int = 8) -> dict[str, Any]:
             conn,
             schedule_ids=[str(item["schedule_id"] or "").strip() for item in rows],
         )
+        items = _build_schedule_items(root, rows, latest_rows=latest_rows, conn=conn)
     finally:
         conn.close()
     return {
-        "items": _build_schedule_items(root, rows, latest_rows=latest_rows),
+        "items": items,
         "total": int((total_row or {"total_count": 0})["total_count"] or 0),
     }
 
@@ -1613,9 +1667,9 @@ def list_schedules(root: Path) -> dict[str, Any]:
             "SELECT * FROM schedule_plans WHERE deleted_at='' ORDER BY enabled DESC, updated_at DESC, created_at DESC"
         ).fetchall()
         latest_rows = _load_latest_trigger_rows(conn)
+        items = _build_schedule_items(root, rows, latest_rows=latest_rows, conn=conn)
     finally:
         conn.close()
-    items = _build_schedule_items(root, rows, latest_rows=latest_rows)
     return {"items": items, "total": len(items), "timezone": SCHEDULE_TIMEZONE}
 
 
@@ -1637,12 +1691,23 @@ def get_schedule_detail(root: Path, schedule_id: str) -> dict[str, Any]:
             """,
             (schedule_key,),
         ).fetchall()
+        plan_cache: dict[str, dict[str, str]] = {}
+        snapshot_cache: dict[str, dict[str, str]] = {}
+        schedule = _row_to_schedule(row, conn=conn, snapshot_cache=snapshot_cache)
+        recent = [
+            _enrich_trigger(
+                root,
+                item,
+                conn=conn,
+                plan_cache=plan_cache,
+                snapshot_cache=snapshot_cache,
+            )
+            for item in trigger_rows
+        ]
     finally:
         conn.close()
-    schedule = _row_to_schedule(row)
     schedule.update(_schedule_trigger_projection(schedule))
     future = _future_triggers(list(schedule.get("rule_sets") or []), start_dt=_minute_floor(_now_bj()), limit=8)
-    recent = [_enrich_trigger(root, item) for item in trigger_rows]
     if recent:
         latest = dict(recent[0] or {})
         schedule["last_trigger_at"] = str(latest.get("planned_trigger_at") or schedule.get("last_trigger_at") or "").strip()
@@ -1700,36 +1765,44 @@ def get_schedule_calendar(root: Path, *, month: str = "") -> dict[str, Any]:
             """,
             (_iso_minute(start_dt), _iso_minute(end_dt)),
         ).fetchall()
+        plans_by_day: dict[str, list[dict[str, Any]]] = {}
+        results_by_day: dict[str, list[dict[str, Any]]] = {}
+        plan_cache: dict[str, dict[str, str]] = {}
+        snapshot_cache: dict[str, dict[str, str]] = {}
+        now_dt = _minute_floor(_now_bj())
+        for row in plan_rows:
+            schedule = _row_to_schedule(row, conn=conn, snapshot_cache=snapshot_cache)
+            if not schedule.get("enabled"):
+                continue
+            merged = _merge_candidates(
+                [
+                    item
+                    for rule in list(schedule.get("rule_sets") or [])
+                    for item in _iter_rule_candidates(rule, max(start_dt, now_dt), end_dt)
+                ]
+            )
+            for item in merged:
+                day_key = str(item["planned_trigger_at"])[:10]
+                plans_by_day.setdefault(day_key, []).append(
+                    {
+                        "schedule_id": schedule["schedule_id"],
+                        "schedule_name": schedule["schedule_name"],
+                        "planned_trigger_at": item["planned_trigger_at"],
+                        "trigger_rule_summary": item["trigger_rule_summary"],
+                        "merged_rule_count": int(item["merged_rule_count"] or 0),
+                    }
+                )
+        for row in trigger_rows:
+            enriched = _enrich_trigger(
+                root,
+                row,
+                conn=conn,
+                plan_cache=plan_cache,
+                snapshot_cache=snapshot_cache,
+            )
+            results_by_day.setdefault(str(enriched["planned_trigger_at"])[:10], []).append(enriched)
     finally:
         conn.close()
-    plans_by_day: dict[str, list[dict[str, Any]]] = {}
-    now_dt = _minute_floor(_now_bj())
-    for row in plan_rows:
-        schedule = _row_to_schedule(row)
-        if not schedule.get("enabled"):
-            continue
-        merged = _merge_candidates(
-            [
-                item
-                for rule in list(schedule.get("rule_sets") or [])
-                for item in _iter_rule_candidates(rule, max(start_dt, now_dt), end_dt)
-            ]
-        )
-        for item in merged:
-            day_key = str(item["planned_trigger_at"])[:10]
-            plans_by_day.setdefault(day_key, []).append(
-                {
-                    "schedule_id": schedule["schedule_id"],
-                    "schedule_name": schedule["schedule_name"],
-                    "planned_trigger_at": item["planned_trigger_at"],
-                    "trigger_rule_summary": item["trigger_rule_summary"],
-                    "merged_rule_count": int(item["merged_rule_count"] or 0),
-                }
-            )
-    results_by_day: dict[str, list[dict[str, Any]]] = {}
-    for row in trigger_rows:
-        enriched = _enrich_trigger(root, row)
-        results_by_day.setdefault(str(enriched["planned_trigger_at"])[:10], []).append(enriched)
     matrix: list[dict[str, Any]] = []
     cursor = start_dt
     today_key = now_dt.strftime("%Y-%m-%d")
@@ -1905,10 +1978,14 @@ def update_schedule(cfg: Any, schedule_id: str, body: dict[str, Any]) -> dict[st
     now_text = _now_text()
     conn = connect_db(cfg.root)
     try:
-        existing = _row_to_schedule(_load_plan_row(conn, schedule_key))
+        existing = _row_to_schedule(_load_plan_row(conn, schedule_key), conn=conn)
     finally:
         conn.close()
-    payload = _schedule_payload_from_body(cfg, body, existing=existing)
+    payload = _schedule_payload_from_body(
+        cfg,
+        _coerce_schedule_body_text_fields(body, existing=existing),
+        existing=existing,
+    )
     conn = connect_db(cfg.root)
     try:
         conn.execute("BEGIN IMMEDIATE")
@@ -1967,7 +2044,7 @@ def set_schedule_enabled(cfg: Any, schedule_id: str, *, enabled: bool, operator:
     now_text = _now_text()
     conn = connect_db(cfg.root)
     try:
-        current = _row_to_schedule(_load_plan_row(conn, schedule_key))
+        current = _row_to_schedule(_load_plan_row(conn, schedule_key), conn=conn)
     finally:
         conn.close()
     if enabled and not list(current.get("rule_sets") or []):
@@ -2040,6 +2117,7 @@ def run_schedule_scan(cfg: Any, *, operator: str = "schedule-worker", now_at: st
             sql += " AND schedule_id=?"
             params.append(schedule_key)
         rows = conn.execute(sql + " ORDER BY updated_at DESC", tuple(params)).fetchall()
+        schedules = [_row_to_schedule(row, conn=conn) for row in rows]
     finally:
         conn.close()
     scanned = 0
@@ -2047,8 +2125,7 @@ def run_schedule_scan(cfg: Any, *, operator: str = "schedule-worker", now_at: st
     deduped = 0
     created_nodes = 0
     items: list[dict[str, Any]] = []
-    for row in rows:
-        schedule = _row_to_schedule(row)
+    for schedule in schedules:
         scanned += 1
         due_items = _merge_candidates(
             [
@@ -2255,14 +2332,14 @@ def _resume_pending_schedule_triggers(cfg: Any, *, operator: str = "schedule-wor
                 max(1, int(SCHEDULE_TRIGGER_RECOVERY_BATCH_SIZE)),
             ),
         ).fetchall()
+        entries = [(row, _row_to_schedule(row, conn=conn)) for row in rows]
     finally:
         conn.close()
     resumed = []
     started_count = 0
-    for row in rows:
+    for row, schedule in entries:
         if started_count >= start_limit_per_pass:
             break
-        schedule = _row_to_schedule(row)
         trigger_id = str(row["trigger_instance_id"] or "").strip()
         planned_trigger_at = str(row["planned_trigger_at"] or "").strip()
         trigger_status = str(row["trigger_status"] or "").strip().lower()
