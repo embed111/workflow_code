@@ -6,6 +6,11 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
+from workflow_app.runtime.device_path_config import (
+    load_runtime_config_payload,
+    resolve_runtime_config,
+)
+
 
 RUNTIME_CONFIG_FILE = Path("state") / "runtime-config.json"
 WORKSPACE_REGISTRY_FILE = Path("state") / "developer-workspaces.json"
@@ -67,7 +72,12 @@ def _path_in_scope(path: Path, scope: Path) -> bool:
 def _runtime_config(runtime_root: Path | None) -> dict[str, Any]:
     if runtime_root is None:
         return {}
-    return _load_json_dict(runtime_root / RUNTIME_CONFIG_FILE)
+    path = runtime_root / RUNTIME_CONFIG_FILE
+    try:
+        payload = load_runtime_config_payload(path)
+    except Exception:
+        return {}
+    return resolve_runtime_config(runtime_root, payload)
 
 
 def _artifact_root(
@@ -371,7 +381,8 @@ def _safe_developer_id(value: str) -> str:
 
 
 def _default_tracking_branch(developer_id: str) -> str:
-    return f"dev/{developer_id}"
+    _ = developer_id
+    return "main"
 
 
 def _default_workspace_path(boundary: dict[str, Any], developer_id: str) -> Path:

@@ -633,6 +633,280 @@ function Get-WorkflowDeploymentEventsPath {
     return (Join-Path (Get-WorkflowControlRoot -SourceRoot $SourceRoot) 'deployment-events.jsonl')
 }
 
+function Normalize-WorkflowDeviceId {
+    param(
+        [Parameter()]
+        [AllowEmptyString()]
+        [string]$Value
+    )
+
+    $text = ''
+    if ($null -ne $Value) {
+        $text = [string]$Value
+    }
+    $text = $text.Trim()
+    if ([string]::IsNullOrWhiteSpace($text)) {
+        return ''
+    }
+    $compact = [regex]::Replace($text, '[^0-9A-Fa-f]', '')
+    if ($compact.Length -eq 12) {
+        $upper = $compact.ToUpperInvariant()
+        $pairs = @()
+        for ($idx = 0; $idx -lt 12; $idx += 2) {
+            $pairs += $upper.Substring($idx, 2)
+        }
+        return ($pairs -join '-')
+    }
+    return $text.ToUpperInvariant()
+}
+
+function Get-WorkflowCurrentDeviceIds {
+    $values = New-Object System.Collections.Generic.List[string]
+    $seen = @{}
+
+    foreach ($envName in @('WORKFLOW_DEVICE_ID', 'WORKFLOW_DEVICE_IDS')) {
+        $rawValue = [Environment]::GetEnvironmentVariable($envName)
+        $raw = ''
+        if ($null -ne $rawValue) {
+            $raw = [string]$rawValue
+        }
+        if ([string]::IsNullOrWhiteSpace($raw)) {
+            continue
+        }
+        foreach ($part in ($raw -split '[\s,;|]+')) {
+            $normalized = Normalize-WorkflowDeviceId -Value ([string]$part)
+            if ([string]::IsNullOrWhiteSpace($normalized) -or $seen.ContainsKey($normalized)) {
+                continue
+            }
+            $seen[$normalized] = $true
+            $values.Add($normalized)
+        }
+    }
+
+    $getmacCommand = Get-Command getmac.exe -ErrorAction SilentlyContinue
+    if (-not $getmacCommand) {
+        $getmacCommand = Get-Command getmac -ErrorAction SilentlyContinue
+    }
+    if ($getmacCommand) {
+        try {
+            $rows = & $getmacCommand.Source /fo csv /nh 2>$null | ConvertFrom-Csv -Header 'MacAddress', 'TransportName'
+            foreach ($row in @($rows)) {
+                $normalized = Normalize-WorkflowDeviceId -Value ([string]$row.MacAddress)
+                if ([string]::IsNullOrWhiteSpace($normalized) -or $seen.ContainsKey($normalized)) {
+                    continue
+                }
+                $seen[$normalized] = $true
+                $values.Add($normalized)
+            }
+        }
+        catch {
+        }
+    }
+
+    return @($values.ToArray())
+}
+
+function Get-WorkflowResolvedPathOrEmpty {
+    param(
+        [Parameter()]
+        [AllowEmptyString()]
+        [string]$Value,
+        [Parameter(Mandatory = $true)]
+        [string]$Base
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Value)) {
+        return ''
+    }
+    try {
+        $candidate = $Value
+        if (-not [System.IO.Path]::IsPathRooted($candidate)) {
+            $candidate = Join-Path $Base $candidate
+        }
+        return [System.IO.Path]::GetFullPath($candidate)
+    }
+    catch {
+        return ''
+    }
+}
+
+function Resolve-WorkflowRuntimePathFields {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$RuntimeRoot,
+        [Parameter()]
+        [System.Collections.IDictionary]$Payload = @{}
+    )
+
+    $runtimeRootPath = [System.IO.Path]::GetFullPath($RuntimeRoot)
+    $agentSearchRoot = Get-WorkflowResolvedPathOrEmpty -Value ([string]$Payload['agent_search_root']) -Base $runtimeRootPath
+    $artifactSeed = if (-not [string]::IsNullOrWhiteSpace([string]$Payload['task_artifact_root'])) {
+        [string]$Payload['task_artifact_root']
+    }
+    else {
+        [string]$Payload['artifact_root']
+    }
+    $artifactBase = if (-not [string]::IsNullOrWhiteSpace($agentSearchRoot)) {
+        $agentSearchRoot
+    }
+    else {
+        $runtimeRootPath
+    }
+    $artifactRoot = Get-WorkflowResolvedPathOrEmpty -Value $artifactSeed -Base $artifactBase
+    if ([string]::IsNullOrWhiteSpace($artifactRoot) -and -not [string]::IsNullOrWhiteSpace($agentSearchRoot)) {
+        $artifactRoot = [System.IO.Path]::GetFullPath((Join-Path $agentSearchRoot '.output'))
+    }
+    $developmentWorkspaceRoot = Get-WorkflowResolvedPathOrEmpty `
+        -Value ([string]$Payload['development_workspace_root']) `
+        -Base $(if (-not [string]::IsNullOrWhiteSpace($agentSearchRoot)) { $agentSearchRoot } elseif (-not [string]::IsNullOrWhiteSpace($artifactRoot)) { $artifactRoot } else { $runtimeRootPath })
+    if ([string]::IsNullOrWhiteSpace($developmentWorkspaceRoot) -and -not [string]::IsNullOrWhiteSpace($agentSearchRoot)) {
+        $developmentWorkspaceRoot = [System.IO.Path]::GetFullPath((Join-Path (Join-Path $agentSearchRoot 'workflow') '.repository'))
+    }
+    $agentRuntimeRoot = Get-WorkflowResolvedPathOrEmpty `
+        -Value ([string]$Payload['agent_runtime_root']) `
+        -Base $(if (-not [string]::IsNullOrWhiteSpace($artifactRoot)) { $artifactRoot } elseif (-not [string]::IsNullOrWhiteSpace($agentSearchRoot)) { $agentSearchRoot } else { $runtimeRootPath })
+    if ([string]::IsNullOrWhiteSpace($agentRuntimeRoot) -and -not [string]::IsNullOrWhiteSpace($artifactRoot)) {
+        $agentRuntimeRoot = [System.IO.Path]::GetFullPath((Join-Path $artifactRoot 'agent-runtime'))
+    }
+
+    $result = @{}
+    if (-not [string]::IsNullOrWhiteSpace($agentSearchRoot)) {
+        $result['agent_search_root'] = $agentSearchRoot
+    }
+    if (-not [string]::IsNullOrWhiteSpace($artifactRoot)) {
+        $result['artifact_root'] = $artifactRoot
+        $result['task_artifact_root'] = $artifactRoot
+    }
+    if (-not [string]::IsNullOrWhiteSpace($developmentWorkspaceRoot)) {
+        $result['development_workspace_root'] = $developmentWorkspaceRoot
+    }
+    if (-not [string]::IsNullOrWhiteSpace($agentRuntimeRoot)) {
+        $result['agent_runtime_root'] = $agentRuntimeRoot
+    }
+    return $result
+}
+
+function Get-WorkflowMatchedDevicePathConfig {
+    param(
+        [Parameter()]
+        [System.Collections.IDictionary]$Payload = @{}
+    )
+
+    $deviceIds = @(Get-WorkflowCurrentDeviceIds)
+    $configs = @{}
+    if ($Payload -and ($Payload['device_path_configs'] -is [System.Collections.IDictionary])) {
+        foreach ($key in $Payload['device_path_configs'].Keys) {
+            $textKey = [string]$key
+            if ([string]::IsNullOrWhiteSpace($textKey)) {
+                continue
+            }
+            $value = $Payload['device_path_configs'][$key]
+            if (-not ($value -is [System.Collections.IDictionary])) {
+                continue
+            }
+            $configs[$textKey] = ConvertTo-WorkflowPlainData $value
+        }
+    }
+    $normalizedMap = @{}
+    foreach ($key in $configs.Keys) {
+        $normalized = Normalize-WorkflowDeviceId -Value $key
+        if ([string]::IsNullOrWhiteSpace($normalized)) {
+            continue
+        }
+        $normalizedMap[$normalized] = @{
+            raw_key = $key
+            config  = $configs[$key]
+        }
+    }
+    foreach ($deviceId in $deviceIds) {
+        $normalized = Normalize-WorkflowDeviceId -Value $deviceId
+        if ([string]::IsNullOrWhiteSpace($normalized) -or -not $normalizedMap.ContainsKey($normalized)) {
+            continue
+        }
+        return @{
+            matched_key   = [string]$normalizedMap[$normalized]['raw_key']
+            matched_config = ConvertTo-WorkflowPlainData $normalizedMap[$normalized]['config']
+            device_ids    = $deviceIds
+        }
+    }
+    return @{
+        matched_key   = ''
+        matched_config = @{}
+        device_ids    = $deviceIds
+    }
+}
+
+function Resolve-WorkflowRuntimeConfigPayload {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$RuntimeRoot,
+        [Parameter()]
+        [System.Collections.IDictionary]$Payload = @{}
+    )
+
+    $effective = @{}
+    foreach ($pair in $Payload.GetEnumerator()) {
+        $effective[[string]$pair.Key] = ConvertTo-WorkflowPlainData $pair.Value
+    }
+    $deviceMatch = Get-WorkflowMatchedDevicePathConfig -Payload $Payload
+    $matchedConfig = if ($deviceMatch['matched_config'] -is [System.Collections.IDictionary]) {
+        $deviceMatch['matched_config']
+    }
+    else {
+        @{}
+    }
+    if ($matchedConfig.Count -gt 0) {
+        foreach ($pair in $matchedConfig.GetEnumerator()) {
+            $effective[[string]$pair.Key] = ConvertTo-WorkflowPlainData $pair.Value
+        }
+    }
+    $derivedSource = if ($matchedConfig.Count -gt 0) { $matchedConfig } else { $effective }
+    $derivedFields = Resolve-WorkflowRuntimePathFields -RuntimeRoot $RuntimeRoot -Payload $derivedSource
+    foreach ($pair in $derivedFields.GetEnumerator()) {
+        $key = [string]$pair.Key
+        if ($matchedConfig.Count -gt 0) {
+            if (-not [string]::IsNullOrWhiteSpace([string]$matchedConfig[$key])) {
+                continue
+            }
+            $effective[$key] = [string]$pair.Value
+            continue
+        }
+        if (-not [string]::IsNullOrWhiteSpace([string]$effective[$key])) {
+            continue
+        }
+        $effective[$key] = [string]$pair.Value
+    }
+    return $effective
+}
+
+function Get-WorkflowRuntimePathRecomputeSource {
+    param(
+        [Parameter()]
+        [System.Collections.IDictionary]$Entry = @{},
+        [Parameter()]
+        [System.Collections.IDictionary]$PathPatch = @{}
+    )
+
+    $source = @{}
+    foreach ($pair in $Entry.GetEnumerator()) {
+        $source[[string]$pair.Key] = ConvertTo-WorkflowPlainData $pair.Value
+    }
+    if ($PathPatch.ContainsKey('agent_search_root')) {
+        foreach ($key in @('artifact_root', 'task_artifact_root', 'development_workspace_root', 'agent_runtime_root')) {
+            if (-not $PathPatch.ContainsKey($key)) {
+                $source.Remove($key) | Out-Null
+            }
+        }
+        return $source
+    }
+    if ($PathPatch.ContainsKey('artifact_root') -or $PathPatch.ContainsKey('task_artifact_root')) {
+        if (-not $PathPatch.ContainsKey('agent_runtime_root')) {
+            $source.Remove('agent_runtime_root') | Out-Null
+        }
+    }
+    return $source
+}
+
 function Get-WorkflowRuntimeConfigPath {
     param(
         [Parameter(Mandatory = $true)]
@@ -648,7 +922,11 @@ function Get-WorkflowRuntimeConfig {
         [string]$RuntimeRoot
     )
 
-    return (Read-WorkflowJson -Path (Get-WorkflowRuntimeConfigPath -RuntimeRoot $RuntimeRoot) -Default @{})
+    $raw = Read-WorkflowJson -Path (Get-WorkflowRuntimeConfigPath -RuntimeRoot $RuntimeRoot) -Default @{}
+    if (-not ($raw -is [System.Collections.IDictionary])) {
+        $raw = @{}
+    }
+    return (Resolve-WorkflowRuntimeConfigPayload -RuntimeRoot $RuntimeRoot -Payload $raw)
 }
 
 function Write-WorkflowRuntimeConfig {
@@ -659,16 +937,89 @@ function Write-WorkflowRuntimeConfig {
         [hashtable]$Patch
     )
 
-    $existing = Get-WorkflowRuntimeConfig -RuntimeRoot $RuntimeRoot
+    $path = Get-WorkflowRuntimeConfigPath -RuntimeRoot $RuntimeRoot
+    $existing = Read-WorkflowJson -Path $path -Default @{}
+    if (-not ($existing -is [System.Collections.IDictionary])) {
+        $existing = @{}
+    }
     $next = @{}
     foreach ($pair in $existing.GetEnumerator()) {
         $next[$pair.Key] = $pair.Value
     }
+    $pathPatch = @{}
+    $otherPatch = @{}
     foreach ($pair in $Patch.GetEnumerator()) {
+        if ([string]$pair.Key -in @('agent_search_root', 'artifact_root', 'task_artifact_root', 'development_workspace_root', 'agent_runtime_root')) {
+            $pathPatch[[string]$pair.Key] = $pair.Value
+            continue
+        }
+        $otherPatch[[string]$pair.Key] = $pair.Value
+    }
+    if ($pathPatch.ContainsKey('artifact_root') -and -not $pathPatch.ContainsKey('task_artifact_root')) {
+        $pathPatch['task_artifact_root'] = $pathPatch['artifact_root']
+    }
+    if ($pathPatch.ContainsKey('task_artifact_root') -and -not $pathPatch.ContainsKey('artifact_root')) {
+        $pathPatch['artifact_root'] = $pathPatch['task_artifact_root']
+    }
+    foreach ($pair in $otherPatch.GetEnumerator()) {
         $next[$pair.Key] = $pair.Value
     }
-    Write-WorkflowJson -Path (Get-WorkflowRuntimeConfigPath -RuntimeRoot $RuntimeRoot) -Payload $next
-    return $next
+    $existingDeviceConfigs = @{}
+    if ($existing['device_path_configs'] -is [System.Collections.IDictionary]) {
+        foreach ($key in $existing['device_path_configs'].Keys) {
+            if ($existing['device_path_configs'][$key] -is [System.Collections.IDictionary]) {
+                $existingDeviceConfigs[[string]$key] = ConvertTo-WorkflowPlainData $existing['device_path_configs'][$key]
+            }
+        }
+    }
+    $allowDeviceSlotWrite = $existingDeviceConfigs.Count -gt 0
+    $deviceMatch = Get-WorkflowMatchedDevicePathConfig -Payload $existing
+    $matchedKey = [string]$deviceMatch['matched_key']
+    $deviceIds = @($deviceMatch['device_ids'])
+    $targetDeviceKey = if (-not [string]::IsNullOrWhiteSpace($matchedKey)) {
+        $matchedKey
+    }
+    elseif ($allowDeviceSlotWrite -and $deviceIds.Count -gt 0) {
+        [string]$deviceIds[0]
+    }
+    else {
+        ''
+    }
+    if ($pathPatch.Count -gt 0) {
+        if (-not [string]::IsNullOrWhiteSpace($targetDeviceKey)) {
+            $deviceConfigs = @{}
+            foreach ($key in $existingDeviceConfigs.Keys) {
+                $deviceConfigs[$key] = ConvertTo-WorkflowPlainData $existingDeviceConfigs[$key]
+            }
+            $entry = @{}
+            if ($deviceMatch['matched_config'] -is [System.Collections.IDictionary]) {
+                foreach ($pair in $deviceMatch['matched_config'].GetEnumerator()) {
+                    $entry[[string]$pair.Key] = ConvertTo-WorkflowPlainData $pair.Value
+                }
+            }
+            foreach ($pair in $pathPatch.GetEnumerator()) {
+                $entry[[string]$pair.Key] = $pair.Value
+            }
+            $recomputeSource = Get-WorkflowRuntimePathRecomputeSource -Entry $entry -PathPatch $pathPatch
+            $derivedEntry = Resolve-WorkflowRuntimePathFields -RuntimeRoot $RuntimeRoot -Payload $recomputeSource
+            foreach ($pair in $derivedEntry.GetEnumerator()) {
+                $key = [string]$pair.Key
+                if ($pathPatch.ContainsKey($key)) {
+                    continue
+                }
+                $entry[$key] = [string]$pair.Value
+            }
+            $deviceConfigs[$targetDeviceKey] = $entry
+            $next['device_path_configs'] = $deviceConfigs
+        }
+        else {
+            foreach ($pair in $pathPatch.GetEnumerator()) {
+                $next[[string]$pair.Key] = $pair.Value
+            }
+        }
+    }
+    Write-WorkflowJson -Path $path -Payload $next
+    return (Resolve-WorkflowRuntimeConfigPayload -RuntimeRoot $RuntimeRoot -Payload $next)
 }
 
 function Ensure-WorkflowControlDirs {
@@ -741,7 +1092,7 @@ function Get-WorkflowDefaultArtifactRoot {
     )
 
     $governanceRoot = Get-WorkflowGovernanceRoot -SourceRoot $SourceRoot
-    $sourceConfig = Read-WorkflowJson -Path (Join-Path $governanceRoot '.runtime\state\runtime-config.json') -Default @{}
+    $sourceConfig = Get-WorkflowRuntimeConfig -RuntimeRoot (Join-Path $governanceRoot '.runtime')
     $configured = [string]($sourceConfig['artifact_root'])
     if (-not [string]::IsNullOrWhiteSpace($configured)) {
         return [System.IO.Path]::GetFullPath($configured)
@@ -792,7 +1143,7 @@ function Resolve-WorkflowEnvironmentDescriptor {
     $manifest = Read-WorkflowJson -Path $manifestPath -Default @{}
     $runtimeConfig = Get-WorkflowRuntimeConfig -RuntimeRoot $runtimeRoot
     $governanceRoot = Get-WorkflowGovernanceRoot -SourceRoot $SourceRoot
-    $sourceConfig = Read-WorkflowJson -Path (Join-Path $governanceRoot '.runtime\state\runtime-config.json') -Default @{}
+    $sourceConfig = Get-WorkflowRuntimeConfig -RuntimeRoot (Join-Path $governanceRoot '.runtime')
     $prodRuntimeRoot = Get-WorkflowEnvironmentRuntimeRoot -SourceRoot $SourceRoot -Environment 'prod'
     $prodRuntimeConfig = Get-WorkflowRuntimeConfig -RuntimeRoot $prodRuntimeRoot
     $prodArtifactBase = if (-not [string]::IsNullOrWhiteSpace([string]$prodRuntimeConfig['artifact_root'])) {

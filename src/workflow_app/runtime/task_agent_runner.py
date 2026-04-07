@@ -12,6 +12,11 @@ import threading
 from pathlib import Path
 from typing import Any
 
+from workflow_app.runtime.device_path_config import (
+    load_runtime_config_payload,
+    resolve_runtime_config,
+)
+
 try:
     from workflow_app.server.services.developer_workspace_service import (
         protected_write_roots as resolve_protected_write_roots,
@@ -55,8 +60,12 @@ def _load_json(path: Path, fallback: Any) -> Any:
 
 
 def _runtime_config(root: Path) -> dict[str, Any]:
-    payload = _load_json(root / _RUNTIME_CONFIG_FILE, {})
-    return payload if isinstance(payload, dict) else {}
+    path = root / _RUNTIME_CONFIG_FILE
+    try:
+        payload = load_runtime_config_payload(path)
+    except Exception:
+        payload = {}
+    return resolve_runtime_config(root, payload)
 
 
 def artifact_root(root: Path) -> Path:

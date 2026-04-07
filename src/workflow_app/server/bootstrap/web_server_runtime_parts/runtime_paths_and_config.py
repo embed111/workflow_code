@@ -20,6 +20,13 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlparse
 
+from workflow_app.runtime.device_path_config import (
+    apply_runtime_config_patch as apply_device_runtime_config_patch,
+    load_runtime_config_payload as load_device_runtime_config_payload,
+    resolve_runtime_config as resolve_device_runtime_config,
+    write_runtime_config_payload as write_device_runtime_config_payload,
+)
+
 from ...runtime.agent_runtime import AgentConfigError, AgentRuntimeError, chat_once, stream_chat
 from ...entry.workflow_entry_cli import (
     append_decision_markdown as append_decision_log,
@@ -359,12 +366,14 @@ def load_runtime_config(
                 "exists": bool(path.exists()),
                 "status": "missing",
                 "error": "",
+                "device_ids": [],
+                "matched_device_id": "",
             }
         )
     if not path.exists():
         return {}
     try:
-        payload = json.loads(path.read_text(encoding="utf-8-sig"))
+        payload = load_device_runtime_config_payload(path)
     except Exception as exc:
         if isinstance(meta, dict):
             meta["status"] = "invalid_json"
@@ -375,21 +384,22 @@ def load_runtime_config(
             meta["status"] = "invalid_type"
             meta["error"] = "runtime-config payload must be a JSON object"
         return {}
+    resolution_meta: dict[str, Any] = {}
+    effective = resolve_device_runtime_config(root, payload, meta=resolution_meta)
     if isinstance(meta, dict):
         meta["status"] = "ok"
-    return payload
+        meta["device_ids"] = list(resolution_meta.get("device_ids") or [])
+        meta["matched_device_id"] = str(resolution_meta.get("matched_device_id") or "")
+    return effective
 
 
 def save_runtime_config(root: Path, patch: dict[str, Any]) -> None:
     if not patch:
         return
     path = runtime_config_file(root)
-    current = load_runtime_config(root)
-    current.update(patch)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(json.dumps(current, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    tmp.replace(path)
+    current = load_device_runtime_config_payload(path)
+    next_payload = apply_device_runtime_config_patch(root, current, patch)
+    write_device_runtime_config_payload(path, next_payload)
 
 
 def _runtime_artifact_root_value(runtime_cfg: dict[str, Any]) -> str:
