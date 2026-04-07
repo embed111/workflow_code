@@ -594,7 +594,8 @@ def main() -> int:
         bootstrap_ok = (
             bootstrap_proc.returncode == 0
             and bool(bootstrap_payload.get("ok"))
-            and str(code_root_fixture.get("code_root") or "") in workspace_remote
+            and bool(str(bootstrap_payload.get("remote_url") or "").strip())
+            and str(bootstrap_payload.get("remote_url") or "").strip() in workspace_remote
             and bool(workspace_branch)
             and workspace_branch == str(bootstrap_payload.get("current_branch") or "")
             and bool(workspace_commit)

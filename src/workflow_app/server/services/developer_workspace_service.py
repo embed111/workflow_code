@@ -434,10 +434,20 @@ def _detect_base_branch(workspace: Path, source_repo: Path) -> str:
 
 
 def _ensure_origin_remote(workspace: Path, source_repo: Path) -> str:
-    source_repo_text = source_repo.as_posix()
     git_bin = _git_available()
     if not git_bin:
         raise DeveloperWorkspaceError(409, "git 不可用，无法配置开发工作区远程。", "git_not_available")
+    remote_target = source_repo.as_posix()
+    source_remote_proc = subprocess.run(
+        [git_bin, "-C", source_repo.as_posix(), "remote", "get-url", "origin"],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+    )
+    if source_remote_proc.returncode == 0:
+        source_remote = str(source_remote_proc.stdout or "").strip()
+        if source_remote:
+            remote_target = source_remote
     proc = subprocess.run(
         [git_bin, "remote", "get-url", "origin"],
         cwd=str(workspace),
@@ -447,21 +457,21 @@ def _ensure_origin_remote(workspace: Path, source_repo: Path) -> str:
     )
     if proc.returncode == 0:
         current = str(proc.stdout or "").strip()
-        if current != source_repo_text:
+        if current != remote_target:
             _run_git(
-                ["remote", "set-url", "origin", source_repo_text],
+                ["remote", "set-url", "origin", remote_target],
                 cwd=workspace,
                 code="workspace_remote_update_failed",
                 message="更新 origin 远程失败",
             )
-        return source_repo_text
+        return remote_target
     _run_git(
-        ["remote", "add", "origin", source_repo_text],
+        ["remote", "add", "origin", remote_target],
         cwd=workspace,
         code="workspace_remote_add_failed",
         message="创建 origin 远程失败",
     )
-    return source_repo_text
+    return remote_target
 
 
 def _workspace_is_git_repo(workspace: Path) -> bool:
