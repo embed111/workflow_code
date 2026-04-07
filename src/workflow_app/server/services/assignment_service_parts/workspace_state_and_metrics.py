@@ -872,6 +872,85 @@ def _discover_assignment_agent_workspace_path(root: Path, *, agent_id: str) -> t
     return None
 
 
+def _assignment_workspace_uses_codex_memory(workspace_path: Path) -> bool:
+    memory_root = workspace_path / ".codex" / "memory"
+    if memory_root.exists():
+        return True
+    agents_path = workspace_path / "AGENTS.md"
+    if not agents_path.exists() or not agents_path.is_file():
+        return False
+    try:
+        agents_text = agents_path.read_text(encoding="utf-8", errors="ignore")
+    except Exception:
+        return False
+    normalized = str(agents_text or "").replace("\\", "/").lower()
+    return ".codex/memory/" in normalized
+
+
+def _assignment_memory_global_overview_template(month_key: str) -> str:
+    return (
+        "# 全局记忆总览\n\n"
+        "## 当前状态\n"
+        f"- 当前活动月份： `{month_key}`\n"
+        f"- 当前活动月份总览： `.codex/memory/{month_key}/记忆总览.md`\n"
+    )
+
+
+def _assignment_memory_month_overview_template(month_key: str, day_key: str) -> str:
+    return (
+        f"# 记忆总览 {month_key}\n\n"
+        "## 月份状态\n"
+        "- 状态： `in_progress`\n"
+        f"- 当前活动日记： `.codex/memory/{month_key}/{day_key}.md`\n"
+    )
+
+
+def _assignment_memory_daily_template(month_key: str, day_key: str) -> str:
+    return (
+        f"# 每日记忆 {day_key}\n\n"
+        "## Metadata\n"
+        f"- month: `{month_key}`\n"
+        f"- month_overview: `.codex/memory/{month_key}/记忆总览.md`\n"
+        "- archival_rule: 今日总结仅写入本文件，待日切后再归档到月度总览。\n\n"
+        "## Entry Schema\n"
+        "- topic: 本轮主主题\n"
+        "- context: 触发背景或问题来源\n"
+        "- actions: 本轮实际动作\n"
+        "- decisions: 对后续有影响的约束或结论\n"
+        "- validation: 已做检查与结果\n"
+        "- artifacts: 关键文件或目录\n"
+        "- next: 后续待跟进事项\n\n"
+        "## Entries\n"
+    )
+
+
+def _ensure_assignment_workspace_memory_scaffold(workspace_path: Path) -> list[str]:
+    if not _assignment_workspace_uses_codex_memory(workspace_path):
+        return []
+    now_dt = now_local()
+    month_key = now_dt.strftime("%Y-%m")
+    day_key = now_dt.strftime("%Y-%m-%d")
+    memory_root = workspace_path / ".codex" / "memory"
+    month_dir = memory_root / month_key
+    global_overview = memory_root / "全局记忆总览.md"
+    month_overview = month_dir / "记忆总览.md"
+    daily_memory = month_dir / f"{day_key}.md"
+    created: list[str] = []
+    month_dir.mkdir(parents=True, exist_ok=True)
+    targets = [
+        (global_overview, _assignment_memory_global_overview_template(month_key)),
+        (month_overview, _assignment_memory_month_overview_template(month_key, day_key)),
+        (daily_memory, _assignment_memory_daily_template(month_key, day_key)),
+    ]
+    for path, content in targets:
+        if path.exists():
+            continue
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content, encoding="utf-8")
+        created.append(path.as_posix())
+    return created
+
+
 def _resolve_assignment_workspace_path(conn: sqlite3.Connection, root: Path, *, agent_id: str) -> Path:
     row = conn.execute(
         """
@@ -932,6 +1011,19 @@ def _resolve_assignment_workspace_path(conn: sqlite3.Connection, root: Path, *, 
                 "agent_search_root": search_root.as_posix(),
             },
         )
+    try:
+        _ensure_assignment_workspace_memory_scaffold(workspace_path)
+    except Exception as exc:
+        raise AssignmentCenterError(
+            409,
+            "assigned agent workspace memory bootstrap failed",
+            "assignment_agent_workspace_memory_bootstrap_failed",
+            {
+                "assigned_agent_id": str(agent_id or "").strip(),
+                "workspace_path": workspace_path.as_posix(),
+                "error": str(exc),
+            },
+        ) from exc
     return workspace_path
 
 
