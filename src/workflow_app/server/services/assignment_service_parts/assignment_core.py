@@ -38,6 +38,8 @@ DEFAULT_ASSIGNMENT_EXECUTION_TIMEOUT_S = 1200
 DEFAULT_ASSIGNMENT_FINAL_RESULT_EXIT_GRACE_SECONDS = 15
 DEFAULT_ASSIGNMENT_STALE_RUN_GRACE_SECONDS = 15
 DEFAULT_ASSIGNMENT_PROVIDER_START_GRACE_SECONDS = 180
+DEFAULT_ASSIGNMENT_TRANSIENT_STARTUP_RETRY_LIMIT = 1
+DEFAULT_ASSIGNMENT_TRANSIENT_STARTUP_RETRY_MAX_SECONDS = 300
 DEFAULT_ASSIGNMENT_EVENT_STREAM_RETRY_MS = 1500
 DEFAULT_ASSIGNMENT_EVENT_STREAM_KEEPALIVE_S = 15
 DEFAULT_ASSIGNMENT_EVENT_HISTORY_LIMIT = 512
@@ -104,6 +106,26 @@ def _assignment_final_result_exit_grace_seconds() -> int:
         except Exception:
             pass
     return max(5, int(DEFAULT_ASSIGNMENT_FINAL_RESULT_EXIT_GRACE_SECONDS))
+
+
+def _assignment_transient_startup_retry_limit() -> int:
+    raw = str(os.getenv("WORKFLOW_ASSIGNMENT_TRANSIENT_STARTUP_RETRY_LIMIT") or "").strip()
+    if raw:
+        try:
+            return max(0, int(raw))
+        except Exception:
+            pass
+    return max(0, int(DEFAULT_ASSIGNMENT_TRANSIENT_STARTUP_RETRY_LIMIT))
+
+
+def _assignment_transient_startup_retry_max_seconds() -> int:
+    raw = str(os.getenv("WORKFLOW_ASSIGNMENT_TRANSIENT_STARTUP_RETRY_MAX_SECONDS") or "").strip()
+    if raw:
+        try:
+            return max(30, int(raw))
+        except Exception:
+            pass
+    return max(30, int(DEFAULT_ASSIGNMENT_TRANSIENT_STARTUP_RETRY_MAX_SECONDS))
 
 
 class AssignmentCenterError(RuntimeError):

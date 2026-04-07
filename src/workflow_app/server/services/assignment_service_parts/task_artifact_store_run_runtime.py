@@ -149,6 +149,52 @@ def _assignment_execution_codex_failure(
     )
 
 
+def _assignment_stdout_events_are_startup_only(stdout_text: str) -> bool:
+    lines = [str(line or "").strip() for line in str(stdout_text or "").splitlines() if str(line or "").strip()]
+    if not lines:
+        return False
+    allowed_types = {"thread.started", "turn.started"}
+    for line in lines:
+        try:
+            payload = json.loads(line)
+        except Exception:
+            return False
+        if not isinstance(payload, dict):
+            return False
+        event_type = str(payload.get("type") or "").strip().lower()
+        if event_type not in allowed_types:
+            return False
+    return True
+
+
+def _assignment_should_retry_transient_startup_failure(
+    *,
+    exit_code: int,
+    stdout_text: str,
+    stderr_text: str,
+    agent_message_count: int,
+    observed_payload: dict[str, Any],
+    elapsed_seconds: float,
+    attempt_number: int,
+) -> bool:
+    retry_limit = _assignment_transient_startup_retry_limit()
+    if retry_limit <= 0 or int(attempt_number or 0) > retry_limit:
+        return False
+    if int(exit_code or 0) == 0:
+        return False
+    if int(agent_message_count or 0) > 0 or bool(observed_payload):
+        return False
+    if float(elapsed_seconds or 0.0) > float(_assignment_transient_startup_retry_max_seconds()):
+        return False
+    stderr_value = str(stderr_text or "").strip()
+    if stderr_value and stderr_value != "^C":
+        return False
+    stdout_value = str(stdout_text or "").strip()
+    if not stdout_value:
+        return stderr_value in {"", "^C"}
+    return _assignment_stdout_events_are_startup_only(stdout_value)
+
+
 def _assignment_cancelled_run_final_message(run_record: dict[str, Any]) -> str:
     existing = str(run_record.get("latest_event") or "").strip()
     if not existing:
@@ -1072,107 +1118,160 @@ def _assignment_execution_worker(
             return
 
     run_record = _assignment_load_run_record(root, ticket_id=ticket_id, run_id=run_id)
-    if run_record:
-        run_record["status"] = "running"
-        run_record["latest_event"] = "Provider 已启动，执行中。"
-        run_record["latest_event_at"] = started_at
-        run_record["updated_at"] = started_at
-        _assignment_write_run_record(root, ticket_id=ticket_id, run_record=run_record, sync_index=False)
-    _append_assignment_run_event(
-        files["events"],
-        event_type="provider_start",
-        message="Provider 已启动。",
-        created_at=started_at,
-        detail={"command_summary": command_summary},
-    )
-    proc: subprocess.Popen[str] | None = None
-    try:
-        proc = subprocess.Popen(
-            command,
-            cwd=workspace_path.as_posix(),
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            bufsize=1,
-        )
+    attempt_number = 0
+    while True:
+        attempt_number += 1
+        exit_code = 1
+        failure_message = ""
+        forced_result_short_circuit = False
+        with observed_result_lock:
+            observed_result_payload = {}
+            observed_turn_completed_at = 0.0
+        attempt_started_at = iso_ts(now_local())
+        attempt_started_monotonic = time.monotonic()
+        attempt_stdout_index = len(stdout_chunks)
+        attempt_stderr_index = len(stderr_chunks)
+        attempt_agent_message_index = len(agent_messages)
         if run_record:
-            run_record["provider_pid"] = max(0, int(getattr(proc, "pid", 0) or 0))
-            run_record["updated_at"] = iso_ts(now_local())
+            run_record["status"] = "running"
+            run_record["latest_event"] = "Provider 已启动，执行中。"
+            run_record["latest_event_at"] = attempt_started_at
+            run_record["updated_at"] = attempt_started_at
             _assignment_write_run_record(root, ticket_id=ticket_id, run_record=run_record, sync_index=False)
-        _register_assignment_run_process(run_id, proc)
-        assert proc.stdin is not None
-        proc.stdin.write(prompt_text)
-        proc.stdin.write("\n")
-        proc.stdin.close()
-        t_out = threading.Thread(target=read_stream, args=("stdout", proc.stdout, stdout_chunks), daemon=True)
-        t_err = threading.Thread(target=read_stream, args=("stderr", proc.stderr, stderr_chunks), daemon=True)
-        t_out.start()
-        t_err.start()
-        started_monotonic = time.monotonic()
-        execution_timeout_s = _assignment_execution_timeout_s()
-        final_result_grace_s = _assignment_final_result_exit_grace_seconds()
-        while True:
-            try:
-                exit_code = int(proc.wait(timeout=1) or 0)
-                break
-            except subprocess.TimeoutExpired:
-                now_monotonic = time.monotonic()
-                ready_at = observed_turn_completed_at_monotonic()
-                if ready_at > 0 and (now_monotonic - ready_at) >= final_result_grace_s:
-                    forced_result_short_circuit = True
-                    _append_assignment_run_event(
-                        files["events"],
-                        event_type="provider_exit_forced",
-                        message="已观测到最终结果，provider 超时未退出，执行强制收敛。",
-                        created_at=iso_ts(now_local()),
-                        detail={"grace_seconds": final_result_grace_s},
-                    )
-                    _terminate_assignment_process(proc)
-                    try:
-                        proc.wait(timeout=3)
-                    except Exception:
-                        pass
-                    exit_code = 0
+        _append_assignment_run_event(
+            files["events"],
+            event_type="provider_start",
+            message="Provider 已启动。",
+            created_at=attempt_started_at,
+            detail={
+                "command_summary": command_summary,
+                "attempt": attempt_number,
+            },
+        )
+        proc: subprocess.Popen[str] | None = None
+        try:
+            proc = subprocess.Popen(
+                command,
+                cwd=workspace_path.as_posix(),
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                bufsize=1,
+            )
+            if run_record:
+                run_record["provider_pid"] = max(0, int(getattr(proc, "pid", 0) or 0))
+                run_record["updated_at"] = iso_ts(now_local())
+                _assignment_write_run_record(root, ticket_id=ticket_id, run_record=run_record, sync_index=False)
+            _register_assignment_run_process(run_id, proc)
+            assert proc.stdin is not None
+            proc.stdin.write(prompt_text)
+            proc.stdin.write("\n")
+            proc.stdin.close()
+            t_out = threading.Thread(target=read_stream, args=("stdout", proc.stdout, stdout_chunks), daemon=True)
+            t_err = threading.Thread(target=read_stream, args=("stderr", proc.stderr, stderr_chunks), daemon=True)
+            t_out.start()
+            t_err.start()
+            execution_timeout_s = _assignment_execution_timeout_s()
+            final_result_grace_s = _assignment_final_result_exit_grace_seconds()
+            while True:
+                try:
+                    exit_code = int(proc.wait(timeout=1) or 0)
                     break
-                if (now_monotonic - started_monotonic) >= execution_timeout_s:
-                    failure_message = f"assignment execution timeout after {execution_timeout_s}s"
-                    _append_assignment_run_event(
-                        files["events"],
-                        event_type="execution_timeout",
-                        message="执行超时，已终止 provider。",
-                        created_at=iso_ts(now_local()),
-                        detail={"timeout_seconds": execution_timeout_s},
-                    )
-                    _terminate_assignment_process(proc)
-                    try:
-                        proc.wait(timeout=3)
-                    except Exception:
-                        pass
-                    exit_code = 124
-                    break
-        t_out.join(timeout=2)
-        t_err.join(timeout=2)
+                except subprocess.TimeoutExpired:
+                    now_monotonic = time.monotonic()
+                    ready_at = observed_turn_completed_at_monotonic()
+                    if ready_at > 0 and (now_monotonic - ready_at) >= final_result_grace_s:
+                        forced_result_short_circuit = True
+                        _append_assignment_run_event(
+                            files["events"],
+                            event_type="provider_exit_forced",
+                            message="已观测到最终结果，provider 超时未退出，执行强制收敛。",
+                            created_at=iso_ts(now_local()),
+                            detail={"grace_seconds": final_result_grace_s},
+                        )
+                        _terminate_assignment_process(proc)
+                        try:
+                            proc.wait(timeout=3)
+                        except Exception:
+                            pass
+                        exit_code = 0
+                        break
+                    if (now_monotonic - attempt_started_monotonic) >= execution_timeout_s:
+                        failure_message = f"assignment execution timeout after {execution_timeout_s}s"
+                        _append_assignment_run_event(
+                            files["events"],
+                            event_type="execution_timeout",
+                            message="执行超时，已终止 provider。",
+                            created_at=iso_ts(now_local()),
+                            detail={"timeout_seconds": execution_timeout_s},
+                        )
+                        _terminate_assignment_process(proc)
+                        try:
+                            proc.wait(timeout=3)
+                        except Exception:
+                            pass
+                        exit_code = 124
+                        break
+            t_out.join(timeout=2)
+            t_err.join(timeout=2)
+        except Exception as exc:
+            failure_message = f"assignment execution exception: {exc}"
+            stderr_chunks.append(failure_message + "\n")
+        finally:
+            _unregister_assignment_run_process(run_id)
+            if proc is not None:
+                try:
+                    if proc.stdout is not None:
+                        proc.stdout.close()
+                    if proc.stderr is not None:
+                        proc.stderr.close()
+                except Exception:
+                    pass
+        attempt_stdout_text = "".join(stdout_chunks[attempt_stdout_index:])
+        attempt_stderr_text = "".join(stderr_chunks[attempt_stderr_index:])
         if exit_code != 0 and not failure_message:
             failure_message = (
-                _short_assignment_text("".join(stderr_chunks), 500)
+                _short_assignment_text(attempt_stderr_text, 500)
                 or f"assignment execution failed with exit={exit_code}"
             )
-    except Exception as exc:
-        failure_message = f"assignment execution exception: {exc}"
-        stderr_chunks.append(failure_message + "\n")
-    finally:
-        _unregister_assignment_run_process(run_id)
-        if proc is not None:
-            try:
-                if proc.stdout is not None:
-                    proc.stdout.close()
-                if proc.stderr is not None:
-                    proc.stderr.close()
-            except Exception:
-                pass
+        current_run_status = str(
+            (_assignment_load_run_record(root, ticket_id=ticket_id, run_id=run_id) or {}).get("status") or ""
+        ).strip().lower()
+        if current_run_status == "cancelled":
+            break
+        if _assignment_should_retry_transient_startup_failure(
+            exit_code=exit_code,
+            stdout_text=attempt_stdout_text,
+            stderr_text=attempt_stderr_text,
+            agent_message_count=len(agent_messages) - attempt_agent_message_index,
+            observed_payload=last_observed_result_payload(),
+            elapsed_seconds=time.monotonic() - attempt_started_monotonic,
+            attempt_number=attempt_number,
+        ):
+            _append_assignment_run_event(
+                files["events"],
+                event_type="provider_retry",
+                message="Provider 启动后瞬时失败，已自动重试。",
+                created_at=iso_ts(now_local()),
+                detail={
+                    "attempt": attempt_number,
+                    "next_attempt": attempt_number + 1,
+                    "exit_code": int(exit_code or 0),
+                    "stderr": _short_assignment_text(attempt_stderr_text, 300),
+                },
+            )
+            _assignment_touch_run_latest_event(
+                root,
+                ticket_id=ticket_id,
+                run_id=run_id,
+                latest_event="Provider 启动后瞬时失败，自动重试中。",
+                latest_event_at=iso_ts(now_local()),
+            )
+            continue
+        break
     stdout_text = "".join(stdout_chunks)
     stderr_text = "".join(stderr_chunks)
     fallback_text = agent_messages[-1] if agent_messages else stdout_text.strip()

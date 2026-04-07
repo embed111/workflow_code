@@ -362,6 +362,32 @@ def run_schedule_trigger_recovery_probe(repo_root: Path) -> tuple[bool, dict[str
     return ok, detail
 
 
+def run_assignment_transient_retry_probe(repo_root: Path) -> tuple[bool, dict[str, object]]:
+    probe = (repo_root / "scripts" / "acceptance" / "verify_assignment_transient_startup_retry.py").resolve()
+    proc = subprocess.run(
+        [sys.executable, str(probe)],
+        cwd=str(repo_root),
+        capture_output=True,
+        text=True,
+    )
+    detail: dict[str, object] = {
+        "script": probe.as_posix(),
+        "returncode": int(proc.returncode),
+    }
+    stdout = str(proc.stdout or "").strip()
+    stderr = str(proc.stderr or "").strip()
+    if stdout:
+        try:
+            detail["payload"] = json.loads(stdout)
+        except Exception:
+            detail["stdout"] = stdout
+    if stderr:
+        detail["stderr"] = stderr
+    payload = detail.get("payload") if isinstance(detail.get("payload"), dict) else {}
+    ok = proc.returncode == 0 and bool((payload or {}).get("ok", proc.returncode == 0))
+    return ok, detail
+
+
 def write_gate_acceptance_report(
     *,
     repo_root: Path,
@@ -518,6 +544,16 @@ def main() -> int:
         )
         if not schedule_recovery_ok:
             errors.append("schedule trigger recovery probe failed")
+        transient_retry_ok, transient_retry_detail = run_assignment_transient_retry_probe(repo_root)
+        results.append(
+            (
+                "assignment_transient_startup_retry",
+                transient_retry_ok,
+                transient_retry_detail,
+            )
+        )
+        if not transient_retry_ok:
+            errors.append("assignment transient startup retry probe failed")
 
         status, agents_data = call(base, "GET", "/api/agents")
         if status != 200 or not agents_data.get("ok"):
