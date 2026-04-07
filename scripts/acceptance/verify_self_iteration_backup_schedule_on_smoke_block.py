@@ -1,0 +1,110 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import json
+import shutil
+import sys
+import time
+from datetime import datetime
+from pathlib import Path
+
+
+def main() -> int:
+    workspace_root = Path(__file__).resolve().parents[2]
+    src_root = workspace_root / "src"
+    if src_root.as_posix() not in sys.path:
+        sys.path.insert(0, src_root.as_posix())
+
+    from workflow_app.server.services import schedule_service
+
+    root = workspace_root / ".test" / "runtime-self-iter-backup-on-smoke-block"
+    if root.exists():
+        shutil.rmtree(root, ignore_errors=True)
+    (root / "state").mkdir(parents=True, exist_ok=True)
+    cfg = type(
+        "Cfg",
+        (),
+        {
+            "root": root,
+            "runtime_environment": "prod",
+        },
+    )()
+
+    original_load_agents = schedule_service._load_available_agents
+    schedule_service._load_available_agents = lambda _cfg: [{"agent_id": "workflow", "agent_name": "workflow"}]
+    try:
+        now_local = datetime.now().astimezone().replace(second=0, microsecond=0).strftime("%Y-%m-%d %H:%M")
+        created = schedule_service.create_schedule(
+            cfg,
+            {
+                "operator": "test",
+                "schedule_name": "[持续迭代] workflow",
+                "enabled": True,
+                "assigned_agent_id": "workflow",
+                "launch_summary": "上一轮任务已经结束，请继续作为 workflow 的长期负责人推进 7x24 连续迭代。",
+                "execution_checklist": "输出本轮结论，并确保系统已经挂上下一轮可执行任务或唤醒计划。",
+                "done_definition": "若当前没有新的 ready 任务，也必须保证下一次唤醒已经排上。",
+                "priority": "P1",
+                "expected_artifact": "continuous-improvement-report.md",
+                "delivery_mode": "none",
+                "rule_sets": {
+                    "monthly": {"enabled": False},
+                    "weekly": {"enabled": False},
+                    "daily": {"enabled": False},
+                    "once": {"enabled": True, "date_times_text": now_local},
+                },
+            },
+        )
+        schedule_id = str(created.get("schedule_id") or "").strip()
+        assert schedule_id, created
+
+        scan = schedule_service.run_schedule_scan(
+            cfg,
+            operator="test",
+            now_at=now_local,
+            schedule_id=schedule_id,
+        )
+
+        detail = {}
+        for _ in range(20):
+            detail = schedule_service.get_schedule_detail(root, schedule_id)
+            schedule_info = dict(detail.get("schedule") or {})
+            if str(schedule_info.get("last_result_status") or "").strip().lower() == "failed":
+                break
+            time.sleep(0.2)
+
+        schedule_info = dict(detail.get("schedule") or {})
+        schedules = schedule_service.list_schedules(root)
+        backup_items = [
+            item
+            for item in list(schedules.get("items") or [])
+            if str(item.get("expected_artifact") or "").strip() == "workflow-pm-wake-summary"
+        ]
+
+        assert str(schedule_info.get("last_result_status") or "").strip().lower() == "failed", detail
+        assert "smoke baseline report missing" in str(schedule_info.get("last_result_summary") or "").strip(), detail
+        assert len(backup_items) == 1, schedules
+        assert bool(str(backup_items[0].get("next_trigger_at") or "").strip()), backup_items[0]
+        assert str(backup_items[0].get("assigned_agent_id") or "").strip() == "workflow", backup_items[0]
+
+        print(
+            json.dumps(
+                {
+                    "ok": True,
+                    "self_iteration_schedule_id": schedule_id,
+                    "scan": scan,
+                    "backup_schedule_id": str(backup_items[0].get("schedule_id") or "").strip(),
+                    "backup_next_trigger_at": str(backup_items[0].get("next_trigger_at") or "").strip(),
+                    "self_iteration_last_result_summary": str(schedule_info.get("last_result_summary") or "").strip(),
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
+        return 0
+    finally:
+        schedule_service._load_available_agents = original_load_agents
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

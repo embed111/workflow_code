@@ -14,7 +14,6 @@ def main() -> int:
         sys.path.insert(0, src_root.as_posix())
 
     from workflow_app.server.bootstrap import web_server_runtime as ws
-    from workflow_app.server.services import schedule_service
 
     root = Path.cwd() / ".test" / "runtime-stale-running-self-iteration"
     if root.exists():
@@ -57,6 +56,18 @@ def main() -> int:
         },
     )
     ticket_id = str(graph.get("ticket_id") or "").strip()
+    conn = ws.connect_db(root)
+    try:
+        conn.execute(
+            """
+            INSERT OR REPLACE INTO agent_registry(agent_id,agent_name,workspace_path,updated_at)
+            VALUES (?,?,?,?)
+            """,
+            ("workflow", "workflow", str(workspace_root), "2026-04-07T00:00:00+08:00"),
+        )
+        conn.commit()
+    finally:
+        conn.close()
     created = ws.create_assignment_node(
         cfg,
         ticket_id,
@@ -107,18 +118,13 @@ def main() -> int:
     node_payload["updated_at"] = "2026-04-07T00:00:00+08:00"
     ws._assignment_write_json(node_path, node_payload)
 
-    original_load_agents = schedule_service._load_available_agents
-    schedule_service._load_available_agents = lambda _cfg: [{"agent_id": "workflow", "agent_name": "workflow"}]
-    try:
-        ws.get_assignment_graph(
-            root,
-            ticket_id,
-            include_test_data=False,
-            active_batch_size=20,
-            history_batch_size=20,
-        )
-    finally:
-        schedule_service._load_available_agents = original_load_agents
+    ws.get_assignment_graph(
+        root,
+        ticket_id,
+        include_test_data=False,
+        active_batch_size=20,
+        history_batch_size=20,
+    )
 
     recovered_node = ws._assignment_read_json(node_path)
     schedules = ws.list_schedules(root)
@@ -127,11 +133,20 @@ def main() -> int:
         for item in list(schedules.get("items") or [])
         if str(item.get("schedule_name") or "").strip() == "[持续迭代] workflow"
     ]
+    pm_wake_items = [
+        item
+        for item in list(schedules.get("items") or [])
+        if "主线巡检" in str(item.get("schedule_name") or "").strip()
+    ]
 
     assert str(recovered_node.get("status") or "").strip().lower() == "failed", recovered_node
     assert "运行句柄缺失" in str(recovered_node.get("failure_reason") or ""), recovered_node
     assert len(self_iter_items) == 1, schedules
     assert str(self_iter_items[0].get("expected_artifact") or "").strip() == "continuous-improvement-report.md", self_iter_items[0]
+    assert bool(str(self_iter_items[0].get("next_trigger_at") or "").strip()), self_iter_items[0]
+    assert len(pm_wake_items) == 1, schedules
+    assert str(pm_wake_items[0].get("expected_artifact") or "").strip() == "workflow-pm-wake-summary", pm_wake_items[0]
+    assert bool(str(pm_wake_items[0].get("next_trigger_at") or "").strip()), pm_wake_items[0]
 
     print(
         json.dumps(
@@ -141,6 +156,7 @@ def main() -> int:
                 "node_id": node_id,
                 "schedule_id": str(self_iter_items[0].get("schedule_id") or "").strip(),
                 "schedule_name": str(self_iter_items[0].get("schedule_name") or "").strip(),
+                "backup_schedule_id": str(pm_wake_items[0].get("schedule_id") or "").strip(),
                 "node_status": str(recovered_node.get("status") or "").strip(),
             },
             ensure_ascii=False,

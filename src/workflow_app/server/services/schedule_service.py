@@ -507,6 +507,12 @@ def _process_schedule_trigger_async(
                 },
                 last_result_status="failed",
             )
+            _ensure_self_iter_backup_schedule(
+                cfg,
+                schedule=schedule,
+                reason=block_message,
+                planned_trigger_at=planned_trigger_at,
+            )
             return
         if str(gate.get("guard_state") or "").strip() == "degraded_fail_open":
             _append_schedule_event(
@@ -598,6 +604,13 @@ def _process_schedule_trigger_async(
                 },
                 last_result_status="failed" if dispatch_status == "dispatch_failed" else str(result_status.get("result_status") or "queued"),
             )
+            if dispatch_status == "dispatch_failed":
+                _ensure_self_iter_backup_schedule(
+                    cfg,
+                    schedule=schedule,
+                    reason=dispatch_message or "schedule dispatch failed",
+                    planned_trigger_at=planned_trigger_at,
+                )
     except Exception as exc:
         _record_schedule_trigger_progress(
             cfg.root,
@@ -612,6 +625,12 @@ def _process_schedule_trigger_async(
             action="trigger_failed",
             detail={"stage": "schedule_trigger_async", "error": str(exc)},
             last_result_status="failed",
+        )
+        _ensure_self_iter_backup_schedule(
+            cfg,
+            schedule=schedule,
+            reason=str(exc),
+            planned_trigger_at=planned_trigger_at,
         )
     finally:
         with _SCHEDULE_TRIGGER_LOCK:
@@ -938,6 +957,122 @@ def _check_self_iter_gate(cfg: Any, schedule: dict[str, Any]) -> dict[str, Any]:
         "smoke": smoke_report,
         "message": reason or "smoke baseline unavailable",
     }
+
+
+def _ensure_self_iter_backup_schedule(
+    cfg: Any,
+    *,
+    schedule: dict[str, Any],
+    reason: str,
+    planned_trigger_at: str,
+) -> dict[str, Any]:
+    from datetime import timedelta
+
+    schedule_name = str(schedule.get("schedule_name") or "").strip()
+    if not schedule_name.startswith("[持续迭代]"):
+        return {"queued": False, "reason": "non_self_iteration"}
+    agent_id = str(schedule.get("assigned_agent_id") or "").strip()
+    if not agent_id:
+        return {"queued": False, "reason": "agent_missing"}
+    try:
+        summary = str(reason or "").strip() or "主链触发未成功，需要保底巡检续挂。"
+        backup_name = "pm持续唤醒 - workflow 主线巡检" if agent_id.lower() == "workflow" else f"pm持续唤醒 - {agent_id} 主线巡检"
+        try:
+            backup_dt = _parse_datetime_token(planned_trigger_at, field="planned_trigger_at") + timedelta(minutes=30)
+        except Exception:
+            backup_dt = _minute_floor(_now_bj()) + timedelta(minutes=30)
+        next_trigger_at = backup_dt.isoformat(timespec="seconds")
+        existing = {}
+        conn = connect_db(cfg.root)
+        try:
+            row = conn.execute(
+                """
+                SELECT schedule_id,next_trigger_at
+                FROM schedule_plans
+                WHERE deleted_at='' AND schedule_name=? AND assigned_agent_id=?
+                ORDER BY updated_at DESC, created_at DESC
+                LIMIT 1
+                """,
+                (backup_name, agent_id),
+            ).fetchone()
+            if row is not None:
+                existing = {key: row[key] for key in row.keys()}
+        finally:
+            conn.close()
+        existing_next = str(existing.get("next_trigger_at") or "").strip()
+        current_time = _now_bj().isoformat(timespec="seconds")
+        if existing_next and existing_next > current_time and existing_next < next_trigger_at:
+            next_trigger_at = existing_next
+        payload = {
+            "operator": "schedule-worker-backup",
+            "schedule_name": backup_name,
+            "enabled": True,
+            "assigned_agent_id": agent_id,
+            "launch_summary": "\n".join(
+                [
+                    "作为保底接力入口，检查 prod 当前是否仍存在未来可执行的 [持续迭代] workflow 或 active 版本任务。",
+                    "先读版本计划：docs/workflow/governance/PM版本推进计划.md",
+                    "再对照持续唤醒需求：docs/workflow/requirements/需求详情-pm持续唤醒与清醒维持.md",
+                    f"最近阻塞: {summary}",
+                ]
+            ).strip(),
+            "execution_checklist": "\n".join(
+                [
+                    "1. 读取 PM版本推进计划与持续唤醒需求。",
+                    "2. 检查 prod 的 schedules、assignment graph、ready/running 节点和最近 runs。",
+                    "3. 若主链断开，补一条未来可执行入口或当前版本任务。",
+                    "4. 输出本次保底巡检结论与下一步建议。",
+                ]
+            ).strip(),
+            "done_definition": "保底巡检完成后，prod 至少保留一条未来可执行的 workflow 主线入口，且本次结论可追溯。",
+            "priority": "P1",
+            "expected_artifact": "workflow-pm-wake-summary",
+            "delivery_mode": "none",
+            "rule_sets": {
+                "monthly": {"enabled": False},
+                "weekly": {"enabled": False},
+                "daily": {"enabled": False},
+                "once": {"enabled": True, "date_times_text": next_trigger_at},
+            },
+        }
+        if existing:
+            result = update_schedule(cfg, str(existing.get("schedule_id") or "").strip(), payload)
+        else:
+            result = create_schedule(cfg, payload)
+        _append_schedule_event(
+            cfg.root,
+            {
+                "created_at": _now_text(),
+                "action": "queue_self_iter_backup_schedule",
+                "schedule_id": str(schedule.get("schedule_id") or "").strip(),
+                "detail": {
+                    "backup_schedule_id": str(result.get("schedule_id") or "").strip(),
+                    "backup_next_trigger_at": next_trigger_at,
+                    "reason": summary,
+                },
+            },
+        )
+        return {
+            "queued": True,
+            "schedule_id": str(result.get("schedule_id") or "").strip(),
+            "next_trigger_at": next_trigger_at,
+            "agent_id": agent_id,
+        }
+    except Exception as exc:
+        _append_schedule_event(
+            cfg.root,
+            {
+                "created_at": _now_text(),
+                "action": "queue_self_iter_backup_schedule_failed",
+                "schedule_id": str(schedule.get("schedule_id") or "").strip(),
+                "detail": {
+                    "planned_trigger_at": str(planned_trigger_at or "").strip(),
+                    "reason": str(reason or "").strip(),
+                    "error": str(exc),
+                },
+            },
+        )
+        return {"queued": False, "reason": "backup_schedule_failed", "error": str(exc)}
 
 
 def _resolve_agent(cfg: Any, raw: Any, *, allow_empty: bool = False) -> dict[str, str]:
