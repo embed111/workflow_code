@@ -1506,10 +1506,83 @@ def _load_plan_row(conn: sqlite3.Connection, schedule_id: str, *, allow_deleted:
     return row
 
 
+def _assignment_snapshot_for_schedule_status(
+    root: Path,
+    *,
+    ticket_id: str,
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    ticket_text = str(ticket_id or "").strip()
+    if not ticket_text:
+        return {}, []
+    snapshot_fn = globals().get("_assignment_snapshot_from_files")
+    if not callable(snapshot_fn):
+        return {}, []
+    try:
+        snapshot = snapshot_fn(
+            root,
+            ticket_text,
+            include_test_data=True,
+            reconcile_running=True,
+            include_scheduler=False,
+            include_serialized_nodes=False,
+        )
+    except TypeError:
+        try:
+            snapshot = snapshot_fn(
+                root,
+                ticket_text,
+                include_test_data=True,
+                reconcile_running=True,
+            )
+        except Exception:
+            return {}, []
+    except Exception:
+        return {}, []
+    if not isinstance(snapshot, dict):
+        return {}, []
+    task_payload = dict(snapshot.get("graph_row") or {})
+    node_records = [
+        dict(item)
+        for item in list(snapshot.get("all_nodes") or snapshot.get("nodes") or [])
+        if isinstance(item, dict)
+    ]
+    return task_payload, node_records
+
+
+def _assignment_result_status_from_node_payload(node_payload: dict[str, Any]) -> str:
+    node_status = str(node_payload.get("status") or "").strip().lower()
+    if node_status == "running":
+        return "running"
+    if node_status == "succeeded":
+        return "succeeded"
+    if node_status == "failed":
+        return "failed"
+    return "queued"
+
+
 def _assignment_runtime_status(root: Path, *, ticket_id: str, node_id: str) -> dict[str, str]:
     if not ticket_id or not node_id:
         return {}
     try:
+        task_payload, node_records = _assignment_snapshot_for_schedule_status(root, ticket_id=ticket_id)
+        node_payload = next(
+            (
+                dict(item)
+                for item in list(node_records or [])
+                if str(item.get("node_id") or "").strip() == str(node_id).strip()
+            ),
+            {},
+        )
+        if node_payload:
+            result_status = _assignment_result_status_from_node_payload(node_payload)
+            return {
+                "assignment_status": str(node_payload.get("status") or "").strip().lower(),
+                "assignment_status_text": str(node_payload.get("status_text") or "").strip(),
+                "assignment_graph_name": str(task_payload.get("graph_name") or "").strip(),
+                "assignment_node_name": str(node_payload.get("node_name") or node_id).strip(),
+                "result_status": result_status,
+                "result_status_text": SCHEDULE_RESULT_TEXT.get(result_status, SCHEDULE_RESULT_TEXT["pending"]),
+            }
         resolver = globals().get("resolve_artifact_root_path")
         if not callable(resolver):
             raise RuntimeError("artifact root resolver unavailable")
@@ -1523,14 +1596,7 @@ def _assignment_runtime_status(root: Path, *, ticket_id: str, node_id: str) -> d
         if node_path.exists() and node_path.is_file():
             node_payload = json.loads(node_path.read_text(encoding="utf-8"))
         node_status = str(node_payload.get("status") or "").strip().lower()
-        if node_status == "running":
-            result_status = "running"
-        elif node_status == "succeeded":
-            result_status = "succeeded"
-        elif node_status == "failed":
-            result_status = "failed"
-        else:
-            result_status = "queued"
+        result_status = _assignment_result_status_from_node_payload(node_payload)
         return {
             "assignment_status": node_status,
             "assignment_status_text": str(node_payload.get("status_text") or "").strip(),
@@ -1552,6 +1618,16 @@ def _assignment_ticket_has_other_running_nodes(
     if not ticket_id:
         return False
     try:
+        _task_payload, node_records = _assignment_snapshot_for_schedule_status(root, ticket_id=ticket_id)
+        if node_records:
+            excluded = str(exclude_node_id or "").strip()
+            for payload in list(node_records or []):
+                if str(payload.get("record_state") or "active").strip().lower() == "deleted":
+                    continue
+                if str(payload.get("node_id") or "").strip() == excluded:
+                    continue
+                if str(payload.get("status") or "").strip().lower() == "running":
+                    return True
         resolver = globals().get("resolve_artifact_root_path")
         if not callable(resolver):
             raise RuntimeError("artifact root resolver unavailable")
