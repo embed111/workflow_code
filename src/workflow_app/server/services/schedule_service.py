@@ -1019,9 +1019,11 @@ def _ensure_self_iter_backup_schedule(
             "execution_checklist": "\n".join(
                 [
                     "1. 读取 PM版本推进计划与持续唤醒需求。",
-                    "2. 检查 prod 的 schedules、assignment graph、ready/running 节点和最近 runs。",
-                    "3. 若主链断开，补一条未来可执行入口或当前版本任务。",
-                    "4. 输出本次保底巡检结论与下一步建议。",
+                    "2. 检查 prod 的 schedules、assignment graph、ready/running 节点、最近 runs 与 `/api/runtime-upgrade/status`。",
+                    "3. 若 `can_upgrade=true` 且当前无运行中任务，直接调用 `/api/runtime-upgrade/apply` 完成无痛升级，再继续巡检。",
+                    "4. 若主链断开，补一条未来可执行入口或当前版本任务。",
+                    "5. 更新 `.codex/memory/...` 时，在 `next` 明确写出下一次主线/保底触发时间。",
+                    "6. 输出本次保底巡检结论与下一步建议。",
                 ]
             ).strip(),
             "done_definition": "保底巡检完成后，prod 至少保留一条未来可执行的 workflow 主线入口，且本次结论可追溯。",

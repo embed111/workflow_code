@@ -67,11 +67,13 @@ def _assignment_self_iteration_schedule_payload(
                 f"1. 先读取 `{version_plan_path}`，确认当前 active 版本和当前优先任务包。",
                 f"2. 同时对照 `{wake_requirement_path}`，确保本轮推进不会把持续唤醒和 7x24 连续性做断。",
                 "3. 再检查 healthz、dashboard、assignments、schedules、runs 的真实状态，不要只看前端表象。",
-                "4. 优先推进当前 active 版本里最高优先级且未完成的工程质量/稳定性任务，不要跳版抢做新功能。",
-                "5. 若当前任务包已完成，先更新版本计划状态，再挑同版本下一个 queued 包；只有当前版本出口门槛满足后才切到下一版本。",
-                "6. 如需多人协作，给 workflow_devmate / workflow_testmate / workflow_qualitymate / workflow_bugmate 创建或续挂对应任务。",
-                "7. 在代码工作区完成最小必要改动并跑命中改动面的验证。",
-                "8. 输出本轮结论、证据路径，并确保系统已经挂上下一轮可执行任务或唤醒计划。",
+                "4. 检查 `/api/runtime-upgrade/status`；若 `can_upgrade=true` 且当前无运行中任务，直接调用 `/api/runtime-upgrade/apply` 完成无痛升级，并在重连后继续推进。",
+                "5. 优先推进当前 active 版本里最高优先级且未完成的工程质量/稳定性任务，不要跳版抢做新功能。",
+                "6. 若当前任务包已完成，先更新版本计划状态，再挑同版本下一个 queued 包；只有当前版本出口门槛满足后才切到下一版本。",
+                "7. 如需多人协作，给 workflow_devmate / workflow_testmate / workflow_qualitymate / workflow_bugmate 创建或续挂对应任务。",
+                "8. 在代码工作区完成最小必要改动并跑命中改动面的验证。",
+                "9. 更新 `.codex/memory/...` 时，在 `next` 明确写出下一次主线/保底触发时间。",
+                "10. 输出本轮结论、证据路径，并确保系统已经挂上下一轮可执行任务或唤醒计划。",
             ]
         ).strip(),
         "done_definition": "\n".join(
@@ -199,9 +201,11 @@ def _assignment_pm_wake_schedule_payload(
         "execution_checklist": "\n".join(
             [
                 f"1. 读取 `{version_plan_path}` 与 `{wake_requirement_path}`。",
-                "2. 检查 prod 当前 schedules、assignment graph、ready/running 节点和最近 runs 真相。",
-                "3. 若 [持续迭代] workflow 没有未来入口，立即补一条未来可执行入口或当前版本任务。",
-                "4. 输出本次保底巡检结论、证据路径和下一次建议唤醒时间。",
+                "2. 检查 prod 当前 schedules、assignment graph、ready/running 节点、最近 runs 与 `/api/runtime-upgrade/status` 真相。",
+                "3. 若 `can_upgrade=true` 且当前无运行中任务，直接调用 `/api/runtime-upgrade/apply` 完成无痛升级，再继续巡检。",
+                "4. 若 [持续迭代] workflow 没有未来入口，立即补一条未来可执行入口或当前版本任务。",
+                "5. 更新 `.codex/memory/...` 时，在 `next` 明确写出下一次主线/保底触发时间。",
+                "6. 输出本次保底巡检结论、证据路径和下一次建议唤醒时间。",
             ]
         ).strip(),
         "done_definition": "\n".join(

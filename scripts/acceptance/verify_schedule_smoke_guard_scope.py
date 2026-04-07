@@ -64,10 +64,33 @@ def main() -> int:
         "expected_artifact": "smoke-report",
         "launch_summary": "生产基线 smoke：验证定时命中到任务中心真实执行链",
     }
+    expired_smoke_schedule = {
+        "assigned_agent_id": "workflow",
+        "schedule_name": "[持续迭代] workflow",
+        "expected_artifact": "continuous-improvement-report.md",
+        "launch_summary": "上一轮任务已经结束，请继续作为 workflow 的长期负责人推进 7x24 连续迭代。",
+        "execution_checklist": "输出本轮结论，并确保系统已经挂上下一轮可执行任务或唤醒计划。",
+    }
 
     self_iter_gate = ws._check_self_iter_gate(cfg, self_iter_schedule)
     pm_awake_gate = ws._check_self_iter_gate(cfg, pm_awake_schedule)
     smoke_gate = ws._check_self_iter_gate(cfg, smoke_schedule)
+    (runtime_root / ".test" / "schedule_smoke_baseline.latest.json").write_text(
+        json.dumps(
+            {
+                "ok": True,
+                "pass": True,
+                "executed_at": "2026-04-06T12:00:00+08:00",
+                "environment": "prod",
+                "schedule_id": "sch-smoke-baseline",
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    expired_gate = ws._check_self_iter_gate(cfg, expired_smoke_schedule)
 
     assert bool(self_iter_gate.get("allow")) is False, self_iter_gate
     assert str(self_iter_gate.get("guard_state") or "").strip() == "blocked_without_smoke", self_iter_gate
@@ -75,6 +98,8 @@ def main() -> int:
     assert str(pm_awake_gate.get("guard_state") or "").strip() == "non_self_iteration", pm_awake_gate
     assert bool(smoke_gate.get("allow")) is True, smoke_gate
     assert str(smoke_gate.get("guard_state") or "").strip() == "smoke_baseline_run", smoke_gate
+    assert bool(expired_gate.get("allow")) is True, expired_gate
+    assert str(expired_gate.get("guard_state") or "").strip() == "degraded_expired_smoke", expired_gate
 
     print(
         json.dumps(
@@ -83,6 +108,7 @@ def main() -> int:
                 "self_iteration_guard_state": self_iter_gate.get("guard_state"),
                 "pm_awake_guard_state": pm_awake_gate.get("guard_state"),
                 "smoke_guard_state": smoke_gate.get("guard_state"),
+                "expired_guard_state": expired_gate.get("guard_state"),
             },
             ensure_ascii=False,
             indent=2,

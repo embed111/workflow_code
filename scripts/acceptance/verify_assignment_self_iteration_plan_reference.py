@@ -31,6 +31,9 @@ def main() -> int:
     assert "docs/workflow/requirements/需求详情-pm持续唤醒与清醒维持.md" in launch_summary, payload
     assert "当前 active 版本" in execution_checklist, payload
     assert "工程质量/稳定性任务" in execution_checklist, payload
+    assert "/api/runtime-upgrade/status" in execution_checklist, payload
+    assert "/api/runtime-upgrade/apply" in execution_checklist, payload
+    assert "在 `next` 明确写出下一次主线/保底触发时间" in execution_checklist, payload
     assert "下一次唤醒已经排上" in done_definition, payload
 
     print(

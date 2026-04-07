@@ -21,7 +21,9 @@ def _assignment_execution_thread_should_daemon(operator: str) -> bool:
     if raw in {"0", "false", "no", "off"}:
         return False
     operator_text = str(operator or "").strip().lower()
-    if operator_text == "pm-manual-recovery":
+    # PM-triggered one-shot dispatches can originate from a short-lived local process.
+    # Keep worker threads non-daemon so helper runs are not orphaned when that host exits.
+    if operator_text.startswith("pm-"):
         return False
     return True
 
