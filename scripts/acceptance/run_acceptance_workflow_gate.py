@@ -422,6 +422,32 @@ def run_schedule_runtime_reconciliation_probe(repo_root: Path) -> tuple[bool, di
     return ok, detail
 
 
+def run_schedule_trigger_terminal_status_repair_probe(repo_root: Path) -> tuple[bool, dict[str, object]]:
+    probe = (repo_root / "scripts" / "acceptance" / "verify_schedule_trigger_terminal_status_repair.py").resolve()
+    proc = subprocess.run(
+        [sys.executable, str(probe)],
+        cwd=str(repo_root),
+        capture_output=True,
+        text=True,
+    )
+    detail: dict[str, object] = {
+        "script": probe.as_posix(),
+        "returncode": int(proc.returncode),
+    }
+    stdout = str(proc.stdout or "").strip()
+    stderr = str(proc.stderr or "").strip()
+    if stdout:
+        try:
+            detail["payload"] = json.loads(stdout)
+        except Exception:
+            detail["stdout"] = stdout
+    if stderr:
+        detail["stderr"] = stderr
+    payload = detail.get("payload") if isinstance(detail.get("payload"), dict) else {}
+    ok = proc.returncode == 0 and bool((payload or {}).get("ok", proc.returncode == 0))
+    return ok, detail
+
+
 def run_runtime_process_instance_probe(repo_root: Path) -> tuple[bool, dict[str, object]]:
     probe = (repo_root / "scripts" / "acceptance" / "verify_runtime_process_instance_fallback.py").resolve()
     proc = subprocess.run(
@@ -714,6 +740,16 @@ def main() -> int:
         )
         if not schedule_runtime_ok:
             errors.append("schedule assignment runtime reconciliation probe failed")
+        schedule_terminal_truth_ok, schedule_terminal_truth_detail = run_schedule_trigger_terminal_status_repair_probe(repo_root)
+        results.append(
+            (
+                "schedule_trigger_terminal_status_repair",
+                schedule_terminal_truth_ok,
+                schedule_terminal_truth_detail,
+            )
+        )
+        if not schedule_terminal_truth_ok:
+            errors.append("schedule trigger terminal status repair probe failed")
         transient_retry_ok, transient_retry_detail = run_assignment_transient_retry_probe(repo_root)
         results.append(
             (

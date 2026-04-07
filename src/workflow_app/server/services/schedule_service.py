@@ -76,6 +76,9 @@ SCHEDULE_RESULT_TEXT = {
     "succeeded": "已成功",
     "failed": "已失败",
 }
+SCHEDULE_TERMINAL_RESULT_STATUSES = frozenset({"succeeded", "failed"})
+SCHEDULE_FAILED_TRIGGER_STATUSES = frozenset({"failed", "dispatch_failed", "create_failed"})
+SCHEDULE_PLACEHOLDER_TRIGGER_MESSAGES = frozenset({"", "dispatch_requested"})
 SCHEDULE_EVENT_LOG = Path("logs") / "events" / "schedules.jsonl"
 SCHEDULE_ASSIGNMENT_SOURCE_WORKFLOW = "workflow-ui"
 SCHEDULE_ASSIGNMENT_GRAPH_NAME = "任务中心全局主图"
@@ -1674,6 +1677,43 @@ def _enrich_trigger(
     if payload["trigger_status"] in {"create_failed", "dispatch_failed"} and payload.get("result_status") == "pending":
         payload["result_status"] = "failed"
         payload["result_status_text"] = SCHEDULE_RESULT_TEXT["failed"]
+    trigger_instance_id = str(payload.get("trigger_instance_id") or "").strip()
+    result_status = str(payload.get("result_status") or "").strip().lower()
+    trigger_status = str(payload.get("trigger_status") or "").strip().lower()
+    trigger_message = str(payload.get("trigger_message") or "").strip()
+    desired_message = str(
+        payload.get("assignment_status_text") or payload.get("result_status_text") or trigger_message
+    ).strip()
+    status_changed = False
+    if result_status in SCHEDULE_TERMINAL_RESULT_STATUSES:
+        if result_status == "succeeded":
+            status_changed = trigger_status != "succeeded"
+            if status_changed:
+                payload["trigger_status"] = "succeeded"
+        elif trigger_status not in SCHEDULE_FAILED_TRIGGER_STATUSES:
+            status_changed = trigger_status != "failed"
+            if status_changed:
+                payload["trigger_status"] = "failed"
+        message_changed = bool(desired_message) and (
+            status_changed or trigger_message in SCHEDULE_PLACEHOLDER_TRIGGER_MESSAGES
+        )
+        if message_changed:
+            payload["trigger_message"] = desired_message
+        if conn is not None and trigger_instance_id and (status_changed or message_changed):
+            conn.execute(
+                """
+                UPDATE schedule_trigger_instances
+                SET trigger_status=?,trigger_message=?,updated_at=?
+                WHERE trigger_instance_id=?
+                """,
+                (
+                    str(payload.get("trigger_status") or "").strip(),
+                    str(payload.get("trigger_message") or "").strip(),
+                    _now_text(),
+                    trigger_instance_id,
+                ),
+            )
+            conn.commit()
     return payload
 
 
