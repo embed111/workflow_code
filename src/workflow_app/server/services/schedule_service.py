@@ -1726,6 +1726,90 @@ def _schedule_trigger_projection(schedule: dict[str, Any]) -> dict[str, Any]:
     return {"next_trigger_at": next_at, "next_trigger_text": next_at}
 
 
+def _is_once_only_schedule(schedule: dict[str, Any]) -> bool:
+    rules = list(schedule.get("rule_sets") or [])
+    if not rules:
+        return False
+    return all(str(rule.get("rule_type") or "").strip().lower() == "once" for rule in rules)
+
+
+def _repair_schedule_plan_truth(
+    conn: sqlite3.Connection | None,
+    *,
+    schedule: dict[str, Any],
+    latest_trigger: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    payload = dict(schedule or {})
+    schedule_id = str(payload.get("schedule_id") or "").strip()
+    changed = False
+
+    if latest_trigger:
+        desired_last_trigger_at = str(latest_trigger.get("planned_trigger_at") or "").strip()
+        desired_last_result_status = (
+            str(latest_trigger.get("result_status") or "").strip().lower()
+            or str(payload.get("last_result_status") or "pending").strip().lower()
+            or "pending"
+        )
+        desired_last_result_ticket_id = str(latest_trigger.get("assignment_ticket_id") or "").strip()
+        desired_last_result_node_id = str(latest_trigger.get("assignment_node_id") or "").strip()
+        if desired_last_trigger_at != str(payload.get("last_trigger_at") or "").strip():
+            payload["last_trigger_at"] = desired_last_trigger_at
+            changed = True
+        if desired_last_result_status != str(payload.get("last_result_status") or "").strip().lower():
+            payload["last_result_status"] = desired_last_result_status
+            changed = True
+        if desired_last_result_ticket_id != str(payload.get("last_result_ticket_id") or "").strip():
+            payload["last_result_ticket_id"] = desired_last_result_ticket_id
+            changed = True
+        if desired_last_result_node_id != str(payload.get("last_result_node_id") or "").strip():
+            payload["last_result_node_id"] = desired_last_result_node_id
+            changed = True
+
+    projection = _schedule_trigger_projection(payload)
+    if str(projection.get("next_trigger_at") or "").strip() != str(payload.get("next_trigger_at") or "").strip():
+        payload["next_trigger_at"] = str(projection.get("next_trigger_at") or "").strip()
+        changed = True
+
+    result_status = str(payload.get("last_result_status") or "").strip().lower()
+    if (
+        payload.get("enabled")
+        and _is_once_only_schedule(payload)
+        and not str(projection.get("next_trigger_at") or "").strip()
+        and result_status in SCHEDULE_TERMINAL_RESULT_STATUSES
+    ):
+        payload["enabled"] = False
+        projection = _schedule_trigger_projection(payload)
+        changed = True
+
+    payload.update(projection)
+    payload["last_result_status_text"] = SCHEDULE_RESULT_TEXT.get(
+        str(payload.get("last_result_status") or "pending").strip().lower(),
+        SCHEDULE_RESULT_TEXT["pending"],
+    )
+
+    if conn is not None and schedule_id and changed:
+        conn.execute(
+            """
+            UPDATE schedule_plans
+            SET enabled=?,next_trigger_at=?,last_trigger_at=?,last_result_status=?,last_result_ticket_id=?,last_result_node_id=?,updated_at=?
+            WHERE schedule_id=?
+            """,
+            (
+                1 if bool(payload.get("enabled")) else 0,
+                str(payload.get("next_trigger_at") or "").strip(),
+                str(payload.get("last_trigger_at") or "").strip(),
+                str(payload.get("last_result_status") or "pending").strip().lower() or "pending",
+                str(payload.get("last_result_ticket_id") or "").strip(),
+                str(payload.get("last_result_node_id") or "").strip(),
+                _now_text(),
+                schedule_id,
+            ),
+        )
+        conn.commit()
+
+    return payload
+
+
 def _load_latest_trigger_rows(
     conn: sqlite3.Connection,
     *,
@@ -1770,7 +1854,6 @@ def _build_schedule_items(
     snapshot_cache: dict[str, dict[str, str]] = {}
     for row in rows:
         schedule = _row_to_schedule(row, conn=conn, snapshot_cache=snapshot_cache)
-        schedule.update(_schedule_trigger_projection(schedule))
         latest = latest_rows.get(schedule["schedule_id"])
         enriched = (
             _enrich_trigger(
@@ -1783,6 +1866,7 @@ def _build_schedule_items(
             if latest is not None
             else None
         )
+        schedule = _repair_schedule_plan_truth(conn, schedule=schedule, latest_trigger=enriched)
         if enriched:
             schedule["last_result_status"] = str(enriched.get("result_status") or "pending")
             schedule["last_result_status_text"] = str(enriched.get("result_status_text") or SCHEDULE_RESULT_TEXT["pending"])
@@ -1800,33 +1884,28 @@ def list_schedule_preview(root: Path, *, limit: int = 8) -> dict[str, Any]:
     preview_limit = max(1, int(limit or 0))
     conn = connect_db(root)
     try:
-        total_row = conn.execute(
-            """
-            SELECT COUNT(1) AS total_count
-            FROM schedule_plans
-            WHERE enabled=1 AND deleted_at=''
-            """
-        ).fetchone()
         rows = conn.execute(
             """
             SELECT *
             FROM schedule_plans
             WHERE enabled=1 AND deleted_at=''
             ORDER BY updated_at DESC, created_at DESC
-            LIMIT ?
             """,
-            (preview_limit,),
         ).fetchall()
         latest_rows = _load_latest_trigger_rows(
             conn,
             schedule_ids=[str(item["schedule_id"] or "").strip() for item in rows],
         )
-        items = _build_schedule_items(root, rows, latest_rows=latest_rows, conn=conn)
+        items = [
+            item
+            for item in _build_schedule_items(root, rows, latest_rows=latest_rows, conn=conn)
+            if bool(item.get("enabled"))
+        ]
     finally:
         conn.close()
     return {
-        "items": items,
-        "total": int((total_row or {"total_count": 0})["total_count"] or 0),
+        "items": items[:preview_limit],
+        "total": len(items),
     }
 
 
@@ -1875,9 +1954,13 @@ def get_schedule_detail(root: Path, schedule_id: str) -> dict[str, Any]:
             )
             for item in trigger_rows
         ]
+        schedule = _repair_schedule_plan_truth(
+            conn,
+            schedule=schedule,
+            latest_trigger=dict(recent[0] or {}) if recent else None,
+        )
     finally:
         conn.close()
-    schedule.update(_schedule_trigger_projection(schedule))
     future = _future_triggers(list(schedule.get("rule_sets") or []), start_dt=_minute_floor(_now_bj()), limit=8)
     if recent:
         latest = dict(recent[0] or {})

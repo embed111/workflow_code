@@ -448,6 +448,32 @@ def run_schedule_trigger_terminal_status_repair_probe(repo_root: Path) -> tuple[
     return ok, detail
 
 
+def run_schedule_exhausted_once_plan_repair_probe(repo_root: Path) -> tuple[bool, dict[str, object]]:
+    probe = (repo_root / "scripts" / "acceptance" / "verify_schedule_exhausted_once_plan_repair.py").resolve()
+    proc = subprocess.run(
+        [sys.executable, str(probe)],
+        cwd=str(repo_root),
+        capture_output=True,
+        text=True,
+    )
+    detail: dict[str, object] = {
+        "script": probe.as_posix(),
+        "returncode": int(proc.returncode),
+    }
+    stdout = str(proc.stdout or "").strip()
+    stderr = str(proc.stderr or "").strip()
+    if stdout:
+        try:
+            detail["payload"] = json.loads(stdout)
+        except Exception:
+            detail["stdout"] = stdout
+    if stderr:
+        detail["stderr"] = stderr
+    payload = detail.get("payload") if isinstance(detail.get("payload"), dict) else {}
+    ok = proc.returncode == 0 and bool((payload or {}).get("ok", proc.returncode == 0))
+    return ok, detail
+
+
 def run_runtime_process_instance_probe(repo_root: Path) -> tuple[bool, dict[str, object]]:
     probe = (repo_root / "scripts" / "acceptance" / "verify_runtime_process_instance_fallback.py").resolve()
     proc = subprocess.run(
@@ -750,6 +776,16 @@ def main() -> int:
         )
         if not schedule_terminal_truth_ok:
             errors.append("schedule trigger terminal status repair probe failed")
+        schedule_exhausted_once_ok, schedule_exhausted_once_detail = run_schedule_exhausted_once_plan_repair_probe(repo_root)
+        results.append(
+            (
+                "schedule_exhausted_once_plan_repair",
+                schedule_exhausted_once_ok,
+                schedule_exhausted_once_detail,
+            )
+        )
+        if not schedule_exhausted_once_ok:
+            errors.append("schedule exhausted once plan repair probe failed")
         transient_retry_ok, transient_retry_detail = run_assignment_transient_retry_probe(repo_root)
         results.append(
             (
