@@ -11,6 +11,11 @@ ASSIGNMENT_PM_WAKE_EXPECTED_ARTIFACT = "workflow-pm-wake-summary"
 ASSIGNMENT_SELF_ITERATION_EXPECTED_ARTIFACT = "continuous-improvement-report.md"
 ASSIGNMENT_SELF_ITERATION_VERSION_PLAN_PATH = "docs/workflow/governance/PM版本推进计划.md"
 ASSIGNMENT_SELF_ITERATION_WAKE_REQUIREMENT_PATH = "docs/workflow/requirements/需求详情-pm持续唤醒与清醒维持.md"
+ASSIGNMENT_SELF_UPGRADE_HINT = (
+    "若只剩当前主线/巡检节点占用 running 槽，可带 `exclude_assignment_ticket_id` / "
+    "`exclude_assignment_node_id` 再复核 `/api/runtime-upgrade/status`，确认后直接调用 "
+    "`/api/runtime-upgrade/apply`。"
+)
 
 
 def _assignment_self_iteration_enabled(task_record: dict[str, Any], node_record: dict[str, Any]) -> bool:
@@ -68,6 +73,7 @@ def _assignment_self_iteration_schedule_payload(
                 f"2. 同时对照 `{wake_requirement_path}`，确保本轮推进不会把持续唤醒和 7x24 连续性做断。",
                 "3. 再检查 healthz、dashboard、assignments、schedules、runs 的真实状态，不要只看前端表象。",
                 "4. 检查 `/api/runtime-upgrade/status`；若 `can_upgrade=true` 且当前无运行中任务，直接调用 `/api/runtime-upgrade/apply` 完成无痛升级，并在重连后继续推进。",
+                f"4.1 {ASSIGNMENT_SELF_UPGRADE_HINT}",
                 "5. 优先推进当前 active 版本里最高优先级且未完成的工程质量/稳定性任务，不要跳版抢做新功能。",
                 "6. 若当前任务包已完成，先更新版本计划状态，再挑同版本下一个 queued 包；只有当前版本出口门槛满足后才切到下一版本。",
                 "7. 如需多人协作，给 workflow_devmate / workflow_testmate / workflow_qualitymate / workflow_bugmate 创建或续挂对应任务。",
@@ -210,6 +216,7 @@ def _assignment_pm_wake_schedule_payload(
                 f"1. 读取 `{version_plan_path}` 与 `{wake_requirement_path}`。",
                 "2. 检查 prod 当前 schedules、assignment graph、ready/running 节点、最近 runs 与 `/api/runtime-upgrade/status` 真相。",
                 "3. 若 `can_upgrade=true` 且当前无运行中任务，直接调用 `/api/runtime-upgrade/apply` 完成无痛升级，再继续巡检。",
+                f"3.1 {ASSIGNMENT_SELF_UPGRADE_HINT}",
                 "4. 若 [持续迭代] workflow 没有未来入口，立即补一条未来可执行入口或当前版本任务。",
                 "5. 更新 `.codex/memory/...` 时，在 `next` 明确写出下一次主线/保底触发时间。",
                 "6. 输出本次保底巡检结论、证据路径和下一次建议唤醒时间。",

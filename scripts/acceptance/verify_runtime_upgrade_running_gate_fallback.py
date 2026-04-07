@@ -42,16 +42,18 @@ def main() -> int:
     ), patch.object(runtime_upgrade.ws, "get_assignment_runtime_metrics", return_value=raw_metrics), patch(
         "workflow_app.server.api.dashboard._workboard_payload", return_value=workboard
     ):
-        running_task_count, agent_call_count = runtime_upgrade._running_gate_payload(cfg, state)
+        running_task_count, agent_call_count, gate_meta = runtime_upgrade._running_gate_payload(cfg, state)
 
     assert running_task_count == 1, (running_task_count, agent_call_count)
     assert agent_call_count == 1, (running_task_count, agent_call_count)
+    assert not bool(gate_meta.get("running_gate_exclusion_requested")), gate_meta
     print(
         json.dumps(
             {
                 "ok": True,
                 "running_task_count": running_task_count,
                 "agent_call_count": agent_call_count,
+                "gate_meta": gate_meta,
             },
             ensure_ascii=False,
             indent=2,
