@@ -128,39 +128,53 @@ def _normalize_runtime_root(value: Path | str | None) -> Path | None:
 
 def _resolve_runtime_process_context(runtime_root: Path | str | None = None) -> dict[str, Any]:
     resolved_root = _normalize_runtime_root(runtime_root)
-    runtime_env = current_runtime_environment()
-    if runtime_env == "source" and isinstance(resolved_root, Path) and resolved_root.parent.name == "runtime":
-        fallback_env = str(resolved_root.name or "").strip().lower()
-        if fallback_env:
-            runtime_env = fallback_env
+    runtime_root_env = ""
+    runtime_root_control_root = None
+    if isinstance(resolved_root, Path) and resolved_root.parent.name == "runtime":
+        runtime_root_env = str(resolved_root.name or "").strip().lower()
+        runtime_root_control_root = resolved_root.parent.parent.resolve(strict=False)
 
-    control_root = current_runtime_control_root()
-    if not isinstance(control_root, Path) and isinstance(resolved_root, Path) and resolved_root.parent.name == "runtime":
-        control_root = resolved_root.parent.parent.resolve(strict=False)
+    runtime_env = runtime_root_env or current_runtime_environment()
+    control_root = runtime_root_control_root or current_runtime_control_root()
 
-    manifest_path = current_runtime_manifest_path()
-    if not isinstance(manifest_path, Path) and isinstance(control_root, Path) and runtime_env:
-        manifest_path = (control_root / "envs" / f"{runtime_env}.json").resolve(strict=False)
+    manifest_path = None
+    if isinstance(runtime_root_control_root, Path) and runtime_env:
+        manifest_path = (runtime_root_control_root / "envs" / f"{runtime_env}.json").resolve(strict=False)
+    else:
+        manifest_path = current_runtime_manifest_path()
+        if not isinstance(manifest_path, Path) and isinstance(control_root, Path) and runtime_env:
+            manifest_path = (control_root / "envs" / f"{runtime_env}.json").resolve(strict=False)
 
     manifest = _read_json(manifest_path) if isinstance(manifest_path, Path) else {}
 
-    deploy_root = _env_path(RUNTIME_DEPLOY_ROOT_VAR)
-    if not isinstance(deploy_root, Path):
+    deploy_root = None
+    if isinstance(runtime_root_control_root, Path):
         deploy_root_text = str(manifest.get("deploy_root") or "").strip()
         if deploy_root_text:
             deploy_root = Path(deploy_root_text).resolve(strict=False)
-        elif isinstance(control_root, Path) and control_root.parent.name == ".running" and runtime_env:
-            deploy_root = (control_root.parent / runtime_env).resolve(strict=False)
+        elif runtime_env:
+            deploy_root = (runtime_root_control_root.parent / runtime_env).resolve(strict=False)
+    else:
+        deploy_root = _env_path(RUNTIME_DEPLOY_ROOT_VAR)
+        if not isinstance(deploy_root, Path):
+            deploy_root_text = str(manifest.get("deploy_root") or "").strip()
+            if deploy_root_text:
+                deploy_root = Path(deploy_root_text).resolve(strict=False)
+            elif isinstance(control_root, Path) and control_root.parent.name == ".running" and runtime_env:
+                deploy_root = (control_root.parent / runtime_env).resolve(strict=False)
 
-    pid_path = _env_path(RUNTIME_PID_FILE_VAR)
-    if not isinstance(pid_path, Path) and isinstance(control_root, Path) and runtime_env:
-        pid_path = (control_root / "pids" / f"{runtime_env}.pid").resolve(strict=False)
+    if isinstance(runtime_root_control_root, Path) and runtime_env:
+        pid_path = (runtime_root_control_root / "pids" / f"{runtime_env}.pid").resolve(strict=False)
+        instance_path = (runtime_root_control_root / "instances" / f"{runtime_env}.json").resolve(strict=False)
+    else:
+        pid_path = _env_path(RUNTIME_PID_FILE_VAR)
+        if not isinstance(pid_path, Path) and isinstance(control_root, Path) and runtime_env:
+            pid_path = (control_root / "pids" / f"{runtime_env}.pid").resolve(strict=False)
+        instance_path = _env_path(RUNTIME_INSTANCE_FILE_VAR)
+        if not isinstance(instance_path, Path) and isinstance(control_root, Path) and runtime_env:
+            instance_path = (control_root / "instances" / f"{runtime_env}.json").resolve(strict=False)
 
-    instance_path = _env_path(RUNTIME_INSTANCE_FILE_VAR)
-    if not isinstance(instance_path, Path) and isinstance(control_root, Path) and runtime_env:
-        instance_path = (control_root / "instances" / f"{runtime_env}.json").resolve(strict=False)
-
-    version = str(os.getenv(RUNTIME_VERSION_VAR) or manifest.get("current_version") or manifest.get("version") or "").strip()
+    version = str(manifest.get("current_version") or manifest.get("version") or os.getenv(RUNTIME_VERSION_VAR) or "").strip()
 
     return {
         "runtime_root": resolved_root,

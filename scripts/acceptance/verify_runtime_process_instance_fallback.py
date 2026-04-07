@@ -54,12 +54,23 @@ def main() -> int:
                 encoding="utf-8",
             )
 
+            poisoned_root = temp_root / "poisoned-control"
+            os.environ["WORKFLOW_RUNTIME_ENV"] = "prod"
+            os.environ["WORKFLOW_RUNTIME_CONTROL_ROOT"] = str(poisoned_root)
+            os.environ["WORKFLOW_RUNTIME_MANIFEST_PATH"] = str(poisoned_root / "envs" / "prod.json")
+            os.environ["WORKFLOW_RUNTIME_DEPLOY_ROOT"] = str(temp_root / "poisoned-prod")
+            os.environ["WORKFLOW_RUNTIME_VERSION"] = "poisoned-version"
+            os.environ["WORKFLOW_RUNTIME_PID_FILE"] = str(poisoned_root / "pids" / "prod.pid")
+            os.environ["WORKFLOW_RUNTIME_INSTANCE_FILE"] = str(poisoned_root / "instances" / "prod.json")
+
             runtime_upgrade_service.runtime_process_start(host="127.0.0.1", port=8090, runtime_root=runtime_root)
 
             pid_path = control_root / "pids" / "prod.pid"
             instance_path = control_root / "instances" / "prod.json"
             assert pid_path.exists(), pid_path
             assert instance_path.exists(), instance_path
+            assert not (poisoned_root / "pids" / "prod.pid").exists(), poisoned_root
+            assert not (poisoned_root / "instances" / "prod.json").exists(), poisoned_root
 
             instance_payload = json.loads(instance_path.read_text(encoding="utf-8"))
             pid_value = int(pid_path.read_text(encoding="utf-8").strip())
@@ -85,6 +96,7 @@ def main() -> int:
                         "ok": True,
                         "pid_path": pid_path.as_posix(),
                         "instance_path": instance_path.as_posix(),
+                        "poisoned_root": poisoned_root.as_posix(),
                         "instance_payload": stopped_payload,
                     },
                     ensure_ascii=False,

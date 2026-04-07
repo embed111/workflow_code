@@ -68,6 +68,13 @@ def wait_task_done(base_url: str, task_id: str, timeout: int = 240) -> dict:
     raise RuntimeError(f"task timeout: {task_id}")
 
 
+def isolated_runtime_env(extra: dict[str, str] | None = None) -> dict[str, str]:
+    env = {key: value for key, value in os.environ.items() if not key.startswith("WORKFLOW_RUNTIME_")}
+    if extra:
+        env.update(extra)
+    return env
+
+
 def close_existing_sessions(base_url: str) -> int:
     status, payload = call(base_url, "GET", "/api/agents")
     if status != 200 or not payload.get("ok"):
@@ -540,11 +547,12 @@ def main() -> int:
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
-        env={
-            **os.environ,
+        env=isolated_runtime_env(
+            {
             "PATH": str(stub_bin) + os.pathsep + str(os.environ.get("PATH") or ""),
             "WORKFLOW_CODEX_BIN": stub_cmd.as_posix(),
-        },
+            }
+        ),
     )
 
     try:
