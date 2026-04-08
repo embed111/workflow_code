@@ -809,6 +809,10 @@ def _build_assignment_execution_prompt(
     expected_artifact = str(node.get("expected_artifact") or "").strip() or "未指定"
     delivery_mode = _delivery_mode_text(node.get("delivery_mode") or "none")
     receiver = str(node.get("delivery_receiver_agent_name") or node.get("delivery_receiver_agent_id") or "-").strip() or "-"
+    assigned_agent_name = (
+        str(node.get("assigned_agent_name") or node.get("assigned_agent_id") or "").strip()
+        or "当前 agent"
+    )
     delivery_target = str(
         node.get("delivery_target_agent_name")
         or node.get("delivery_target_agent_id")
@@ -828,9 +832,10 @@ def _build_assignment_execution_prompt(
         else str(node.get("delivery_info_relative_path") or _node_delivery_info_relative_path(node) or "-").strip()
         or "-"
     )
+    uses_codex_memory = _assignment_workspace_uses_codex_memory(workspace_path)
     lines = [
-        "你是 workflow 任务中心的真实执行 worker。",
-        "当前任务已经由调度器真实派发，必须在目标工作区内完成任务，并遵守该工作区的 AGENTS.md / 本地规则。",
+        f"你现在以 `{assigned_agent_name}` 本人的身份执行这轮任务，不是通用 worker 占位壳。",
+        "当前任务已经由调度器真实派发，必须在目标工作区内完成任务，并先遵守该工作区的 AGENTS.md / SOUL / USER / MEMORY 读链。",
         "",
         "任务上下文：",
         f"- ticket_id: {str(node.get('ticket_id') or '').strip()}",
@@ -867,6 +872,13 @@ def _build_assignment_execution_prompt(
         "6. 系统在收集 artifact_files 后会自动清理这些源文件；若某个文件必须继续保留在 workspace_path，就不要把它放进 artifact_files。",
         "7. 系统会在收集结果后把最终交付件投影到 delivery_inbox_path，并在同目录写入 DELIVERY_INFO.json 标记交付者与接收者；你自己仍然只能写 workspace_path。",
     ]
+    if uses_codex_memory:
+        lines.extend(
+            [
+                "8. 当前 workspace_path 使用 `.codex/memory`；本轮结束前必须同步更新当天日记，并默认使用第一人称。",
+                "9. 日记至少补齐 topic/context/actions/decisions/validation/artifacts/next；可以带一点日记感，像“我这轮/我刚刚确认到…”，但仍要结构化可检索。",
+            ]
+        )
     return "\n".join(lines).strip() + "\n"
 
 

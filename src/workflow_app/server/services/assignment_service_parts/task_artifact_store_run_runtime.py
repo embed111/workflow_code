@@ -266,6 +266,137 @@ def _resolve_assignment_artifact_source_paths(
     return resolved_paths
 
 
+def _assignment_workspace_memory_daily_path(workspace_path: Path, *, day_key: str, month_key: str) -> Path:
+    return (workspace_path / ".codex" / "memory" / month_key / f"{day_key}.md").resolve(strict=False)
+
+
+def _assignment_workspace_memory_lines(label: str, items: list[str]) -> list[str]:
+    if not items:
+        return []
+    lines = [f"- {label}:"]
+    lines.extend(f"  - {item}" for item in items if str(item or "").strip())
+    return lines
+
+
+def _assignment_workspace_memory_artifact_refs(workspace_path: Path, artifact_paths: list[str]) -> list[str]:
+    refs: list[str] = []
+    seen: set[str] = set()
+    for raw in list(artifact_paths or []):
+        text = str(raw or "").strip()
+        if not text:
+            continue
+        candidate = Path(text).resolve(strict=False)
+        if path_in_scope(candidate, workspace_path):
+            try:
+                normalized = candidate.relative_to(workspace_path).as_posix()
+            except Exception:
+                normalized = candidate.as_posix()
+        else:
+            normalized = candidate.as_posix()
+        key = normalized.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        refs.append(normalized)
+    return refs
+
+
+def _append_assignment_workspace_memory_round(
+    workspace_path_text: str,
+    *,
+    ticket_id: str,
+    node_record: dict[str, Any],
+    run_id: str,
+    exit_code: int,
+    result_ref: str,
+    summary_text: str,
+    artifact_paths: list[str],
+    warnings: list[Any],
+    appended_at: str,
+) -> dict[str, Any]:
+    workspace_text = str(workspace_path_text or "").strip()
+    if not workspace_text:
+        return {}
+    workspace_path = Path(workspace_text).resolve(strict=False)
+    if not workspace_path.exists() or not workspace_path.is_dir():
+        return {}
+    if not _assignment_workspace_uses_codex_memory(workspace_path):
+        return {}
+    now_dt = now_local()
+    month_key = now_dt.strftime("%Y-%m")
+    day_key = now_dt.strftime("%Y-%m-%d")
+    created_paths = _ensure_assignment_workspace_memory_scaffold(workspace_path)
+    daily_path = _assignment_workspace_memory_daily_path(workspace_path, day_key=day_key, month_key=month_key)
+    if not daily_path.exists():
+        return {}
+    run_marker = f"`{str(run_id or '').strip()}`"
+    existing = daily_path.read_text(encoding="utf-8")
+    if run_marker and run_marker in existing:
+        return {
+            "ok": True,
+            "daily_path": daily_path.as_posix(),
+            "created_paths": created_paths,
+            "run_id": str(run_id or "").strip(),
+            "skipped": "duplicate_run_id",
+        }
+    node_id = str(node_record.get("node_id") or "").strip()
+    node_name = str(node_record.get("node_name") or node_id or "任务执行").strip() or "任务执行"
+    assigned_agent = str(node_record.get("assigned_agent_id") or node_record.get("assigned_agent_name") or "").strip()
+    status_text = "成功" if str(node_record.get("status") or "").strip().lower() == "succeeded" else "失败"
+    topic_text = f"{node_name} {status_text}收尾"
+    summary_value = _normalize_text(summary_text, field="result_summary", required=False, max_len=600) or status_text
+    warning_items = [
+        _normalize_text(item, field="warning", required=False, max_len=200)
+        for item in list(warnings or [])
+    ]
+    warning_items = [item for item in warning_items if item]
+    artifact_refs = _assignment_workspace_memory_artifact_refs(workspace_path, artifact_paths)
+    actions = [
+        f"我刚刚完成了 `{ticket_id} / {node_id}` 的收尾回写，assigned_agent=`{assigned_agent or '-'}`。",
+        f"系统替我补记了这轮日记，run_id={run_marker}，避免我漏掉当日日记。",
+        f"我这轮的结果：{summary_value}",
+    ]
+    if created_paths:
+        actions.append("系统还顺手补齐了记忆骨架：" + "；".join(created_paths))
+    decisions = ["我已经把这轮结果落进日记，后续可以顺着这条记录继续追踪。"]
+    if status_text == "成功":
+        decisions.append("当前节点已经成功完成，任务图状态也同步回写了。")
+    else:
+        decisions.append("当前节点执行失败了，后续要按失败摘要继续排障或重跑。")
+    validation = [
+        f"run_id={run_marker}",
+        f"exit_code={int(exit_code or 0)}",
+        f"result_ref={str(result_ref or '-').strip() or '-'}",
+        f"node_status={str(node_record.get('status') or '').strip() or '-'}",
+    ]
+    if warning_items:
+        validation.append("warnings=" + "；".join(warning_items))
+    next_items = [f"如果还要继续，我下一步优先从 ticket `{ticket_id}` / node `{node_id}` 继续查看任务图与运行记录。"]
+    lines = [
+        f"### {str(appended_at or iso_ts(now_dt)).strip() or iso_ts(now_dt)} | {topic_text}",
+        f"- topic: {topic_text}",
+        (
+            "- context: "
+            + f"任务中心把 `{ticket_id} / {node_id}` 派给了 `{assigned_agent or '-'}` 工作区，这轮在执行结束后由系统帮我补记了日记。"
+        ),
+        *_assignment_workspace_memory_lines("actions", actions),
+        *_assignment_workspace_memory_lines("decisions", decisions),
+        *_assignment_workspace_memory_lines("validation", validation),
+        *_assignment_workspace_memory_lines("artifacts", artifact_refs),
+        *_assignment_workspace_memory_lines("next", next_items),
+    ]
+    daily_path.write_text(existing.rstrip() + "\n\n" + "\n".join(lines) + "\n", encoding="utf-8")
+    return {
+        "ok": True,
+        "daily_path": daily_path.as_posix(),
+        "created_paths": created_paths,
+        "run_id": str(run_id or "").strip(),
+        "node_id": node_id,
+        "status": str(node_record.get("status") or "").strip(),
+        "artifact_refs": artifact_refs,
+    }
+
+
 def _copy_assignment_artifact_source_files(
     root: Path,
     *,
@@ -853,6 +984,9 @@ def _finalize_assignment_execution_run(
         return
     success = int(exit_code or 0) == 0 and not str(failure_message or "").strip()
     upgrade_request_result: dict[str, Any] = {}
+    memory_summary_text = ""
+    memory_artifact_paths: list[str] = []
+    memory_warning_items: list[Any] = []
     if success:
         markdown_text = str(result_payload.get("artifact_markdown") or "").strip()
         artifact_source_paths = _resolve_assignment_artifact_source_paths(
@@ -921,6 +1055,9 @@ def _finalize_assignment_execution_run(
         run_record["updated_at"] = now_text
         run_record["codex_failure"] = {}
         _assignment_write_run_record(root, ticket_id=ticket_id, run_record=run_record)
+        memory_summary_text = str(result_payload.get("result_summary") or "").strip() or "执行完成"
+        memory_artifact_paths = list(node_record.get("artifact_paths") or [])
+        memory_warning_items = list(result_payload.get("warnings") or [])
         try:
             schedule_result = _assignment_queue_self_iteration_schedule(
                 root,
@@ -994,6 +1131,8 @@ def _finalize_assignment_execution_run(
             failed_at=now_text,
         )
         _assignment_write_run_record(root, ticket_id=ticket_id, run_record=run_record)
+        memory_summary_text = failure_text
+        memory_artifact_paths = list(node_record.get("artifact_paths") or [])
         try:
             schedule_result = _assignment_queue_self_iteration_schedule(
                 root,
@@ -1016,6 +1155,52 @@ def _finalize_assignment_execution_run(
                 )
         except Exception:
             pass
+    try:
+        memory_detail = _append_assignment_workspace_memory_round(
+            workspace_path_text,
+            ticket_id=ticket_id,
+            node_record=node_record,
+            run_id=run_id,
+            exit_code=exit_code,
+            result_ref=result_ref,
+            summary_text=memory_summary_text,
+            artifact_paths=memory_artifact_paths,
+            warnings=memory_warning_items,
+            appended_at=now_text,
+        )
+        if memory_detail:
+            _assignment_write_audit_entry(
+                root,
+                ticket_id=ticket_id,
+                node_id=node_id,
+                action="append_workspace_memory",
+                operator="assignment-executor",
+                reason="appended workspace daily memory after execution finalize",
+                target_status=str(node_record.get("status") or "").strip().lower() or ("succeeded" if success else "failed"),
+                detail=memory_detail,
+                created_at=now_text,
+            )
+    except Exception as exc:
+        _assignment_write_audit_entry(
+            root,
+            ticket_id=ticket_id,
+            node_id=node_id,
+            action="append_workspace_memory_failed",
+            operator="assignment-executor",
+            reason=_normalize_text(
+                f"append workspace memory failed: {exc}",
+                field="failure_reason",
+                required=True,
+                max_len=400,
+            ),
+            target_status=str(node_record.get("status") or "").strip().lower() or ("succeeded" if success else "failed"),
+            detail={
+                "workspace_path": workspace_path_text,
+                "run_id": run_id,
+                "error": str(exc),
+            },
+            created_at=now_text,
+        )
     try:
         upgrade_request_result = _assignment_maybe_request_prod_upgrade_after_finalize(
             root,
