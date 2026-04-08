@@ -1075,7 +1075,11 @@ def _assignment_refresh_structure_guides(root: Path, ticket_id: str) -> None:
 def _assignment_ensure_ticket_normalized(root: Path, ticket_id: str) -> None:
     task_path = _assignment_graph_record_path(root, ticket_id)
     if task_path.exists():
-        _assignment_repair_ticket_files(root, ticket_id)
+        # A normalized ticket is already using the current layout. Keep the
+        # hot read path to a cheap structure-guide refresh instead of a full
+        # recursive repair scan across every run/artifact file.
+        if _assignment_task_structure_needs_refresh(root, ticket_id):
+            _assignment_refresh_structure_guides(root, ticket_id)
         return
     legacy_path = _assignment_legacy_graph_record_path(root, ticket_id)
     if not legacy_path.exists():
