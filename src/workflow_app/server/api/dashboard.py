@@ -208,7 +208,7 @@ def _workboard_payload(cfg, *, include_test_data: bool) -> dict:
         queued_task_count += queued_count
         failed_task_count += failed_count
         blocked_task_count += blocked_count
-        if running_count or queued_count or failed_count or blocked_count:
+        if running_count or queued_count:
             active_agent_count += 1
         item["running"] = list(item.get("running") or [])[:4]
         item["queued"] = list(item.get("queued") or [])[:4]

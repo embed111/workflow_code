@@ -648,7 +648,7 @@
     const runningCount = groups.reduce((sum, item) => sum + item.running.length, 0);
     const queuedCount = groups.reduce((sum, item) => sum + item.queued.length, 0);
     const failedCount = groups.reduce((sum, item) => sum + item.failed.length, 0);
-    const activeAgents = groups.filter((item) => item.running.length > 0 || item.queued.length > 0 || item.failed.length > 0).length;
+    const activeAgents = groups.filter((item) => item.running.length > 0 || item.queued.length > 0).length;
     const schedulePreview = Array.isArray(metrics.schedule_workboard_preview) ? metrics.schedule_workboard_preview.slice(0, 4) : [];
     const summaryHtml =
       "<div class='assignment-panel-head'>" +
