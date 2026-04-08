@@ -123,8 +123,26 @@ def _finalize_assignment_execution_run(
                 finished_at=now_text,
             )
         else:
+            failure_base_text = str(
+                failure_message or _short_assignment_text(stderr_text, 500) or "assignment execution failed"
+            ).strip()
+            result_summary_text = str(result_payload.get("result_summary") or "").strip()
+            result_markdown_text = str(result_payload.get("artifact_markdown") or "").strip()
+            preserve_result_ref = _assignment_result_payload_has_meaningful_content(result_payload) and (
+                result_summary_text != failure_base_text
+                or bool(result_markdown_text)
+                or bool(list(result_payload.get("artifact_files") or []))
+                or bool(list(result_payload.get("warnings") or []))
+            )
             failure_text = _normalize_text(
-                failure_message or _short_assignment_text(stderr_text, 500) or "assignment execution failed",
+                (
+                    _assignment_failure_message_with_result_context(
+                        failure_base_text,
+                        result_payload=result_payload,
+                    )
+                    if preserve_result_ref
+                    else failure_base_text
+                ),
                 field="failure_reason",
                 required=True,
                 max_len=1000,
@@ -135,12 +153,12 @@ def _finalize_assignment_execution_run(
                 SET status='failed',
                     completed_at=?,
                     success_reason='',
-                    result_ref='',
+                    result_ref=?,
                     failure_reason=?,
                     updated_at=?
                 WHERE ticket_id=? AND node_id=?
                 """,
-                (now_text, failure_text, now_text, ticket_id, node_id),
+                (now_text, result_ref_ui if preserve_result_ref else "", failure_text, now_text, ticket_id, node_id),
             )
             _recompute_graph_statuses(conn, ticket_id)
             _write_assignment_audit(
@@ -207,6 +225,8 @@ def _assignment_execution_worker(
     observed_result_payload: dict[str, Any] = {}
     observed_turn_completed_at = 0.0
     forced_result_short_circuit = False
+    last_activity_lock = threading.Lock()
+    last_activity_monotonic = time.monotonic()
 
     def record_observed_result(payload: dict[str, Any]) -> None:
         nonlocal observed_result_payload
@@ -228,6 +248,15 @@ def _assignment_execution_worker(
     def observed_turn_completed_at_monotonic() -> float:
         with observed_result_lock:
             return float(observed_turn_completed_at or 0.0)
+
+    def mark_activity() -> None:
+        nonlocal last_activity_monotonic
+        with last_activity_lock:
+            last_activity_monotonic = time.monotonic()
+
+    def last_activity_monotonic_value() -> float:
+        with last_activity_lock:
+            return float(last_activity_monotonic or 0.0)
 
     def read_stream(name: str, pipe: Any, collector: list[str]) -> None:
         if pipe is None:
@@ -271,6 +300,7 @@ def _assignment_execution_worker(
                 latest_event=message_text or f"{name} 输出",
                 latest_event_at=created_at,
             )
+            mark_activity()
 
     conn = connect_db(root)
     try:
@@ -314,8 +344,7 @@ def _assignment_execution_worker(
         t_err = threading.Thread(target=read_stream, args=("stderr", proc.stderr, stderr_chunks), daemon=True)
         t_out.start()
         t_err.start()
-        started_monotonic = time.monotonic()
-        execution_timeout_s = _assignment_execution_timeout_s()
+        execution_timeout_s = _assignment_execution_activity_timeout_s()
         final_result_grace_s = _assignment_final_result_exit_grace_seconds()
         while True:
             try:
@@ -340,14 +369,26 @@ def _assignment_execution_worker(
                         pass
                     exit_code = 0
                     break
-                if (now_monotonic - started_monotonic) >= execution_timeout_s:
-                    failure_message = f"assignment execution timeout after {execution_timeout_s}s"
+                last_activity_at = last_activity_monotonic_value()
+                inactivity_age_s = _assignment_execution_activity_age_seconds(
+                    last_activity_monotonic=last_activity_at,
+                    now_monotonic=now_monotonic,
+                )
+                if _assignment_execution_activity_timed_out(
+                    last_activity_monotonic=last_activity_at,
+                    now_monotonic=now_monotonic,
+                    timeout_s=execution_timeout_s,
+                ):
+                    failure_message = _assignment_execution_timeout_message(execution_timeout_s)
                     _append_assignment_run_event(
                         files["events"],
                         event_type="execution_timeout",
                         message="执行超时，已终止 provider。",
                         created_at=iso_ts(now_local()),
-                        detail={"timeout_seconds": execution_timeout_s},
+                        detail={
+                            "timeout_seconds": execution_timeout_s,
+                            "inactivity_seconds": round(inactivity_age_s, 3),
+                        },
                     )
                     _terminate_assignment_process(proc)
                     try:
@@ -403,6 +444,12 @@ def _assignment_execution_worker(
             or "执行完成，provider 已被强制收敛。"
         )
     if failure_message:
+        has_meaningful_result = _assignment_result_payload_has_meaningful_content(result_payload)
+        if has_meaningful_result:
+            failure_message = _assignment_failure_message_with_result_context(
+                failure_message,
+                result_payload=result_payload,
+            )
         current_summary = str(result_payload.get("result_summary") or "").strip()
         if not current_summary or current_summary == "执行完成":
             result_payload["result_summary"] = failure_message

@@ -727,6 +727,89 @@ def _short_assignment_text(text: str, limit: int = 500) -> str:
     return compact[: max(0, limit - 3)].rstrip() + "..."
 
 
+def _assignment_payload_has_structured_contract_fields(raw_payload: dict[str, Any]) -> bool:
+    payload = raw_payload if isinstance(raw_payload, dict) else {}
+    if not payload:
+        return False
+    text_fields = (
+        "result_summary",
+        "summary",
+        "artifact_markdown",
+        "result_markdown",
+        "markdown",
+        "artifact_label",
+        "title",
+        "artifact_title",
+    )
+    list_fields = ("artifact_files", "artifact_paths", "files", "warnings")
+    for key in text_fields:
+        if str(payload.get(key) or "").strip():
+            return True
+    for key in list_fields:
+        if any(str(item or "").strip() for item in _safe_json_list(payload.get(key))):
+            return True
+    return False
+
+
+def _assignment_result_summary_is_startup_only(text: str) -> bool:
+    raw = str(text or "").strip()
+    if not raw or not raw.startswith("{"):
+        return False
+    payloads = _assignment_extract_json_objects(raw)
+    if not payloads:
+        return False
+    allowed_types = {"thread.started", "turn.started"}
+    for payload in payloads:
+        event_type = str((payload or {}).get("type") or "").strip().lower()
+        if event_type not in allowed_types:
+            return False
+    compact = re.sub(r"\s+", "", raw).lower()
+    return '"type":"thread.started"' in compact or '"type":"turn.started"' in compact
+
+
+def _assignment_result_payload_has_meaningful_content(result_payload: dict[str, Any]) -> bool:
+    payload = result_payload if isinstance(result_payload, dict) else {}
+    if not payload:
+        return False
+    generic_summaries = {"执行完成", "执行结束"}
+    if any(str(item or "").strip() for item in list(payload.get("artifact_files") or [])):
+        return True
+    if any(str(item or "").strip() for item in list(payload.get("warnings") or [])):
+        return True
+    summary = str(payload.get("result_summary") or payload.get("summary") or "").strip()
+    if summary and summary not in generic_summaries and not _assignment_result_summary_is_startup_only(summary):
+        return True
+    markdown = str(
+        payload.get("artifact_markdown") or payload.get("result_markdown") or payload.get("markdown") or ""
+    ).strip()
+    if markdown and markdown not in generic_summaries and not _assignment_result_summary_is_startup_only(markdown):
+        return True
+    return False
+
+
+def _assignment_failure_message_with_result_context(
+    failure_message: str,
+    *,
+    result_payload: dict[str, Any],
+) -> str:
+    failure_text = str(failure_message or "").strip()
+    if not failure_text:
+        return ""
+    if not _assignment_result_payload_has_meaningful_content(result_payload):
+        return failure_text
+    summary = _normalize_text(
+        result_payload.get("result_summary") or result_payload.get("summary") or "",
+        field="result_summary",
+        required=False,
+        max_len=240,
+    )
+    if summary and summary not in failure_text:
+        merged = f"{failure_text}；已保留结构化结果：{summary}"
+    else:
+        merged = f"{failure_text}；已保留结构化结果，可直接查看结果文件。"
+    return _normalize_text(merged, field="failure_reason", required=True, max_len=1000)
+
+
 def _normalize_assignment_execution_result(raw_payload: dict[str, Any], *, fallback_text: str, node: dict[str, Any]) -> dict[str, Any]:
     payload = raw_payload if isinstance(raw_payload, dict) else {}
     summary = _normalize_text(

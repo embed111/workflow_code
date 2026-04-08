@@ -260,6 +260,96 @@ def _assignment_live_node_ids_for_ticket(root: Path, *, ticket_id: str) -> set[s
     return live_node_ids
 
 
+def _assignment_terminal_run_truth_from_files(
+    root: Path,
+    *,
+    ticket_id: str,
+    node_id: str,
+) -> dict[str, Any]:
+    for run in _assignment_load_run_records(root, ticket_id=ticket_id, node_id=node_id):
+        status = str(run.get("status") or "").strip().lower()
+        if status not in {"succeeded", "failed", "cancelled"}:
+            continue
+        run_id = str(run.get("run_id") or "").strip()
+        if not run_id:
+            continue
+        refs = _assignment_run_file_paths(root, ticket_id, run_id)
+        result_payload = _assignment_read_json(refs["result"])
+        events = _assignment_read_jsonl(refs["events"])
+        final_event = next(
+            (
+                item
+                for item in reversed(list(events or []))
+                if str((item or {}).get("event_type") or "").strip().lower() == "final_result"
+            ),
+            {},
+        )
+        result_exists = refs["result"].exists()
+        result_ref = str(run.get("result_ref") or "").strip()
+        if not result_ref and result_exists:
+            result_ref = refs["result"].as_posix()
+        if not (
+            result_exists
+            or result_ref
+            or bool(final_event)
+            or str(run.get("finished_at") or "").strip()
+        ):
+            continue
+        return {
+            "status": status,
+            "run_record": dict(run),
+            "result_payload": result_payload if isinstance(result_payload, dict) else {},
+            "final_event": final_event if isinstance(final_event, dict) else {},
+            "result_ref": result_ref,
+        }
+    return {}
+
+
+def _assignment_project_terminal_run_truth_to_node(
+    node_record: dict[str, Any],
+    terminal_truth: dict[str, Any],
+    *,
+    now_text: str,
+) -> dict[str, Any]:
+    current = dict(node_record or {})
+    truth = dict(terminal_truth or {})
+    if not current or not truth:
+        return current
+    run_record = dict(truth.get("run_record") or {})
+    result_payload = dict(truth.get("result_payload") or {})
+    final_event = dict(truth.get("final_event") or {})
+    status = str(truth.get("status") or "").strip().lower()
+    result_ref = str(truth.get("result_ref") or "").strip()
+    completed_at = str(run_record.get("finished_at") or current.get("completed_at") or now_text).strip() or now_text
+    latest_event = str(run_record.get("latest_event") or final_event.get("message") or "").strip()
+    current["completed_at"] = completed_at
+    current["updated_at"] = now_text
+    if status == "succeeded":
+        current["status"] = "succeeded"
+        current["status_text"] = _node_status_text("succeeded")
+        current["success_reason"] = (
+            str(result_payload.get("result_summary") or "").strip()
+            or latest_event
+            or str(current.get("success_reason") or "").strip()
+            or "执行完成"
+        )
+        current["result_ref"] = result_ref
+        current["failure_reason"] = ""
+        return current
+    failure_text = (
+        latest_event
+        or str(final_event.get("message") or "").strip()
+        or str(result_payload.get("result_summary") or "").strip()
+        or ("执行已取消" if status == "cancelled" else "assignment execution failed")
+    )
+    current["status"] = "failed"
+    current["status_text"] = _node_status_text("failed")
+    current["success_reason"] = ""
+    current["result_ref"] = result_ref
+    current["failure_reason"] = failure_text
+    return current
+
+
 def _assignment_project_live_run_status_for_nodes(
     root: Path,
     *,
@@ -276,8 +366,20 @@ def _assignment_project_live_run_status_for_nodes(
         node_id = str(current.get("node_id") or "").strip()
         status = str(current.get("status") or "").strip().lower()
         if status == "running" and node_id and node_id not in live_node_ids:
-            current["status"] = "failed"
-            current["status_text"] = _node_status_text("failed")
+            terminal_truth = _assignment_terminal_run_truth_from_files(
+                root,
+                ticket_id=ticket_id,
+                node_id=node_id,
+            )
+            if terminal_truth:
+                current = _assignment_project_terminal_run_truth_to_node(
+                    current,
+                    terminal_truth,
+                    now_text=iso_ts(now_local()),
+                )
+            else:
+                current["status"] = "failed"
+                current["status_text"] = _node_status_text("failed")
         updated.append(current)
     return updated
 
@@ -407,6 +509,26 @@ def _assignment_reconcile_stale_task_state_internal(
                         True,
                     )
                 else:
+                    terminal_truth = _assignment_terminal_run_truth_from_files(
+                        root,
+                        ticket_id=ticket_id,
+                        node_id=node_id,
+                    )
+                    if terminal_truth:
+                        current = _assignment_project_terminal_run_truth_to_node(
+                            current,
+                            terminal_truth,
+                            now_text=now_text,
+                        )
+                        _assignment_persist_stale_node_terminal_state(
+                            root,
+                            task_record=task_record,
+                            node_record=current,
+                            now_text=now_text,
+                        )
+                        changed = True
+                        updated_nodes.append(current)
+                        continue
                     current["status"] = "failed"
                     current["status_text"] = _node_status_text("failed")
                     current["completed_at"] = now_text

@@ -6,6 +6,26 @@ import sys
 from pathlib import Path
 
 
+def _register_agent(ws, root: Path, *, agent_id: str, agent_workspace: Path) -> None:
+    conn = ws.connect_db(root)
+    try:
+        conn.execute(
+            """
+            INSERT OR REPLACE INTO agent_registry(agent_id,agent_name,workspace_path,updated_at)
+            VALUES (?,?,?,?)
+            """,
+            (
+                agent_id,
+                agent_id,
+                agent_workspace.as_posix(),
+                "2026-04-08T00:00:00+08:00",
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
 def main() -> int:
     workspace_root = Path(__file__).resolve().parents[2]
     src_root = workspace_root / "src"
@@ -55,6 +75,9 @@ def main() -> int:
             "operator": "test",
         },
     )
+    agent_workspace = (root / "agents" / "workflow").resolve()
+    agent_workspace.mkdir(parents=True, exist_ok=True)
+    _register_agent(ws, root, agent_id="workflow", agent_workspace=agent_workspace)
     ticket_id = str(graph.get("ticket_id") or "").strip()
     created = ws.create_assignment_node(
         cfg,
@@ -142,6 +165,9 @@ def main() -> int:
     assert str(recovered_run.get("status") or "").strip().lower() == "failed", recovered_run
     assert str(recovered_node.get("status") or "").strip().lower() == "failed", recovered_node
     assert "exit=1" in str(recovered_run.get("latest_event") or ""), recovered_run
+    assert "运行句柄缺失" not in str(recovered_node.get("failure_reason") or ""), recovered_node
+    assert "exit=1" in str(recovered_node.get("failure_reason") or ""), recovered_node
+    assert str(recovered_node.get("result_ref") or "").strip() == files["result"].as_posix(), recovered_node
 
     print(
         json.dumps(
@@ -153,6 +179,7 @@ def main() -> int:
                 "run_status": recovered_run.get("status"),
                 "node_status": recovered_node.get("status"),
                 "latest_event": recovered_run.get("latest_event"),
+                "node_result_ref": recovered_node.get("result_ref"),
             },
             ensure_ascii=False,
             indent=2,

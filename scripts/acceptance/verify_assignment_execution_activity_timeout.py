@@ -153,6 +153,7 @@ def main() -> int:
     from workflow_app.server.bootstrap import web_server_runtime as ws
 
     root, _agent_root = _create_root(ws, workspace_root, "runtime-assignment-execution-activity-timeout")
+    assert int(ws.DEFAULT_ASSIGNMENT_EXECUTION_TIMEOUT_S) >= 7200, ws.DEFAULT_ASSIGNMENT_EXECUTION_TIMEOUT_S
 
     worker_globals = ws._assignment_execution_worker.__globals__
     original_timeout = worker_globals["_assignment_execution_timeout_s"]

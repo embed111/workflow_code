@@ -1238,8 +1238,26 @@ def _finalize_assignment_execution_run(
         except Exception:
             pass
     else:
+        failure_base_text = str(
+            failure_message or _short_assignment_text(stderr_text, 500) or "assignment execution failed"
+        ).strip()
+        result_summary_text = str(result_payload.get("result_summary") or "").strip()
+        result_markdown_text = str(result_payload.get("artifact_markdown") or "").strip()
+        preserve_result_ref = _assignment_result_payload_has_meaningful_content(result_payload) and (
+            result_summary_text != failure_base_text
+            or bool(result_markdown_text)
+            or bool(list(result_payload.get("artifact_files") or []))
+            or bool(list(result_payload.get("warnings") or []))
+        )
         failure_text = _normalize_text(
-            failure_message or _short_assignment_text(stderr_text, 500) or "assignment execution failed",
+            (
+                _assignment_failure_message_with_result_context(
+                    failure_base_text,
+                    result_payload=result_payload,
+                )
+                if preserve_result_ref
+                else failure_base_text
+            ),
             field="failure_reason",
             required=True,
             max_len=1000,
@@ -1248,7 +1266,7 @@ def _finalize_assignment_execution_run(
         node_record["status_text"] = _node_status_text("failed")
         node_record["completed_at"] = now_text
         node_record["success_reason"] = ""
-        node_record["result_ref"] = ""
+        node_record["result_ref"] = result_ref if preserve_result_ref else ""
         node_record["failure_reason"] = failure_text
         node_record["updated_at"] = now_text
         task_record["updated_at"] = now_text
@@ -1290,6 +1308,7 @@ def _finalize_assignment_execution_run(
         _assignment_write_run_record(root, ticket_id=ticket_id, run_record=run_record)
         memory_summary_text = failure_text
         memory_artifact_paths = list(node_record.get("artifact_paths") or [])
+        memory_warning_items = list(result_payload.get("warnings") or []) if preserve_result_ref else []
         try:
             schedule_result = _assignment_queue_self_iteration_schedule(
                 root,
@@ -1699,6 +1718,12 @@ def _assignment_execution_worker(
             or "执行完成，provider 已被强制收敛。"
         )
     if failure_message:
+        has_meaningful_result = _assignment_result_payload_has_meaningful_content(result_payload)
+        if has_meaningful_result:
+            failure_message = _assignment_failure_message_with_result_context(
+                failure_message,
+                result_payload=result_payload,
+            )
         current_summary = str(result_payload.get("result_summary") or "").strip()
         if not current_summary or current_summary == "执行完成":
             result_payload["result_summary"] = failure_message

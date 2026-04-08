@@ -156,8 +156,8 @@ def main() -> int:
     assert second.get("assignment_status") == "failed", second
     assert str(repaired_node.get("status") or "").strip().lower() == "failed", repaired_node
     assert "运行句柄缺失" in str(repaired_node.get("failure_reason") or ""), repaired_node
-    assert first_recover_count == 1, first_audits
-    assert second_recover_count == 1, second_audits
+    assert first_recover_count == 0, first_audits
+    assert second_recover_count == 0, second_audits
 
     print(
         json.dumps(

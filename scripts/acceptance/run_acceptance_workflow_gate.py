@@ -838,6 +838,84 @@ def run_assignment_stale_recovery_cleanup_memory_probe(repo_root: Path) -> tuple
     return ok, detail
 
 
+def run_assignment_execution_activity_timeout_probe(repo_root: Path) -> tuple[bool, dict[str, object]]:
+    probe = (repo_root / "scripts" / "acceptance" / "verify_assignment_execution_activity_timeout.py").resolve()
+    proc = subprocess.run(
+        [sys.executable, str(probe)],
+        cwd=str(repo_root),
+        capture_output=True,
+        text=True,
+    )
+    detail: dict[str, object] = {
+        "script": probe.as_posix(),
+        "returncode": int(proc.returncode),
+    }
+    stdout = str(proc.stdout or "").strip()
+    stderr = str(proc.stderr or "").strip()
+    if stdout:
+        try:
+            detail["payload"] = json.loads(stdout)
+        except Exception:
+            detail["stdout"] = stdout
+    if stderr:
+        detail["stderr"] = stderr
+    payload = detail.get("payload") if isinstance(detail.get("payload"), dict) else {}
+    ok = proc.returncode == 0 and bool((payload or {}).get("ok", proc.returncode == 0))
+    return ok, detail
+
+
+def run_assignment_stale_run_recovery_probe(repo_root: Path) -> tuple[bool, dict[str, object]]:
+    probe = (repo_root / "scripts" / "acceptance" / "verify_assignment_stale_run_recovery.py").resolve()
+    proc = subprocess.run(
+        [sys.executable, str(probe)],
+        cwd=str(repo_root),
+        capture_output=True,
+        text=True,
+    )
+    detail: dict[str, object] = {
+        "script": probe.as_posix(),
+        "returncode": int(proc.returncode),
+    }
+    stdout = str(proc.stdout or "").strip()
+    stderr = str(proc.stderr or "").strip()
+    if stdout:
+        try:
+            detail["payload"] = json.loads(stdout)
+        except Exception:
+            detail["stdout"] = stdout
+    if stderr:
+        detail["stderr"] = stderr
+    payload = detail.get("payload") if isinstance(detail.get("payload"), dict) else {}
+    ok = proc.returncode == 0 and bool((payload or {}).get("ok", proc.returncode == 0))
+    return ok, detail
+
+
+def run_assignment_stale_terminal_projection_guard_probe(repo_root: Path) -> tuple[bool, dict[str, object]]:
+    probe = (repo_root / "scripts" / "acceptance" / "verify_assignment_stale_terminal_projection_guard.py").resolve()
+    proc = subprocess.run(
+        [sys.executable, str(probe)],
+        cwd=str(repo_root),
+        capture_output=True,
+        text=True,
+    )
+    detail: dict[str, object] = {
+        "script": probe.as_posix(),
+        "returncode": int(proc.returncode),
+    }
+    stdout = str(proc.stdout or "").strip()
+    stderr = str(proc.stderr or "").strip()
+    if stdout:
+        try:
+            detail["payload"] = json.loads(stdout)
+        except Exception:
+            detail["stdout"] = stdout
+    if stderr:
+        detail["stderr"] = stderr
+    payload = detail.get("payload") if isinstance(detail.get("payload"), dict) else {}
+    ok = proc.returncode == 0 and bool((payload or {}).get("ok", proc.returncode == 0))
+    return ok, detail
+
+
 def run_assignment_provider_liveness_guard_probe(repo_root: Path) -> tuple[bool, dict[str, object]]:
     probe = (repo_root / "scripts" / "acceptance" / "verify_assignment_provider_liveness_guard.py").resolve()
     proc = subprocess.run(
@@ -1252,6 +1330,42 @@ def main() -> int:
         )
         if not assignment_stale_recovery_cleanup_ok:
             errors.append("assignment stale recovery cleanup and memory probe failed")
+        assignment_execution_activity_timeout_ok, assignment_execution_activity_timeout_detail = (
+            run_assignment_execution_activity_timeout_probe(repo_root)
+        )
+        results.append(
+            (
+                "assignment_execution_activity_timeout",
+                assignment_execution_activity_timeout_ok,
+                assignment_execution_activity_timeout_detail,
+            )
+        )
+        if not assignment_execution_activity_timeout_ok:
+            errors.append("assignment execution activity timeout probe failed")
+        assignment_stale_run_recovery_ok, assignment_stale_run_recovery_detail = (
+            run_assignment_stale_run_recovery_probe(repo_root)
+        )
+        results.append(
+            (
+                "assignment_stale_run_recovery",
+                assignment_stale_run_recovery_ok,
+                assignment_stale_run_recovery_detail,
+            )
+        )
+        if not assignment_stale_run_recovery_ok:
+            errors.append("assignment stale run recovery probe failed")
+        assignment_stale_terminal_projection_guard_ok, assignment_stale_terminal_projection_guard_detail = (
+            run_assignment_stale_terminal_projection_guard_probe(repo_root)
+        )
+        results.append(
+            (
+                "assignment_stale_terminal_projection_guard",
+                assignment_stale_terminal_projection_guard_ok,
+                assignment_stale_terminal_projection_guard_detail,
+            )
+        )
+        if not assignment_stale_terminal_projection_guard_ok:
+            errors.append("assignment stale terminal projection guard probe failed")
         assignment_provider_liveness_guard_ok, assignment_provider_liveness_guard_detail = (
             run_assignment_provider_liveness_guard_probe(repo_root)
         )
