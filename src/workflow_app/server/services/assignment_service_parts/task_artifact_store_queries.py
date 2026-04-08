@@ -7,6 +7,49 @@ from workflow_app.server.services.codex_failure_contract import (
 )
 
 
+_ASSIGNMENT_STALE_RECOVERY_LOCK_GUARD = threading.Lock()
+_ASSIGNMENT_STALE_RECOVERY_LOCKS: dict[str, threading.Lock] = {}
+
+
+def _assignment_stale_recovery_lock(ticket_id: str, node_id: str) -> threading.Lock:
+    ticket_key = safe_token(str(ticket_id or ""), "", 160)
+    node_key = safe_token(str(node_id or ""), "", 160)
+    if not ticket_key or not node_key:
+        return _ASSIGNMENT_STALE_RECOVERY_LOCK_GUARD
+    lock_key = f"{ticket_key}:{node_key}"
+    with _ASSIGNMENT_STALE_RECOVERY_LOCK_GUARD:
+        existing = _ASSIGNMENT_STALE_RECOVERY_LOCKS.get(lock_key)
+        if existing is not None:
+            return existing
+        created = threading.Lock()
+        _ASSIGNMENT_STALE_RECOVERY_LOCKS[lock_key] = created
+        return created
+
+
+def _assignment_persist_stale_node_terminal_state(
+    root: Path,
+    *,
+    task_record: dict[str, Any],
+    node_record: dict[str, Any],
+    now_text: str,
+) -> None:
+    ticket_id = str(task_record.get("ticket_id") or "").strip()
+    node_id = str(node_record.get("node_id") or "").strip()
+    if not ticket_id or not node_id:
+        return
+    _assignment_write_json(_assignment_node_record_path(root, ticket_id, node_id), node_record)
+    task_snapshot = dict(task_record)
+    task_snapshot["updated_at"] = now_text
+    _assignment_write_json(_assignment_graph_record_path(root, ticket_id), task_snapshot)
+
+
+def _assignment_has_stale_recovery_audit(root: Path, *, ticket_id: str, node_id: str) -> bool:
+    return any(
+        str(item.get("action") or "").strip().lower() == "recover_stale_running"
+        for item in _assignment_load_audit_records(root, ticket_id=ticket_id, node_id=node_id, limit=32)
+    )
+
+
 def _assignment_task_visible(task_record: dict[str, Any], *, include_test_data: bool) -> bool:
     if str(task_record.get("record_state") or "active").strip().lower() == "deleted":
         return False
@@ -343,71 +386,90 @@ def _assignment_reconcile_stale_task_state_internal(
             current["updated_at"] = now_text
             changed = True
         elif status == "running" and (ticket_id, node_id) not in live_keys:
-            if _assignment_try_recover_terminal_node_from_files(
-                root,
-                ticket_id=ticket_id,
-                node_id=node_id,
-            ):
-                refreshed_task = _assignment_read_json(_assignment_graph_record_path(root, ticket_id))
-                refreshed_nodes = _assignment_load_node_records(root, ticket_id, include_deleted=True)
-                return (
-                    dict(refreshed_task or task_record),
-                    [dict(item) for item in list(refreshed_nodes or node_records)],
-                    True,
-                )
-            current["status"] = "failed"
-            current["status_text"] = _node_status_text("failed")
-            current["completed_at"] = now_text
-            current["success_reason"] = ""
-            current["result_ref"] = ""
-            current["failure_reason"] = str(
-                current.get("failure_reason") or "运行句柄缺失或 workflow 已重启，请手动重跑。"
-            ).strip()
-            current["updated_at"] = now_text
-            changed = True
-            for run in _assignment_load_run_records(root, ticket_id=ticket_id, node_id=node_id):
-                run_status = str(run.get("status") or "").strip().lower()
-                if run_status not in {"starting", "running"}:
-                    continue
-                run["status"] = "cancelled"
-                run["latest_event"] = "检测到运行句柄缺失，已自动结束当前批次。"
-                run["latest_event_at"] = now_text
-                run["finished_at"] = now_text
-                run["updated_at"] = now_text
-                _assignment_write_run_record(root, ticket_id=ticket_id, run_record=run)
-            _assignment_write_audit_entry(
-                root,
-                ticket_id=ticket_id,
-                node_id=node_id,
-                action="recover_stale_running",
-                operator="assignment-system",
-                reason="recover stale running node without live execution",
-                target_status="failed",
-                detail={},
-                created_at=now_text,
-            )
-            try:
-                schedule_result = _assignment_queue_self_iteration_schedule(
+            with _assignment_stale_recovery_lock(ticket_id, node_id):
+                latest_node = _assignment_read_json(_assignment_node_record_path(root, ticket_id, node_id))
+                latest_status = str(
+                    latest_node.get("status") or current.get("status") or ""
+                ).strip().lower()
+                if latest_node and latest_status != "running":
+                    current = dict(latest_node)
+                    changed = True
+                elif _assignment_try_recover_terminal_node_from_files(
                     root,
-                    task_record=task_record,
-                    node_record=current,
-                    result_summary=str(current.get("failure_reason") or "").strip() or "运行句柄缺失或 workflow 已重启，请手动重跑。",
-                    success=False,
-                )
-                if bool(schedule_result.get("queued")):
-                    _assignment_write_audit_entry(
-                        root,
-                        ticket_id=ticket_id,
-                        node_id=node_id,
-                        action="schedule_self_iteration",
-                        operator="assignment-system",
-                        reason="queued next self-iteration schedule after stale run recovery",
-                        target_status="failed",
-                        detail=schedule_result,
-                        created_at=now_text,
+                    ticket_id=ticket_id,
+                    node_id=node_id,
+                ):
+                    refreshed_task = _assignment_read_json(_assignment_graph_record_path(root, ticket_id))
+                    refreshed_nodes = _assignment_load_node_records(root, ticket_id, include_deleted=True)
+                    return (
+                        dict(refreshed_task or task_record),
+                        [dict(item) for item in list(refreshed_nodes or node_records)],
+                        True,
                     )
-            except Exception:
-                pass
+                else:
+                    current["status"] = "failed"
+                    current["status_text"] = _node_status_text("failed")
+                    current["completed_at"] = now_text
+                    current["success_reason"] = ""
+                    current["result_ref"] = ""
+                    current["failure_reason"] = str(
+                        current.get("failure_reason") or "运行句柄缺失或 workflow 已重启，请手动重跑。"
+                    ).strip()
+                    current["updated_at"] = now_text
+                    changed = True
+                    for run in _assignment_load_run_records(root, ticket_id=ticket_id, node_id=node_id):
+                        run_status = str(run.get("status") or "").strip().lower()
+                        if run_status not in {"starting", "running"}:
+                            continue
+                        run["status"] = "cancelled"
+                        run["latest_event"] = "检测到运行句柄缺失，已自动结束当前批次。"
+                        run["latest_event_at"] = now_text
+                        run["finished_at"] = now_text
+                        run["updated_at"] = now_text
+                        _assignment_write_run_record(root, ticket_id=ticket_id, run_record=run)
+                    # Persist the terminal node state before emitting side effects so concurrent
+                    # readers do not keep re-entering stale recovery from the old running file.
+                    _assignment_persist_stale_node_terminal_state(
+                        root,
+                        task_record=task_record,
+                        node_record=current,
+                        now_text=now_text,
+                    )
+                    if not _assignment_has_stale_recovery_audit(root, ticket_id=ticket_id, node_id=node_id):
+                        _assignment_write_audit_entry(
+                            root,
+                            ticket_id=ticket_id,
+                            node_id=node_id,
+                            action="recover_stale_running",
+                            operator="assignment-system",
+                            reason="recover stale running node without live execution",
+                            target_status="failed",
+                            detail={},
+                            created_at=now_text,
+                        )
+                        try:
+                            schedule_result = _assignment_queue_self_iteration_schedule(
+                                root,
+                                task_record=task_record,
+                                node_record=current,
+                                result_summary=str(current.get("failure_reason") or "").strip()
+                                or "运行句柄缺失或 workflow 已重启，请手动重跑。",
+                                success=False,
+                            )
+                            if bool(schedule_result.get("queued")):
+                                _assignment_write_audit_entry(
+                                    root,
+                                    ticket_id=ticket_id,
+                                    node_id=node_id,
+                                    action="schedule_self_iteration",
+                                    operator="assignment-system",
+                                    reason="queued next self-iteration schedule after stale run recovery",
+                                    target_status="failed",
+                                    detail=schedule_result,
+                                    created_at=now_text,
+                                )
+                        except Exception:
+                            pass
         updated_nodes.append(current)
     return dict(task_record), updated_nodes, changed
 
@@ -613,6 +675,7 @@ def _assignment_snapshot_from_files(
     sticky_node_ids: set[str] | None = None,
     include_scheduler: bool = True,
     include_serialized_nodes: bool = True,
+    persist_changes: bool = True,
 ) -> dict[str, Any]:
     ticket_id = _assignment_resolve_graph_ticket_id(root, ticket_id)
     task_record = _assignment_load_task_record(root, ticket_id)
@@ -631,7 +694,7 @@ def _assignment_snapshot_from_files(
         sticky_node_ids=sticky_node_ids,
         reconcile_running=reconcile_running,
     )
-    if changed:
+    if changed and persist_changes:
         _assignment_store_snapshot(root, task_record=task_record, node_records=node_records)
     active_nodes = _assignment_active_node_records(node_records)
     edges = _assignment_active_edges(task_record, active_nodes)

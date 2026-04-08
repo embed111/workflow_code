@@ -64,10 +64,17 @@ else {
     Write-Host "[workflow] skip backfill."
 }
 
-Write-Host "[workflow] refresh status ..."
-& python scripts/bin/workflow_entry_cli.py --root $runtimeRootPath --mode status
-if ($LASTEXITCODE -ne 0) {
-    throw "status failed with exit code $LASTEXITCODE"
+$runtimeEnvironment = [string]([Environment]::GetEnvironmentVariable('WORKFLOW_RUNTIME_ENV', 'Process'))
+$skipStatusRefresh = $SkipBackfill -and ($runtimeEnvironment.Trim().ToLowerInvariant() -eq 'prod')
+if ($skipStatusRefresh) {
+    Write-Host "[workflow] skip status refresh for prod fast start."
+}
+else {
+    Write-Host "[workflow] refresh status ..."
+    & python scripts/bin/workflow_entry_cli.py --root $runtimeRootPath --mode status
+    if ($LASTEXITCODE -ne 0) {
+        throw "status failed with exit code $LASTEXITCODE"
+    }
 }
 
 $url = "http://$BindHost`:$Port"

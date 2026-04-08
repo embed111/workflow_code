@@ -23,14 +23,18 @@ def sqlite_index_path(root: Path) -> Path:
     return sqlite_index_root(root) / _INDEX_DB_NAME
 
 
-def _connect(root: Path) -> sqlite3.Connection:
+def _connect(root: Path, *, timeout_s: float = 30.0, busy_timeout_ms: int | None = None) -> sqlite3.Connection:
     sqlite_index_root(root).mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(sqlite_index_path(root), timeout=30)
+    timeout_value = max(0.05, float(timeout_s or 0.0))
+    conn = sqlite3.connect(sqlite_index_path(root), timeout=timeout_value)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA synchronous=NORMAL")
     conn.execute("PRAGMA temp_store=MEMORY")
-    conn.execute("PRAGMA busy_timeout=30000")
+    timeout_ms = busy_timeout_ms
+    if timeout_ms is None:
+        timeout_ms = max(50, int(round(timeout_value * 1000)))
+    conn.execute(f"PRAGMA busy_timeout={max(50, int(timeout_ms))}")
     return conn
 
 
@@ -155,6 +159,22 @@ def _mark_prefix_deleted(conn: sqlite3.Connection, prefix: str) -> None:
 
 
 def _ensure_schema(conn: sqlite3.Connection) -> None:
+    schema_ready = False
+    try:
+        meta_exists = conn.execute(
+            """
+            SELECT 1
+            FROM sqlite_master
+            WHERE type='table' AND name='index_meta'
+            LIMIT 1
+            """
+        ).fetchone()
+        if meta_exists:
+            schema_ready = _read_meta(conn, "schema_version") == str(_INDEX_SCHEMA_VERSION)
+    except sqlite3.OperationalError:
+        schema_ready = False
+    if schema_ready:
+        return
     conn.executescript(
         """
         CREATE TABLE IF NOT EXISTS index_meta (

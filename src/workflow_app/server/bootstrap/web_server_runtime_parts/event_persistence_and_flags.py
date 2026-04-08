@@ -895,11 +895,15 @@ def main() -> None:
     ensure_metric_files(cfg.root)
     bind_training_center_runtime_once()
     init_ab_state(cfg)
-    refresh_status(cfg)
-    sync_analysis_tasks(cfg.root)
-    sync_training_workflows(cfg.root)
-    with state.reconcile_lock:
-        run_reconcile(cfg, "startup")
+    startup_fast_path = runtime_environment == "prod"
+    if startup_fast_path:
+        print("web> skip heavy startup refresh for prod fast start", flush=True)
+    else:
+        refresh_status(cfg)
+        sync_analysis_tasks(cfg.root)
+        sync_training_workflows(cfg.root)
+        with state.reconcile_lock:
+            run_reconcile(cfg, "startup")
     if TEST_DATA_AUTO_CLEANUP_ENABLED and active_runtime_task_count(state) <= 0:
         try:
             cleanup_result = admin_cleanup_history(

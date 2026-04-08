@@ -47,8 +47,8 @@ def main() -> int:
                 "enabled": True,
                 "assigned_agent_id": "workflow",
                 "launch_summary": "repair terminal trigger truth",
-                "execution_checklist": "1) stale running trigger\n2) read detail\n3) persist repair",
-                "done_definition": "detail and row both show terminal truth",
+                "execution_checklist": "1) stale running trigger\n2) read detail\n3) project terminal truth without mutating storage",
+                "done_definition": "detail should show terminal truth while GET stays read-only",
                 "priority": "P1",
                 "expected_artifact": "continuous-improvement-report.md",
                 "delivery_mode": "none",
@@ -92,8 +92,8 @@ def main() -> int:
                 "[持续迭代] workflow",
                 "workflow",
                 "repair terminal trigger truth",
-                "1) stale running trigger\n2) read detail\n3) persist repair",
-                "detail and row both show terminal truth",
+                "1) stale running trigger\n2) read detail\n3) project terminal truth without mutating storage",
+                "detail should show terminal truth while GET stays read-only",
                 "continuous-improvement-report.md",
                 "none",
                 "",
@@ -148,8 +148,8 @@ def main() -> int:
         conn.close()
 
     assert stored is not None, trigger_instance_id
-    assert str(stored["trigger_status"] or "").strip().lower() == "failed", dict(stored)
-    assert str(stored["trigger_message"] or "").strip() == "执行失败", dict(stored)
+    assert str(stored["trigger_status"] or "").strip().lower() == "running", dict(stored)
+    assert str(stored["trigger_message"] or "").strip() == "dispatch_requested", dict(stored)
 
     print(
         json.dumps(
@@ -159,6 +159,7 @@ def main() -> int:
                 "trigger_instance_id": trigger_instance_id,
                 "recent_trigger": latest,
                 "stored_row": dict(stored),
+                "storage_mutated_by_get": False,
             },
             ensure_ascii=False,
             indent=2,

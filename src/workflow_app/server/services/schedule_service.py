@@ -1528,6 +1528,7 @@ def _assignment_snapshot_for_schedule_status(
             reconcile_running=True,
             include_scheduler=False,
             include_serialized_nodes=False,
+            persist_changes=False,
         )
     except TypeError:
         try:
@@ -1610,6 +1611,7 @@ def _assignment_runtime_status_from_task_files(
 
     node_status = str(node_payload.get("status") or "").strip().lower()
     status_text = str(node_payload.get("status_text") or "").strip()
+    stale_running_detected = False
     if node_status not in {"succeeded", "failed"}:
         load_run_records_fn = globals().get("_assignment_load_run_records")
         active_run_ids_fn = globals().get("_active_assignment_run_ids")
@@ -1630,6 +1632,11 @@ def _assignment_runtime_status_from_task_files(
             live_found = False
             for run in list(load_run_records_fn(root, ticket_id=ticket_text, node_id=node_text) or []):
                 run_status = str((run or {}).get("status") or "").strip().lower()
+                if run_status in {"cancelled", "failed"}:
+                    latest_event = str((run or {}).get("latest_event") or "").strip()
+                    if "运行句柄缺失" in latest_event or "workflow 已重启" in latest_event:
+                        stale_running_detected = True
+                    continue
                 if run_status not in {"starting", "running"}:
                     continue
                 try:
@@ -1655,6 +1662,10 @@ def _assignment_runtime_status_from_task_files(
                 node_status = "running"
                 if not status_text:
                     status_text = SCHEDULE_RESULT_TEXT["running"]
+            elif node_status == "running" and stale_running_detected:
+                node_status = "failed"
+                if not status_text:
+                    status_text = SCHEDULE_RESULT_TEXT["failed"]
 
     result_status = _assignment_result_status_from_node_payload({"status": node_status})
     return {
@@ -1773,6 +1784,7 @@ def _enrich_trigger(
     conn: sqlite3.Connection | None = None,
     plan_cache: dict[str, dict[str, str]] | None = None,
     snapshot_cache: dict[str, dict[str, str]] | None = None,
+    persist_repairs: bool = True,
 ) -> dict[str, Any]:
     payload = _row_to_trigger(
         row,
@@ -1806,7 +1818,7 @@ def _enrich_trigger(
         )
         if message_changed:
             payload["trigger_message"] = desired_message
-        if conn is not None and trigger_instance_id and (status_changed or message_changed):
+        if persist_repairs and conn is not None and trigger_instance_id and (status_changed or message_changed):
             conn.execute(
                 """
                 UPDATE schedule_trigger_instances
@@ -1845,6 +1857,7 @@ def _repair_schedule_plan_truth(
     *,
     schedule: dict[str, Any],
     latest_trigger: dict[str, Any] | None = None,
+    persist_repairs: bool = True,
 ) -> dict[str, Any]:
     payload = dict(schedule or {})
     schedule_id = str(payload.get("schedule_id") or "").strip()
@@ -1894,7 +1907,7 @@ def _repair_schedule_plan_truth(
         SCHEDULE_RESULT_TEXT["pending"],
     )
 
-    if conn is not None and schedule_id and changed:
+    if persist_repairs and conn is not None and schedule_id and changed:
         conn.execute(
             """
             UPDATE schedule_plans
@@ -1954,6 +1967,7 @@ def _build_schedule_items(
     *,
     latest_rows: dict[str, sqlite3.Row] | None = None,
     conn: sqlite3.Connection | None = None,
+    persist_repairs: bool = True,
 ) -> list[dict[str, Any]]:
     items = []
     latest_rows = dict(latest_rows or {})
@@ -1969,11 +1983,17 @@ def _build_schedule_items(
                 conn=conn,
                 plan_cache=plan_cache,
                 snapshot_cache=snapshot_cache,
+                persist_repairs=persist_repairs,
             )
             if latest is not None
             else None
         )
-        schedule = _repair_schedule_plan_truth(conn, schedule=schedule, latest_trigger=enriched)
+        schedule = _repair_schedule_plan_truth(
+            conn,
+            schedule=schedule,
+            latest_trigger=enriched,
+            persist_repairs=persist_repairs,
+        )
         if enriched:
             schedule["last_result_status"] = str(enriched.get("result_status") or "pending")
             schedule["last_result_status_text"] = str(enriched.get("result_status_text") or SCHEDULE_RESULT_TEXT["pending"])
@@ -2005,7 +2025,13 @@ def list_schedule_preview(root: Path, *, limit: int = 8) -> dict[str, Any]:
         )
         items = [
             item
-            for item in _build_schedule_items(root, rows, latest_rows=latest_rows, conn=conn)
+            for item in _build_schedule_items(
+                root,
+                rows,
+                latest_rows=latest_rows,
+                conn=conn,
+                persist_repairs=False,
+            )
             if bool(item.get("enabled"))
         ]
     finally:
@@ -2024,7 +2050,7 @@ def list_schedules(root: Path) -> dict[str, Any]:
             "SELECT * FROM schedule_plans WHERE deleted_at='' ORDER BY enabled DESC, updated_at DESC, created_at DESC"
         ).fetchall()
         latest_rows = _load_latest_trigger_rows(conn)
-        items = _build_schedule_items(root, rows, latest_rows=latest_rows, conn=conn)
+        items = _build_schedule_items(root, rows, latest_rows=latest_rows, conn=conn, persist_repairs=False)
     finally:
         conn.close()
     return {"items": items, "total": len(items), "timezone": SCHEDULE_TIMEZONE}
@@ -2058,6 +2084,7 @@ def get_schedule_detail(root: Path, schedule_id: str) -> dict[str, Any]:
                 conn=conn,
                 plan_cache=plan_cache,
                 snapshot_cache=snapshot_cache,
+                persist_repairs=False,
             )
             for item in trigger_rows
         ]
@@ -2065,6 +2092,7 @@ def get_schedule_detail(root: Path, schedule_id: str) -> dict[str, Any]:
             conn,
             schedule=schedule,
             latest_trigger=dict(recent[0] or {}) if recent else None,
+            persist_repairs=False,
         )
     finally:
         conn.close()
@@ -2160,6 +2188,7 @@ def get_schedule_calendar(root: Path, *, month: str = "") -> dict[str, Any]:
                 conn=conn,
                 plan_cache=plan_cache,
                 snapshot_cache=snapshot_cache,
+                persist_repairs=False,
             )
             results_by_day.setdefault(str(enriched["planned_trigger_at"])[:10], []).append(enriched)
     finally:

@@ -47,8 +47,8 @@ def main() -> int:
                 "enabled": True,
                 "assigned_agent_id": "workflow",
                 "launch_summary": "stale once plan should retire after terminal result",
-                "execution_checklist": "1) read detail\n2) repair plan row\n3) preview filters stale plan",
-                "done_definition": "detail, db row and preview agree the stale plan is no longer active",
+                "execution_checklist": "1) read detail\n2) project once-plan retirement\n3) preview filters stale plan",
+                "done_definition": "detail and preview agree the stale plan is inactive while GET stays read-only",
                 "priority": "P1",
                 "expected_artifact": "workflow-pm-wake-summary",
                 "delivery_mode": "none",
@@ -115,8 +115,8 @@ def main() -> int:
                 "pm持续唤醒 - workflow 主线巡检",
                 "workflow",
                 "stale once plan should retire after terminal result",
-                "1) read detail\n2) repair plan row\n3) preview filters stale plan",
-                "detail, db row and preview agree the stale plan is no longer active",
+                "1) read detail\n2) project once-plan retirement\n3) preview filters stale plan",
+                "detail and preview agree the stale plan is inactive while GET stays read-only",
                 "workflow-pm-wake-summary",
                 "none",
                 "",
@@ -182,12 +182,12 @@ def main() -> int:
 
     assert stale_row is not None, stale_schedule_id
     stored_row = dict(stale_row)
-    assert int(stored_row.get("enabled") or 0) == 0, stored_row
+    assert int(stored_row.get("enabled") or 0) == 1, stored_row
     assert str(stored_row.get("next_trigger_at") or "").strip() == "", stored_row
-    assert str(stored_row.get("last_trigger_at") or "").strip() == "2026-04-07T15:59:00+08:00", stored_row
-    assert str(stored_row.get("last_result_status") or "").strip().lower() == "succeeded", stored_row
-    assert str(stored_row.get("last_result_ticket_id") or "").strip() == assignment_ticket_id, stored_row
-    assert str(stored_row.get("last_result_node_id") or "").strip() == assignment_node_id, stored_row
+    assert str(stored_row.get("last_trigger_at") or "").strip() == "", stored_row
+    assert str(stored_row.get("last_result_status") or "").strip().lower() == "pending", stored_row
+    assert str(stored_row.get("last_result_ticket_id") or "").strip() == "", stored_row
+    assert str(stored_row.get("last_result_node_id") or "").strip() == "", stored_row
 
     print(
         json.dumps(
@@ -198,6 +198,7 @@ def main() -> int:
                 "detail_schedule": stale_detail,
                 "preview": preview,
                 "stored_row": stored_row,
+                "storage_mutated_by_get": False,
             },
             ensure_ascii=False,
             indent=2,

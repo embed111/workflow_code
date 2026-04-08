@@ -140,19 +140,27 @@ def list_ingress_request_records_from_index(root: Path, *, limit: int = 0) -> li
 
 def pending_counts_from_index(root: Path, *, include_test_data: bool) -> tuple[int, int]:
     ensure_sqlite_index(root)
-    conn = _connect(root)
     try:
-        row = conn.execute(
-            """
-            SELECT
-                COALESCE(SUM(CASE WHEN a.status='pending' THEN 1 ELSE 0 END), 0) AS pending_analysis,
-                COALESCE(SUM(CASE WHEN a.training_status='pending' THEN 1 ELSE 0 END), 0) AS pending_training
-            FROM analysis_index a
-            LEFT JOIN session_index s ON s.session_id = a.session_id
-            WHERE (? = 1 OR COALESCE(s.is_test_data, 0) = 0)
-            """,
-            (1 if include_test_data else 0,),
-        ).fetchone()
+        conn = _connect(root, timeout_s=0.25, busy_timeout_ms=250)
+    except TypeError:
+        conn = _connect(root)
+    try:
+        try:
+            row = conn.execute(
+                """
+                SELECT
+                    COALESCE(SUM(CASE WHEN a.status='pending' THEN 1 ELSE 0 END), 0) AS pending_analysis,
+                    COALESCE(SUM(CASE WHEN a.training_status='pending' THEN 1 ELSE 0 END), 0) AS pending_training
+                FROM analysis_index a
+                LEFT JOIN session_index s ON s.session_id = a.session_id
+                WHERE (? = 1 OR COALESCE(s.is_test_data, 0) = 0)
+                """,
+                (1 if include_test_data else 0,),
+            ).fetchone()
+        except sqlite3.OperationalError as exc:
+            if "locked" in str(exc).lower():
+                return (0, 0)
+            raise
         return (
             int((row or {"pending_analysis": 0})["pending_analysis"] or 0),
             int((row or {"pending_training": 0})["pending_training"] or 0),
