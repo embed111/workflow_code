@@ -312,7 +312,7 @@ def get_assignment_status_detail(
         if not snapshot["nodes"]:
             selected_node = {}
         else:
-            selected_node = snapshot["node_map_by_id"].get(node_id) or (snapshot["nodes"][0] if snapshot["nodes"] else {})
+            selected_node = snapshot["node_map_by_id"].get(node_id) or _default_status_detail_selected_node(snapshot["nodes"])
         run_rows = (
             _load_assignment_runs(
                 conn,
@@ -396,6 +396,38 @@ def get_assignment_status_detail(
             "recent_runs": run_summaries,
         },
     }
+
+
+def _default_status_detail_selected_node(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    best_row: dict[str, Any] = {}
+    best_group: int | None = None
+    best_recency: tuple[str, str, str, str] = ("", "", "", "")
+    for row in list(rows or []):
+        current = dict(row)
+        status = str(current.get("status") or "").strip().lower()
+        if status == "running":
+            group = 0
+        elif status == "ready":
+            group = 1
+        elif status == "pending":
+            group = 2
+        elif status == "blocked":
+            group = 3
+        elif status in {"succeeded", "failed"}:
+            group = 4
+        else:
+            group = 5
+        recency = (
+            str(current.get("updated_at") or ""),
+            str(current.get("completed_at") or ""),
+            str(current.get("created_at") or ""),
+            str(current.get("node_id") or ""),
+        )
+        if best_group is None or group < best_group or (group == best_group and recency > best_recency):
+            best_row = current
+            best_group = group
+            best_recency = recency
+    return best_row
 
 
 def _deliver_assignment_artifact_locked(

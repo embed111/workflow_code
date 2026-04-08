@@ -916,6 +916,32 @@ def run_assignment_stale_terminal_projection_guard_probe(repo_root: Path) -> tup
     return ok, detail
 
 
+def run_assignment_status_detail_default_node_probe(repo_root: Path) -> tuple[bool, dict[str, object]]:
+    probe = (repo_root / "scripts" / "acceptance" / "verify_assignment_status_detail_default_node.py").resolve()
+    proc = subprocess.run(
+        [sys.executable, str(probe)],
+        cwd=str(repo_root),
+        capture_output=True,
+        text=True,
+    )
+    detail: dict[str, object] = {
+        "script": probe.as_posix(),
+        "returncode": int(proc.returncode),
+    }
+    stdout = str(proc.stdout or "").strip()
+    stderr = str(proc.stderr or "").strip()
+    if stdout:
+        try:
+            detail["payload"] = json.loads(stdout)
+        except Exception:
+            detail["stdout"] = stdout
+    if stderr:
+        detail["stderr"] = stderr
+    payload = detail.get("payload") if isinstance(detail.get("payload"), dict) else {}
+    ok = proc.returncode == 0 and bool((payload or {}).get("ok", proc.returncode == 0))
+    return ok, detail
+
+
 def run_assignment_provider_liveness_guard_probe(repo_root: Path) -> tuple[bool, dict[str, object]]:
     probe = (repo_root / "scripts" / "acceptance" / "verify_assignment_provider_liveness_guard.py").resolve()
     proc = subprocess.run(
@@ -1366,6 +1392,18 @@ def main() -> int:
         )
         if not assignment_stale_terminal_projection_guard_ok:
             errors.append("assignment stale terminal projection guard probe failed")
+        assignment_status_detail_default_node_ok, assignment_status_detail_default_node_detail = (
+            run_assignment_status_detail_default_node_probe(repo_root)
+        )
+        results.append(
+            (
+                "assignment_status_detail_default_node",
+                assignment_status_detail_default_node_ok,
+                assignment_status_detail_default_node_detail,
+            )
+        )
+        if not assignment_status_detail_default_node_ok:
+            errors.append("assignment status detail default node probe failed")
         assignment_provider_liveness_guard_ok, assignment_provider_liveness_guard_detail = (
             run_assignment_provider_liveness_guard_probe(repo_root)
         )
