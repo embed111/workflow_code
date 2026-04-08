@@ -94,6 +94,17 @@ _SCHEDULE_TRIGGER_THREADS: dict[str, threading.Thread] = {}
 _SCHEDULE_TRIGGER_LOCK = threading.Lock()
 SCHEDULE_SELF_ITER_GUARD_FILE = Path("state") / "schedule_self_iter_guard.json"
 SCHEDULE_SMOKE_BASELINE_FILE = Path(".test") / "schedule_smoke_baseline.latest.json"
+SCHEDULE_PM_VERSION_PLAN_PATH = "docs/workflow/governance/PM版本推进计划.md"
+SCHEDULE_PM_WAKE_REQUIREMENT_PATH = "docs/workflow/requirements/需求详情-pm持续唤醒与清醒维持.md"
+SCHEDULE_PM_PERIODIC_LANES_TEXT = (
+    "UCD/设计优化、测试探测、工程质量探测、需求分析、架构优化、功能开发、高价值功能探索"
+)
+SCHEDULE_PM_LIFECYCLE_TEXT = (
+    "需求提出 -> 澄清/评审 -> 形成基线 -> 变更控制 -> 开发实现 -> 基于基线测试 -> 验收 -> 归档回溯"
+)
+SCHEDULE_PM_TEAMMATES_TEXT = (
+    "workflow_devmate / workflow_testmate / workflow_qualitymate / workflow_bugmate"
+)
 SCHEDULE_SELF_ITER_GUARD_DEFAULTS: dict[str, Any] = {
     "enabled": True,
     "block_without_smoke": True,
@@ -1024,22 +1035,32 @@ def _ensure_self_iter_backup_schedule(
             "launch_summary": "\n".join(
                 [
                     "作为保底接力入口，检查 prod 当前是否仍存在未来可执行的 [持续迭代] workflow 或 active 版本任务。",
-                    "先读版本计划：docs/workflow/governance/PM版本推进计划.md",
-                    "再对照持续唤醒需求：docs/workflow/requirements/需求详情-pm持续唤醒与清醒维持.md",
+                    "7x24 的业务目标是持续推进当前 active 版本，不是只维持存活或空转。",
+                    f"先读版本计划：{SCHEDULE_PM_VERSION_PLAN_PATH}",
+                    f"再对照持续唤醒需求：{SCHEDULE_PM_WAKE_REQUIREMENT_PATH}",
+                    f"周期性工作泳道：{SCHEDULE_PM_PERIODIC_LANES_TEXT}",
                     f"最近阻塞: {summary}",
                 ]
             ).strip(),
             "execution_checklist": "\n".join(
                 [
-                    "1. 读取 PM版本推进计划与持续唤醒需求。",
-                    "2. 检查 prod 的 schedules、assignment graph、ready/running 节点、最近 runs 与 `/api/runtime-upgrade/status`。",
-                    "3. 若 `can_upgrade=true` 且当前无运行中任务，直接调用 `/api/runtime-upgrade/apply` 完成无痛升级，再继续巡检。",
-                    "4. 若主链断开，补一条未来可执行入口或当前版本任务。",
-                    "5. 更新 `.codex/memory/...` 时，在 `next` 明确写出下一次主线/保底触发时间。",
-                    "6. 输出本次保底巡检结论与下一步建议。",
+                    f"1. 读取 `{SCHEDULE_PM_VERSION_PLAN_PATH}` 与 `{SCHEDULE_PM_WAKE_REQUIREMENT_PATH}`，确认当前 active 版本、任务包，以及所处生命周期阶段：`{SCHEDULE_PM_LIFECYCLE_TEXT}`。",
+                    f"2. 从 `{SCHEDULE_PM_PERIODIC_LANES_TEXT}` 中判断当前最该推进的泳道；若 active 版本没有可执行任务，立即补 baseline、变更控制或下一条当前版本任务。",
+                    "3. 检查 prod 的 schedules、assignment graph、ready/running 节点、最近 runs 与 `/api/runtime-upgrade/status`。",
+                    "4. 若 `can_upgrade=true` 且当前无运行中任务，直接调用 `/api/runtime-upgrade/apply` 完成无痛升级，再继续巡检。",
+                    "5. 若主链断开，补一条未来可执行入口或当前版本任务。",
+                    f"6. 若测试/质量/开发/缺陷修复泳道缺少执行者，给 {SCHEDULE_PM_TEAMMATES_TEXT} 创建或续挂任务。",
+                    "7. 更新 `.codex/memory/...` 时，在 `next` 明确写出下一次主线/保底触发时间，同时标注本轮泳道与生命周期阶段。",
+                    "8. 输出本次保底巡检结论与下一步建议。",
                 ]
             ).strip(),
-            "done_definition": "保底巡检完成后，prod 至少保留一条未来可执行的 workflow 主线入口，且本次结论可追溯。",
+            "done_definition": "\n".join(
+                [
+                    "1. 保底巡检完成后，prod 至少保留一条未来可执行的 workflow 主线入口。",
+                    "2. 本次巡检结论明确写出 active 版本、泳道、生命周期阶段与证据。",
+                    "3. 若主链已断，本轮已经完成补链而不是只留口头说明。",
+                ]
+            ).strip(),
             "priority": "P1",
             "expected_artifact": "workflow-pm-wake-summary",
             "delivery_mode": "none",

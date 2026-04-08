@@ -734,6 +734,58 @@ def run_assignment_self_iteration_schedule_alignment_probe(repo_root: Path) -> t
     return ok, detail
 
 
+def run_assignment_self_iteration_plan_reference_probe(repo_root: Path) -> tuple[bool, dict[str, object]]:
+    probe = (repo_root / "scripts" / "acceptance" / "verify_assignment_self_iteration_plan_reference.py").resolve()
+    proc = subprocess.run(
+        [sys.executable, str(probe)],
+        cwd=str(repo_root),
+        capture_output=True,
+        text=True,
+    )
+    detail: dict[str, object] = {
+        "script": probe.as_posix(),
+        "returncode": int(proc.returncode),
+    }
+    stdout = str(proc.stdout or "").strip()
+    stderr = str(proc.stderr or "").strip()
+    if stdout:
+        try:
+            detail["payload"] = json.loads(stdout)
+        except Exception:
+            detail["stdout"] = stdout
+    if stderr:
+        detail["stderr"] = stderr
+    payload = detail.get("payload") if isinstance(detail.get("payload"), dict) else {}
+    ok = proc.returncode == 0 and bool((payload or {}).get("ok", proc.returncode == 0))
+    return ok, detail
+
+
+def run_self_iteration_backup_schedule_on_smoke_block_probe(repo_root: Path) -> tuple[bool, dict[str, object]]:
+    probe = (repo_root / "scripts" / "acceptance" / "verify_self_iteration_backup_schedule_on_smoke_block.py").resolve()
+    proc = subprocess.run(
+        [sys.executable, str(probe)],
+        cwd=str(repo_root),
+        capture_output=True,
+        text=True,
+    )
+    detail: dict[str, object] = {
+        "script": probe.as_posix(),
+        "returncode": int(proc.returncode),
+    }
+    stdout = str(proc.stdout or "").strip()
+    stderr = str(proc.stderr or "").strip()
+    if stdout:
+        try:
+            detail["payload"] = json.loads(stdout)
+        except Exception:
+            detail["stdout"] = stdout
+    if stderr:
+        detail["stderr"] = stderr
+    payload = detail.get("payload") if isinstance(detail.get("payload"), dict) else {}
+    ok = proc.returncode == 0 and bool((payload or {}).get("ok", proc.returncode == 0))
+    return ok, detail
+
+
 def run_assignment_run_record_db_sync_probe(repo_root: Path) -> tuple[bool, dict[str, object]]:
     probe = (repo_root / "scripts" / "acceptance" / "verify_assignment_run_record_db_sync.py").resolve()
     proc = subprocess.run(
@@ -1236,6 +1288,18 @@ def main() -> int:
         )
         if not role_workspace_memory_governance_ok:
             errors.append("role workspace memory governance probe failed")
+        self_iteration_plan_reference_ok, self_iteration_plan_reference_detail = (
+            run_assignment_self_iteration_plan_reference_probe(repo_root)
+        )
+        results.append(
+            (
+                "assignment_self_iteration_plan_reference",
+                self_iteration_plan_reference_ok,
+                self_iteration_plan_reference_detail,
+            )
+        )
+        if not self_iteration_plan_reference_ok:
+            errors.append("assignment self iteration plan reference probe failed")
         self_iteration_alignment_ok, self_iteration_alignment_detail = run_assignment_self_iteration_schedule_alignment_probe(repo_root)
         results.append(
             (
@@ -1246,6 +1310,18 @@ def main() -> int:
         )
         if not self_iteration_alignment_ok:
             errors.append("assignment self iteration schedule alignment probe failed")
+        self_iteration_backup_smoke_block_ok, self_iteration_backup_smoke_block_detail = (
+            run_self_iteration_backup_schedule_on_smoke_block_probe(repo_root)
+        )
+        results.append(
+            (
+                "self_iteration_backup_schedule_on_smoke_block",
+                self_iteration_backup_smoke_block_ok,
+                self_iteration_backup_smoke_block_detail,
+            )
+        )
+        if not self_iteration_backup_smoke_block_ok:
+            errors.append("self iteration backup schedule on smoke block probe failed")
         pending_upgrade_probe_ok, pending_upgrade_probe_detail = run_prod_watchdog_pending_upgrade_probe(repo_root)
         results.append(
             (

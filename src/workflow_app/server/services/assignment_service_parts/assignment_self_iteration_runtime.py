@@ -15,6 +15,15 @@ ASSIGNMENT_PM_WAKE_EXPECTED_ARTIFACT = "workflow-pm-wake-summary"
 ASSIGNMENT_SELF_ITERATION_EXPECTED_ARTIFACT = "continuous-improvement-report.md"
 ASSIGNMENT_SELF_ITERATION_VERSION_PLAN_PATH = "docs/workflow/governance/PM版本推进计划.md"
 ASSIGNMENT_SELF_ITERATION_WAKE_REQUIREMENT_PATH = "docs/workflow/requirements/需求详情-pm持续唤醒与清醒维持.md"
+ASSIGNMENT_SELF_ITERATION_PERIODIC_LANES_TEXT = (
+    "UCD/设计优化、测试探测、工程质量探测、需求分析、架构优化、功能开发、高价值功能探索"
+)
+ASSIGNMENT_SELF_ITERATION_LIFECYCLE_TEXT = (
+    "需求提出 -> 澄清/评审 -> 形成基线 -> 变更控制 -> 开发实现 -> 基于基线测试 -> 验收 -> 归档回溯"
+)
+ASSIGNMENT_SELF_ITERATION_TEAMMATES_TEXT = (
+    "workflow_devmate / workflow_testmate / workflow_qualitymate / workflow_bugmate"
+)
 ASSIGNMENT_SELF_UPGRADE_OPERATOR = "assignment-self-upgrade"
 ASSIGNMENT_SELF_UPGRADE_TIMEOUT_SECONDS = 8.0
 ASSIGNMENT_SELF_UPGRADE_HINT = (
@@ -66,8 +75,10 @@ def _assignment_self_iteration_schedule_payload(
         "launch_summary": "\n".join(
             [
                 "上一轮任务已经结束，请继续作为 workflow 的长期负责人推进 7x24 连续迭代。",
+                "7x24 的业务目标是持续推进当前 active 版本，不是只维持存活或空转。",
                 f"先读版本计划：{version_plan_path}",
                 f"再对照持续唤醒需求：{wake_requirement_path}",
+                f"周期性工作泳道：{ASSIGNMENT_SELF_ITERATION_PERIODIC_LANES_TEXT}",
                 f"上一轮 ticket: {ticket_id}",
                 f"上一轮 node: {node_id}",
                 f"上一轮结果: {summary_text}",
@@ -76,24 +87,27 @@ def _assignment_self_iteration_schedule_payload(
         "execution_checklist": "\n".join(
             [
                 f"1. 先读取 `{version_plan_path}`，确认当前 active 版本和当前优先任务包。",
-                f"2. 同时对照 `{wake_requirement_path}`，确保本轮推进不会把持续唤醒和 7x24 连续性做断。",
-                "3. 再检查 healthz、dashboard、assignments、schedules、runs 的真实状态，不要只看前端表象。",
-                "4. 检查 `/api/runtime-upgrade/status`；若 `can_upgrade=true` 且当前无运行中任务，直接调用 `/api/runtime-upgrade/apply` 完成无痛升级，并在重连后继续推进。",
-                f"4.1 {ASSIGNMENT_SELF_UPGRADE_HINT}",
-                "5. 优先推进当前 active 版本里最高优先级且未完成的工程质量/稳定性任务，不要跳版抢做新功能。",
-                "6. 若当前任务包已完成，先更新版本计划状态，再挑同版本下一个 queued 包；只有当前版本出口门槛满足后才切到下一版本。",
-                "7. 如需多人协作，给 workflow_devmate / workflow_testmate / workflow_qualitymate / workflow_bugmate 创建或续挂对应任务。",
-                "8. 在代码工作区完成最小必要改动并跑命中改动面的验证。",
-                "9. 更新 `.codex/memory/...` 时，在 `next` 明确写出下一次主线/保底触发时间。",
-                "10. 输出本轮结论、证据路径，并确保系统已经挂上下一轮可执行任务或唤醒计划。",
+                f"2. 同时对照 `{wake_requirement_path}`，先定位当前生命周期阶段：`{ASSIGNMENT_SELF_ITERATION_LIFECYCLE_TEXT}`。",
+                f"3. 从 `{ASSIGNMENT_SELF_ITERATION_PERIODIC_LANES_TEXT}` 中选出本轮最高价值泳道；若当前 active 版本没有可执行任务，就先补 baseline、变更控制或下一个任务包，不允许空转。",
+                "4. 再检查 healthz、dashboard、assignments、schedules、runs 的真实状态，不要只看前端表象。",
+                "5. 检查 `/api/runtime-upgrade/status`；若 `can_upgrade=true` 且当前无运行中任务，直接调用 `/api/runtime-upgrade/apply` 完成无痛升级，并在重连后继续推进。",
+                f"5.1 {ASSIGNMENT_SELF_UPGRADE_HINT}",
+                "6. 在推进开发实现前，先明确本轮沿用的 baseline、需要变更控制的内容，以及基于哪条基线做后续测试与验收。",
+                "7. 优先推进当前 active 版本里最高优先级且未完成的任务包，不要跳版抢做新功能。",
+                "8. 若当前任务包已完成，先更新版本计划状态，再挑同版本下一个 queued 包；只有当前版本出口门槛满足后才切到下一版本。",
+                f"9. 定期评估并派发小伙伴：对开发/测试/质量/缺陷修复相关工作，给 {ASSIGNMENT_SELF_ITERATION_TEAMMATES_TEXT} 创建或续挂对应任务，不要长期让协作链闲置。",
+                "10. 在代码工作区完成最小必要改动，并跑命中改动面的验证、基于基线测试和必要验收。",
+                "11. 更新 `.codex/memory/...` 时，在 `next` 明确写出下一次主线/保底触发时间，同时写清本轮泳道与生命周期阶段。",
+                "12. 输出本轮结论、证据路径，并确保系统已经挂上下一轮可执行任务或唤醒计划。",
             ]
         ).strip(),
         "done_definition": "\n".join(
             [
                 f"1. 当前活跃版本对应任务包有可交付结果，且版本计划 `{version_plan_path}` 已同步最新状态。",
-                "2. 本轮附带验证证据，而不是只给方向性描述。",
-                "3. 如有需要，本轮已经给对应小伙伴挂好下一步任务或交接任务。",
-                "4. 若本轮没有新的 ready 任务，也必须保证下一次唤醒已经排上，7x24 连续推进不断链。",
+                "2. 本轮明确记录了当前周期性泳道、生命周期阶段，以及是否发生 baseline/变更控制更新。",
+                "3. 本轮附带验证证据，而不是只给方向性描述。",
+                "4. 如有需要，本轮已经给对应小伙伴挂好下一步任务或交接任务。",
+                "5. 若本轮没有新的 ready 任务，也必须保证下一次唤醒已经排上，7x24 连续推进不断链。",
             ]
         ),
         "priority": priority,
@@ -212,26 +226,30 @@ def _assignment_pm_wake_schedule_payload(
         "launch_summary": "\n".join(
             [
                 "作为保底接力入口，检查 prod 当前是否仍存在未来可执行的 [持续迭代] workflow 或 active 版本任务。",
+                "7x24 的业务目标是持续推进当前 active 版本，不是只维持存活或空转。",
                 f"先读版本计划：{version_plan_path}",
                 f"再对照持续唤醒需求：{wake_requirement_path}",
+                f"周期性工作泳道：{ASSIGNMENT_SELF_ITERATION_PERIODIC_LANES_TEXT}",
                 f"最近上下文: {summary_text}",
             ]
         ).strip(),
         "execution_checklist": "\n".join(
             [
-                f"1. 读取 `{version_plan_path}` 与 `{wake_requirement_path}`。",
-                "2. 检查 prod 当前 schedules、assignment graph、ready/running 节点、最近 runs 与 `/api/runtime-upgrade/status` 真相。",
-                "3. 若 `can_upgrade=true` 且当前无运行中任务，直接调用 `/api/runtime-upgrade/apply` 完成无痛升级，再继续巡检。",
-                f"3.1 {ASSIGNMENT_SELF_UPGRADE_HINT}",
-                "4. 若 [持续迭代] workflow 没有未来入口，立即补一条未来可执行入口或当前版本任务。",
-                "5. 更新 `.codex/memory/...` 时，在 `next` 明确写出下一次主线/保底触发时间。",
-                "6. 输出本次保底巡检结论、证据路径和下一次建议唤醒时间。",
+                f"1. 读取 `{version_plan_path}` 与 `{wake_requirement_path}`，确认当前 active 版本、任务包，以及所处生命周期阶段：`{ASSIGNMENT_SELF_ITERATION_LIFECYCLE_TEXT}`。",
+                f"2. 从 `{ASSIGNMENT_SELF_ITERATION_PERIODIC_LANES_TEXT}` 中判断当前最该推进的泳道；若 active 版本没有可执行任务，立即补 baseline、变更控制或下一条当前版本任务。",
+                "3. 检查 prod 当前 schedules、assignment graph、ready/running 节点、最近 runs 与 `/api/runtime-upgrade/status` 真相。",
+                "4. 若 `can_upgrade=true` 且当前无运行中任务，直接调用 `/api/runtime-upgrade/apply` 完成无痛升级，再继续巡检。",
+                f"4.1 {ASSIGNMENT_SELF_UPGRADE_HINT}",
+                "5. 若 [持续迭代] workflow 没有未来入口，立即补一条未来可执行入口或当前版本任务。",
+                f"6. 若测试/质量/开发/缺陷修复泳道缺少执行者，给 {ASSIGNMENT_SELF_ITERATION_TEAMMATES_TEXT} 创建或续挂任务。",
+                "7. 更新 `.codex/memory/...` 时，在 `next` 明确写出下一次主线/保底触发时间，同时标注本轮泳道与生命周期阶段。",
+                "8. 输出本次保底巡检结论、证据路径和下一次建议唤醒时间。",
             ]
         ).strip(),
         "done_definition": "\n".join(
             [
                 "1. prod 至少保留一条未来可执行的 workflow 主线入口。",
-                "2. 本次巡检结论和证据可追溯。",
+                "2. 本次巡检结论明确写出 active 版本、泳道、生命周期阶段与证据。",
                 "3. 若主链已断，本轮已经完成补链而不是只留口头说明。",
             ]
         ).strip(),
