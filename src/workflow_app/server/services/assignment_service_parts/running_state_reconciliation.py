@@ -79,6 +79,10 @@ def _assignment_run_row_is_live(
         return True
     pid_is_live = _assignment_process_pid_is_live(raw_pid)
     if pid_is_live:
+        live_process_grace_seconds = max(
+            effective_grace_seconds,
+            max(1, int(DEFAULT_ASSIGNMENT_EVENT_STREAM_KEEPALIVE_S)) * 3,
+        )
         # A live provider pid without an in-process handle is only trusted while the run
         # record still receives fresh timestamps. Once those timestamps age out, treat it
         # as a detached orphan and let stale recovery terminate the provider tree.
@@ -93,7 +97,7 @@ def _assignment_run_row_is_live(
                 age_seconds = abs((now_dt - parsed).total_seconds())
             except Exception:
                 continue
-            if age_seconds <= effective_grace_seconds:
+            if age_seconds <= live_process_grace_seconds:
                 return True
         return False
     for field in ("latest_event_at", "updated_at", "started_at", "created_at"):

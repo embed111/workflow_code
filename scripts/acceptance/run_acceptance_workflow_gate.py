@@ -786,6 +786,32 @@ def run_assignment_stale_recovery_cleanup_memory_probe(repo_root: Path) -> tuple
     return ok, detail
 
 
+def run_assignment_provider_liveness_guard_probe(repo_root: Path) -> tuple[bool, dict[str, object]]:
+    probe = (repo_root / "scripts" / "acceptance" / "verify_assignment_provider_liveness_guard.py").resolve()
+    proc = subprocess.run(
+        [sys.executable, str(probe)],
+        cwd=str(repo_root),
+        capture_output=True,
+        text=True,
+    )
+    detail: dict[str, object] = {
+        "script": probe.as_posix(),
+        "returncode": int(proc.returncode),
+    }
+    stdout = str(proc.stdout or "").strip()
+    stderr = str(proc.stderr or "").strip()
+    if stdout:
+        try:
+            detail["payload"] = json.loads(stdout)
+        except Exception:
+            detail["stdout"] = stdout
+    if stderr:
+        detail["stderr"] = stderr
+    payload = detail.get("payload") if isinstance(detail.get("payload"), dict) else {}
+    ok = proc.returncode == 0 and bool((payload or {}).get("ok", proc.returncode == 0))
+    return ok, detail
+
+
 def run_prod_watchdog_pending_upgrade_probe(repo_root: Path) -> tuple[bool, dict[str, object]]:
     probe = (repo_root / "scripts" / "acceptance" / "verify_prod_watchdog_pending_upgrade_fallback.py").resolve()
     proc = subprocess.run(
@@ -1043,13 +1069,13 @@ def main() -> int:
         transient_retry_ok, transient_retry_detail = run_assignment_transient_retry_probe(repo_root)
         results.append(
             (
-                "assignment_transient_startup_retry",
+                "assignment_transient_retry",
                 transient_retry_ok,
                 transient_retry_detail,
             )
         )
         if not transient_retry_ok:
-            errors.append("assignment transient startup retry probe failed")
+            errors.append("assignment transient retry probe failed")
         memory_bootstrap_ok, memory_bootstrap_detail = run_assignment_workspace_memory_bootstrap_probe(repo_root)
         results.append(
             (
@@ -1122,6 +1148,18 @@ def main() -> int:
         )
         if not assignment_stale_recovery_cleanup_ok:
             errors.append("assignment stale recovery cleanup and memory probe failed")
+        assignment_provider_liveness_guard_ok, assignment_provider_liveness_guard_detail = (
+            run_assignment_provider_liveness_guard_probe(repo_root)
+        )
+        results.append(
+            (
+                "assignment_provider_liveness_guard",
+                assignment_provider_liveness_guard_ok,
+                assignment_provider_liveness_guard_detail,
+            )
+        )
+        if not assignment_provider_liveness_guard_ok:
+            errors.append("assignment provider liveness guard probe failed")
         self_iteration_alignment_ok, self_iteration_alignment_detail = run_assignment_self_iteration_schedule_alignment_probe(repo_root)
         results.append(
             (

@@ -882,6 +882,30 @@ def _build_assignment_execution_prompt(
     return "\n".join(lines).strip() + "\n"
 
 
+def _resolve_windows_direct_codex_command_prefix(raw_command: Any) -> list[str]:
+    if str(os.name or "").lower() != "nt":
+        return []
+    command_text = str(raw_command or "").strip().strip('"')
+    if not command_text:
+        return []
+    command_path = Path(command_text)
+    if str(command_path.stem or "").strip().lower() != "codex":
+        return []
+    if str(command_path.suffix or "").strip().lower() not in {"", ".cmd", ".bat", ".ps1"}:
+        return []
+    base_dir = command_path.parent
+    if not str(base_dir or "").strip():
+        return []
+    script_path = base_dir / "node_modules" / "@openai" / "codex" / "bin" / "codex.js"
+    if not script_path.exists():
+        return []
+    local_node = base_dir / "node.exe"
+    node_command = local_node.as_posix() if local_node.exists() else str(shutil.which("node.exe") or shutil.which("node") or "").strip()
+    if not node_command:
+        node_command = "node"
+    return [node_command, script_path.as_posix()]
+
+
 def _build_assignment_execution_command(
     *,
     provider: str,
@@ -915,6 +939,10 @@ def _build_assignment_execution_command(
         for item in command
         if str(item or "").strip()
     ]
+    if command:
+        direct_codex_prefix = _resolve_windows_direct_codex_command_prefix(command[0])
+        if direct_codex_prefix:
+            command = direct_codex_prefix + command[1:]
     if not command:
         raise AssignmentCenterError(
             400,
