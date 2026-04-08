@@ -38,6 +38,11 @@ def _seed_ticket(root: Path, *, ticket_id: str, nodes: list[dict]) -> None:
         _write_json(nodes_root / f"{node['node_id']}.json", node)
 
 
+def _seed_run(root: Path, *, ticket_id: str, run_id: str, payload: dict) -> None:
+    task_root = (root / "artifacts-root").resolve() / "tasks" / ticket_id
+    _write_json(task_root / "runs" / run_id / "run.json", payload)
+
+
 def main() -> int:
     repo_root = Path(__file__).resolve().parents[2]
     src_root = repo_root / "src"
@@ -114,6 +119,28 @@ def main() -> int:
             },
         ],
     )
+    _seed_run(
+        runtime_root,
+        ticket_id="asg-status-detail-default-running",
+        run_id="arun-status-detail-running",
+        payload={
+            "run_id": "arun-status-detail-running",
+            "ticket_id": "asg-status-detail-default-running",
+            "node_id": "node-current-running",
+            "provider": "codex",
+            "workspace_path": "C:/work/J-Agents/workflow",
+            "status": "running",
+            "command_summary": "codex exec",
+            "latest_event": "provider running",
+            "latest_event_at": "2026-04-08T20:35:00+08:00",
+            "exit_code": 0,
+            "started_at": "2026-04-08T20:30:10+08:00",
+            "finished_at": "",
+            "created_at": "2026-04-08T20:30:10+08:00",
+            "updated_at": "2026-04-08T20:35:00+08:00",
+            "provider_pid": 12345,
+        },
+    )
     _seed_ticket(
         runtime_root,
         ticket_id="asg-status-detail-default-terminal",
@@ -152,6 +179,28 @@ def main() -> int:
             },
         ],
     )
+    _seed_run(
+        runtime_root,
+        ticket_id="asg-status-detail-default-terminal",
+        run_id="arun-status-detail-terminal",
+        payload={
+            "run_id": "arun-status-detail-terminal",
+            "ticket_id": "asg-status-detail-default-terminal",
+            "node_id": "node-terminal-succeeded",
+            "provider": "codex",
+            "workspace_path": "C:/work/J-Agents/workflow",
+            "status": "succeeded",
+            "command_summary": "codex exec",
+            "latest_event": "execution finished",
+            "latest_event_at": "2026-04-08T20:02:00+08:00",
+            "exit_code": 0,
+            "started_at": "2026-04-08T20:00:10+08:00",
+            "finished_at": "2026-04-08T20:02:00+08:00",
+            "created_at": "2026-04-08T20:00:10+08:00",
+            "updated_at": "2026-04-08T20:02:00+08:00",
+            "provider_pid": 54321,
+        },
+    )
 
     running_default = ws.get_assignment_status_detail(
         runtime_root,
@@ -160,6 +209,8 @@ def main() -> int:
     )
     running_selected = dict(running_default.get("selected_node") or {})
     assert str(running_selected.get("node_id") or "").strip() == "node-current-running", running_selected
+    running_latest_run = dict(((running_default.get("execution_chain") or {}).get("latest_run") or {}))
+    assert int(running_latest_run.get("provider_pid") or 0) == 12345, running_latest_run
 
     explicit_old = ws.get_assignment_status_detail(
         runtime_root,
@@ -177,14 +228,18 @@ def main() -> int:
     )
     terminal_selected = dict(terminal_default.get("selected_node") or {})
     assert str(terminal_selected.get("node_id") or "").strip() == "node-terminal-succeeded", terminal_selected
+    terminal_latest_run = dict(((terminal_default.get("execution_chain") or {}).get("latest_run") or {}))
+    assert int(terminal_latest_run.get("provider_pid") or 0) == 54321, terminal_latest_run
 
     print(
         json.dumps(
             {
                 "ok": True,
                 "running_default_node_id": running_selected.get("node_id"),
+                "running_default_provider_pid": running_latest_run.get("provider_pid"),
                 "explicit_node_id": explicit_selected.get("node_id"),
                 "terminal_default_node_id": terminal_selected.get("node_id"),
+                "terminal_default_provider_pid": terminal_latest_run.get("provider_pid"),
             },
             ensure_ascii=False,
             indent=2,

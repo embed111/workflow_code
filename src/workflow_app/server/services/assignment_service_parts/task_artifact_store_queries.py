@@ -991,6 +991,7 @@ def _assignment_selected_node_codex_failure(
 def _assignment_run_summary(root: Path, row: dict[str, Any], *, include_content: bool) -> dict[str, Any]:
     run_id = str(row.get("run_id") or "").strip()
     ticket_id = str(row.get("ticket_id") or "").strip()
+    provider_pid = max(0, int(row.get("provider_pid") or 0))
     refs = _assignment_run_file_paths(root, ticket_id, run_id) if run_id and ticket_id else {}
     events_path = refs.get("events")
     prompt_path = refs.get("prompt")
@@ -1025,6 +1026,7 @@ def _assignment_run_summary(root: Path, row: dict[str, Any], *, include_content:
         "finished_at": str(row.get("finished_at") or "").strip(),
         "created_at": str(row.get("created_at") or "").strip(),
         "updated_at": str(row.get("updated_at") or "").strip(),
+        "provider_pid": provider_pid or None,
         "event_count": len(events),
         "events": events,
         "codex_failure": codex_failure,
