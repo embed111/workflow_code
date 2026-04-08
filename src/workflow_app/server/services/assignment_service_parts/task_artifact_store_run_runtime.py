@@ -228,7 +228,7 @@ def _assignment_cancel_active_runs(
         run["finished_at"] = now_text
         run["updated_at"] = now_text
         _assignment_write_run_record(root, ticket_id=ticket_id, run_record=run)
-        _kill_assignment_run_process(run_id)
+        _kill_assignment_run_process(run_id, provider_pid=int(run.get("provider_pid") or 0))
         cancelled.append(run_id)
     return cancelled
 
@@ -395,6 +395,69 @@ def _append_assignment_workspace_memory_round(
         "status": str(node_record.get("status") or "").strip(),
         "artifact_refs": artifact_refs,
     }
+
+
+def _assignment_append_workspace_memory_with_audit(
+    root: Path,
+    *,
+    ticket_id: str,
+    node_record: dict[str, Any],
+    run_id: str,
+    workspace_path_text: str,
+    exit_code: int,
+    result_ref: str,
+    summary_text: str,
+    artifact_paths: list[str],
+    warnings: list[Any],
+    appended_at: str,
+    target_status: str,
+) -> None:
+    try:
+        memory_detail = _append_assignment_workspace_memory_round(
+            workspace_path_text,
+            ticket_id=ticket_id,
+            node_record=node_record,
+            run_id=run_id,
+            exit_code=exit_code,
+            result_ref=result_ref,
+            summary_text=summary_text,
+            artifact_paths=artifact_paths,
+            warnings=warnings,
+            appended_at=appended_at,
+        )
+        if memory_detail:
+            _assignment_write_audit_entry(
+                root,
+                ticket_id=ticket_id,
+                node_id=str(node_record.get("node_id") or "").strip(),
+                action="append_workspace_memory",
+                operator="assignment-executor",
+                reason="appended workspace daily memory after execution finalize",
+                target_status=str(target_status or "").strip().lower(),
+                detail=memory_detail,
+                created_at=appended_at,
+            )
+    except Exception as exc:
+        _assignment_write_audit_entry(
+            root,
+            ticket_id=ticket_id,
+            node_id=str(node_record.get("node_id") or "").strip(),
+            action="append_workspace_memory_failed",
+            operator="assignment-executor",
+            reason=_normalize_text(
+                f"append workspace memory failed: {exc}",
+                field="failure_reason",
+                required=True,
+                max_len=400,
+            ),
+            target_status=str(target_status or "").strip().lower(),
+            detail={
+                "workspace_path": workspace_path_text,
+                "run_id": run_id,
+                "error": str(exc),
+            },
+            created_at=appended_at,
+        )
 
 
 def _copy_assignment_artifact_source_files(
@@ -981,6 +1044,20 @@ def _finalize_assignment_execution_run(
         run_record["updated_at"] = now_text
         run_record["codex_failure"] = {}
         _assignment_write_run_record(root, ticket_id=ticket_id, run_record=run_record)
+        _assignment_append_workspace_memory_with_audit(
+            root,
+            ticket_id=ticket_id,
+            node_record=node_record,
+            run_id=run_id,
+            workspace_path_text=workspace_path_text,
+            exit_code=exit_code,
+            result_ref=result_ref,
+            summary_text=str(run_record.get("latest_event") or "").strip() or "执行已取消",
+            artifact_paths=list(node_record.get("artifact_paths") or []),
+            warnings=[],
+            appended_at=now_text,
+            target_status="cancelled",
+        )
         return
     success = int(exit_code or 0) == 0 and not str(failure_message or "").strip()
     upgrade_request_result: dict[str, Any] = {}
@@ -1155,52 +1232,20 @@ def _finalize_assignment_execution_run(
                 )
         except Exception:
             pass
-    try:
-        memory_detail = _append_assignment_workspace_memory_round(
-            workspace_path_text,
-            ticket_id=ticket_id,
-            node_record=node_record,
-            run_id=run_id,
-            exit_code=exit_code,
-            result_ref=result_ref,
-            summary_text=memory_summary_text,
-            artifact_paths=memory_artifact_paths,
-            warnings=memory_warning_items,
-            appended_at=now_text,
-        )
-        if memory_detail:
-            _assignment_write_audit_entry(
-                root,
-                ticket_id=ticket_id,
-                node_id=node_id,
-                action="append_workspace_memory",
-                operator="assignment-executor",
-                reason="appended workspace daily memory after execution finalize",
-                target_status=str(node_record.get("status") or "").strip().lower() or ("succeeded" if success else "failed"),
-                detail=memory_detail,
-                created_at=now_text,
-            )
-    except Exception as exc:
-        _assignment_write_audit_entry(
-            root,
-            ticket_id=ticket_id,
-            node_id=node_id,
-            action="append_workspace_memory_failed",
-            operator="assignment-executor",
-            reason=_normalize_text(
-                f"append workspace memory failed: {exc}",
-                field="failure_reason",
-                required=True,
-                max_len=400,
-            ),
-            target_status=str(node_record.get("status") or "").strip().lower() or ("succeeded" if success else "failed"),
-            detail={
-                "workspace_path": workspace_path_text,
-                "run_id": run_id,
-                "error": str(exc),
-            },
-            created_at=now_text,
-        )
+    _assignment_append_workspace_memory_with_audit(
+        root,
+        ticket_id=ticket_id,
+        node_record=node_record,
+        run_id=run_id,
+        workspace_path_text=workspace_path_text,
+        exit_code=exit_code,
+        result_ref=result_ref,
+        summary_text=memory_summary_text,
+        artifact_paths=memory_artifact_paths,
+        warnings=memory_warning_items,
+        appended_at=now_text,
+        target_status=str(node_record.get("status") or "").strip().lower() or ("succeeded" if success else "failed"),
+    )
     try:
         upgrade_request_result = _assignment_maybe_request_prod_upgrade_after_finalize(
             root,

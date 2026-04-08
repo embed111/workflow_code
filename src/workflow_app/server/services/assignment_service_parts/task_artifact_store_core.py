@@ -738,6 +738,83 @@ def _assignment_audit_ref(root: Path, ticket_id: str, audit_id: str) -> str:
     return _assignment_audit_log_path(root, ticket_id).as_posix() + "#" + str(audit_id or "").strip()
 
 
+def _assignment_sync_execution_run_record(root: Path, *, run_record: dict[str, Any]) -> None:
+    run_id = str(run_record.get("run_id") or "").strip()
+    ticket_id = str(run_record.get("ticket_id") or "").strip()
+    node_id = str(run_record.get("node_id") or "").strip()
+    if not run_id or not ticket_id or not node_id:
+        return
+    latest_event = _short_assignment_text(run_record.get("latest_event") or "", 1000) or "执行中"
+    values = (
+        ticket_id,
+        node_id,
+        str(run_record.get("provider") or DEFAULT_ASSIGNMENT_EXECUTION_PROVIDER).strip().lower(),
+        str(run_record.get("workspace_path") or "").strip(),
+        _normalize_run_status(run_record.get("status") or "starting"),
+        str(run_record.get("command_summary") or "").strip(),
+        str(run_record.get("prompt_ref") or "").strip(),
+        str(run_record.get("stdout_ref") or "").strip(),
+        str(run_record.get("stderr_ref") or "").strip(),
+        str(run_record.get("result_ref") or "").strip(),
+        latest_event,
+        str(run_record.get("latest_event_at") or "").strip(),
+        int(run_record.get("exit_code") or 0),
+        str(run_record.get("started_at") or "").strip(),
+        str(run_record.get("finished_at") or "").strip(),
+        str(run_record.get("created_at") or "").strip(),
+        str(run_record.get("updated_at") or run_record.get("created_at") or "").strip(),
+        max(0, int(run_record.get("provider_pid") or 0)),
+    )
+    conn = None
+    try:
+        conn = connect_db(root)
+        conn.execute("BEGIN IMMEDIATE")
+        existing = conn.execute(
+            """
+            SELECT run_id
+            FROM assignment_execution_runs
+            WHERE run_id=?
+            LIMIT 1
+            """,
+            (run_id,),
+        ).fetchone()
+        if existing is None:
+            conn.execute(
+                """
+                INSERT INTO assignment_execution_runs (
+                    run_id,ticket_id,node_id,provider,workspace_path,status,command_summary,
+                    prompt_ref,stdout_ref,stderr_ref,result_ref,latest_event,latest_event_at,
+                    exit_code,started_at,finished_at,created_at,updated_at,provider_pid
+                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                """,
+                (run_id, *values),
+            )
+        else:
+            conn.execute(
+                """
+                UPDATE assignment_execution_runs
+                SET ticket_id=?,node_id=?,provider=?,workspace_path=?,status=?,command_summary=?,
+                    prompt_ref=?,stdout_ref=?,stderr_ref=?,result_ref=?,latest_event=?,latest_event_at=?,
+                    exit_code=?,started_at=?,finished_at=?,created_at=?,updated_at=?,provider_pid=?
+                WHERE run_id=?
+                """,
+                (*values, run_id),
+            )
+        conn.commit()
+    except Exception:
+        if conn is not None:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+    finally:
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+
 def _assignment_write_audit_entry(
     root: Path,
     *,
@@ -812,6 +889,7 @@ def _assignment_write_run_record(
     if not run_id:
         raise AssignmentCenterError(400, "run_id required", "assignment_run_id_required")
     _assignment_write_json(_assignment_run_file_paths(root, ticket_id, run_id)["meta"], run_record)
+    _assignment_sync_execution_run_record(root, run_record=run_record)
     if sync_index:
         sync_assignment_task_bundle_index(root, ticket_id)
     _assignment_publish_runtime_event(

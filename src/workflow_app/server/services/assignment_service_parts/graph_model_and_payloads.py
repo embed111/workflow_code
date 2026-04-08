@@ -937,10 +937,25 @@ def _terminate_assignment_process(process: subprocess.Popen[str] | None) -> None
             return
     except Exception:
         return
+    _terminate_assignment_process_pid(getattr(process, "pid", 0))
+    try:
+        if process.poll() is None:
+            process.kill()
+    except Exception:
+        pass
+
+
+def _terminate_assignment_process_pid(raw_pid: Any) -> None:
+    try:
+        pid = int(raw_pid or 0)
+    except Exception:
+        return
+    if pid <= 0:
+        return
     if str(os.name or "").lower() == "nt":
         try:
             subprocess.run(
-                ["taskkill", "/PID", str(process.pid), "/T", "/F"],
+                ["taskkill", "/PID", str(pid), "/T", "/F"],
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
                 check=False,
@@ -948,9 +963,11 @@ def _terminate_assignment_process(process: subprocess.Popen[str] | None) -> None
             )
         except Exception:
             pass
+        return
     try:
-        if process.poll() is None:
-            process.kill()
+        import signal
+
+        os.kill(pid, signal.SIGKILL)
     except Exception:
         pass
 
@@ -974,8 +991,9 @@ def _active_assignment_run_ids() -> list[str]:
     return [run_id for run_id in active if run_id]
 
 
-def _kill_assignment_run_process(run_id: str) -> None:
+def _kill_assignment_run_process(run_id: str, provider_pid: Any = 0) -> None:
     process = None
     with _ASSIGNMENT_ACTIVE_RUN_LOCK:
         process = _ASSIGNMENT_ACTIVE_RUN_PROCESSES.get(str(run_id or "").strip())
     _terminate_assignment_process(process)
+    _terminate_assignment_process_pid(provider_pid)

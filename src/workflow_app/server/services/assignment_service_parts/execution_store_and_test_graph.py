@@ -145,14 +145,22 @@ def _cancel_active_assignment_runs(
 ) -> list[str]:
     rows = conn.execute(
         """
-        SELECT run_id
+        SELECT run_id,provider_pid
         FROM assignment_execution_runs
         WHERE ticket_id=? AND node_id=? AND status IN ('starting','running')
         ORDER BY created_at DESC, run_id DESC
         """,
         (ticket_id, node_id),
     ).fetchall()
-    run_ids = [str(row["run_id"] or "").strip() for row in rows if str(row["run_id"] or "").strip()]
+    run_items = [
+        {
+            "run_id": str(row["run_id"] or "").strip(),
+            "provider_pid": int(row["provider_pid"] or 0),
+        }
+        for row in rows
+        if str(row["run_id"] or "").strip()
+    ]
+    run_ids = [str(item["run_id"]) for item in run_items]
     if run_ids:
         conn.execute(
             """
@@ -162,8 +170,11 @@ def _cancel_active_assignment_runs(
             """,
             (reason, now_text, now_text, now_text, ticket_id, node_id),
         )
-    for run_id in run_ids:
-        _kill_assignment_run_process(run_id)
+    for item in run_items:
+        _kill_assignment_run_process(
+            str(item["run_id"]),
+            provider_pid=int(item["provider_pid"] or 0),
+        )
     return run_ids
 
 

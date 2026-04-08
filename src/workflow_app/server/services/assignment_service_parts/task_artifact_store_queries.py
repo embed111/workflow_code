@@ -421,12 +421,44 @@ def _assignment_reconcile_stale_task_state_internal(
                         run_status = str(run.get("status") or "").strip().lower()
                         if run_status not in {"starting", "running"}:
                             continue
+                        run_id = str(run.get("run_id") or "").strip()
+                        workspace_path_text = str(run.get("workspace_path") or "").strip()
+                        provider_pid = int(run.get("provider_pid") or 0)
                         run["status"] = "cancelled"
                         run["latest_event"] = "检测到运行句柄缺失，已自动结束当前批次。"
                         run["latest_event_at"] = now_text
                         run["finished_at"] = now_text
                         run["updated_at"] = now_text
                         _assignment_write_run_record(root, ticket_id=ticket_id, run_record=run)
+                        _kill_assignment_run_process(run_id, provider_pid=provider_pid)
+                        try:
+                            memory_detail = _append_assignment_workspace_memory_round(
+                                workspace_path_text,
+                                ticket_id=ticket_id,
+                                node_record=current,
+                                run_id=run_id,
+                                exit_code=int(run.get("exit_code") or 1),
+                                result_ref=str(run.get("result_ref") or "").strip(),
+                                summary_text=str(current.get("failure_reason") or "").strip()
+                                or "运行句柄缺失或 workflow 已重启，请手动重跑。",
+                                artifact_paths=list(current.get("artifact_paths") or []),
+                                warnings=[],
+                                appended_at=now_text,
+                            )
+                            if memory_detail:
+                                _assignment_write_audit_entry(
+                                    root,
+                                    ticket_id=ticket_id,
+                                    node_id=node_id,
+                                    action="append_workspace_memory",
+                                    operator="assignment-system",
+                                    reason="appended workspace daily memory after stale run recovery",
+                                    target_status="failed",
+                                    detail=memory_detail,
+                                    created_at=now_text,
+                                )
+                        except Exception:
+                            pass
                     # Persist the terminal node state before emitting side effects so concurrent
                     # readers do not keep re-entering stale recovery from the old running file.
                     _assignment_persist_stale_node_terminal_state(

@@ -18,6 +18,23 @@ def _assignment_process_pid_is_live(raw_pid: Any) -> bool:
         return False
     if pid <= 0:
         return False
+    if str(os.name or "").lower() == "nt":
+        try:
+            import ctypes
+
+            kernel32 = ctypes.windll.kernel32
+            process_handle = kernel32.OpenProcess(0x1000, False, pid)
+            if not process_handle:
+                return False
+            try:
+                exit_code = ctypes.c_ulong()
+                if kernel32.GetExitCodeProcess(process_handle, ctypes.byref(exit_code)) == 0:
+                    return False
+                return int(exit_code.value) == 259
+            finally:
+                kernel32.CloseHandle(process_handle)
+        except Exception:
+            return False
     try:
         os.kill(pid, 0)
         return True
@@ -141,7 +158,7 @@ def _reconcile_stale_running_nodes(
             continue
         run_rows = conn.execute(
             """
-            SELECT run_id
+            SELECT run_id,provider_pid
             FROM assignment_execution_runs
             WHERE ticket_id=? AND node_id=? AND status IN ('starting','running')
             ORDER BY created_at DESC, run_id DESC
@@ -149,7 +166,10 @@ def _reconcile_stale_running_nodes(
             (node_ticket_id, node_id),
         ).fetchall()
         cancelled_run_ids = [
-            str(run_row["run_id"] or "").strip()
+            {
+                "run_id": str(run_row["run_id"] or "").strip(),
+                "provider_pid": int(run_row["provider_pid"] or 0),
+            }
             for run_row in run_rows
             if str(run_row["run_id"] or "").strip()
         ]
@@ -173,6 +193,11 @@ def _reconcile_stale_running_nodes(
                     node_id,
                 ),
             )
+            for item in cancelled_run_ids:
+                _kill_assignment_run_process(
+                    str(item.get("run_id") or "").strip(),
+                    provider_pid=int(item.get("provider_pid") or 0),
+                )
         conn.execute(
             """
             UPDATE assignment_nodes
@@ -191,7 +216,7 @@ def _reconcile_stale_running_nodes(
             {
                 "ticket_id": node_ticket_id,
                 "node_id": node_id,
-                "cancelled_run_ids": cancelled_run_ids,
+                "cancelled_run_ids": [str(item.get("run_id") or "").strip() for item in cancelled_run_ids],
             }
         )
     if not recovered:
