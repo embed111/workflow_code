@@ -548,7 +548,12 @@ def _process_schedule_trigger_async(
             )
         ticket_id = str(created.get("ticket_id") or "").strip()
         node_id = str(created.get("node_id") or "").strip()
-        result_status = _assignment_runtime_status(cfg.root, ticket_id=ticket_id, node_id=node_id)
+        result_status = _assignment_runtime_status(
+            cfg.root,
+            ticket_id=ticket_id,
+            node_id=node_id,
+            persist_repair=True,
+        )
         _record_schedule_trigger_progress(
             cfg.root,
             schedule=schedule,
@@ -578,7 +583,12 @@ def _process_schedule_trigger_async(
             except Exception as dispatch_exc:
                 dispatch_status = "dispatch_failed"
                 dispatch_message = str(dispatch_exc)
-            result_status = _assignment_runtime_status(cfg.root, ticket_id=ticket_id, node_id=node_id)
+            result_status = _assignment_runtime_status(
+                cfg.root,
+                ticket_id=ticket_id,
+                node_id=node_id,
+                persist_repair=True,
+            )
             _record_schedule_trigger_progress(
                 cfg.root,
                 schedule=schedule,
@@ -1525,7 +1535,7 @@ def _assignment_snapshot_for_schedule_status(
             root,
             ticket_text,
             include_test_data=True,
-            reconcile_running=True,
+            reconcile_running=False,
             include_scheduler=False,
             include_serialized_nodes=False,
             persist_changes=False,
@@ -1536,7 +1546,7 @@ def _assignment_snapshot_for_schedule_status(
                 root,
                 ticket_text,
                 include_test_data=True,
-                reconcile_running=True,
+                reconcile_running=False,
             )
         except Exception:
             return {}, []
@@ -1550,6 +1560,23 @@ def _assignment_snapshot_for_schedule_status(
         for item in list(snapshot.get("all_nodes") or snapshot.get("nodes") or [])
         if isinstance(item, dict)
     ]
+    projector = globals().get("_assignment_project_live_run_status_for_nodes")
+    if callable(projector) and node_records:
+        try:
+            projected = projector(
+                root,
+                ticket_id=ticket_text,
+                node_records=node_records,
+            )
+        except TypeError:
+            try:
+                projected = projector(root, ticket_id=ticket_text, node_records=node_records)
+            except Exception:
+                projected = node_records
+        except Exception:
+            projected = node_records
+        if isinstance(projected, list):
+            node_records = [dict(item) for item in projected if isinstance(item, dict)]
     return task_payload, node_records
 
 
@@ -1569,6 +1596,7 @@ def _assignment_runtime_status_from_task_files(
     *,
     ticket_id: str,
     node_id: str,
+    persist_repair: bool = False,
 ) -> dict[str, str]:
     ticket_text = str(ticket_id or "").strip()
     node_text = str(node_id or "").strip()
@@ -1666,6 +1694,55 @@ def _assignment_runtime_status_from_task_files(
                 node_status = "failed"
                 if not status_text:
                     status_text = SCHEDULE_RESULT_TEXT["failed"]
+    if persist_repair and node_status == "failed" and stale_running_detected:
+        snapshot_fn = globals().get("_assignment_snapshot_from_files")
+        if callable(snapshot_fn):
+            try:
+                repaired_snapshot = snapshot_fn(
+                    root,
+                    ticket_text,
+                    include_test_data=True,
+                    reconcile_running=True,
+                    include_scheduler=False,
+                    include_serialized_nodes=False,
+                    persist_changes=True,
+                )
+            except TypeError:
+                try:
+                    repaired_snapshot = snapshot_fn(
+                        root,
+                        ticket_text,
+                        include_test_data=True,
+                        reconcile_running=True,
+                    )
+                except Exception:
+                    repaired_snapshot = {}
+            except Exception:
+                repaired_snapshot = {}
+            if isinstance(repaired_snapshot, dict):
+                repaired_task = dict(repaired_snapshot.get("graph_row") or {})
+                repaired_node = next(
+                    (
+                        dict(item)
+                        for item in list(repaired_snapshot.get("all_nodes") or repaired_snapshot.get("nodes") or [])
+                        if str(item.get("node_id") or "").strip() == node_text
+                    ),
+                    {},
+                )
+                if repaired_node:
+                    repaired_status = str(repaired_node.get("status") or "").strip().lower()
+                    repaired_result_status = _assignment_result_status_from_node_payload(repaired_node)
+                    return {
+                        "assignment_status": repaired_status,
+                        "assignment_status_text": str(repaired_node.get("status_text") or "").strip(),
+                        "assignment_graph_name": str(repaired_task.get("graph_name") or "").strip(),
+                        "assignment_node_name": str(repaired_node.get("node_name") or node_text).strip(),
+                        "result_status": repaired_result_status,
+                        "result_status_text": SCHEDULE_RESULT_TEXT.get(
+                            repaired_result_status,
+                            SCHEDULE_RESULT_TEXT["pending"],
+                        ),
+                    }
 
     result_status = _assignment_result_status_from_node_payload({"status": node_status})
     return {
@@ -1678,11 +1755,22 @@ def _assignment_runtime_status_from_task_files(
     }
 
 
-def _assignment_runtime_status(root: Path, *, ticket_id: str, node_id: str) -> dict[str, str]:
+def _assignment_runtime_status(
+    root: Path,
+    *,
+    ticket_id: str,
+    node_id: str,
+    persist_repair: bool = False,
+) -> dict[str, str]:
     if not ticket_id or not node_id:
         return {}
     try:
-        fast_payload = _assignment_runtime_status_from_task_files(root, ticket_id=ticket_id, node_id=node_id)
+        fast_payload = _assignment_runtime_status_from_task_files(
+            root,
+            ticket_id=ticket_id,
+            node_id=node_id,
+            persist_repair=persist_repair,
+        )
         if fast_payload:
             return fast_payload
         task_payload, node_records = _assignment_snapshot_for_schedule_status(root, ticket_id=ticket_id)
@@ -1739,15 +1827,36 @@ def _assignment_ticket_has_other_running_nodes(
     if not ticket_id:
         return False
     try:
-        _task_payload, node_records = _assignment_snapshot_for_schedule_status(root, ticket_id=ticket_id)
+        load_nodes_fn = globals().get("_assignment_load_active_node_records_lightweight")
+        node_records: list[dict[str, Any]] = []
+        if callable(load_nodes_fn):
+            try:
+                loaded_nodes = load_nodes_fn(root, ticket_id=ticket_id)
+            except TypeError:
+                try:
+                    loaded_nodes = load_nodes_fn(root, ticket_id=ticket_id)
+                except Exception:
+                    loaded_nodes = []
+            except Exception:
+                loaded_nodes = []
+            node_records = [dict(item) for item in list(loaded_nodes or []) if isinstance(item, dict)]
+        if not node_records:
+            _task_payload, node_records = _assignment_snapshot_for_schedule_status(root, ticket_id=ticket_id)
         if node_records:
             excluded = str(exclude_node_id or "").strip()
             for payload in list(node_records or []):
                 if str(payload.get("record_state") or "active").strip().lower() == "deleted":
                     continue
-                if str(payload.get("node_id") or "").strip() == excluded:
+                node_id = str(payload.get("node_id") or "").strip()
+                if not node_id or node_id == excluded:
                     continue
-                if str(payload.get("status") or "").strip().lower() == "running":
+                runtime_status = _assignment_runtime_status(
+                    root,
+                    ticket_id=ticket_id,
+                    node_id=node_id,
+                    persist_repair=False,
+                )
+                if str(runtime_status.get("assignment_status") or "").strip().lower() == "running":
                     return True
         resolver = globals().get("resolve_artifact_root_path")
         if not callable(resolver):
@@ -1768,9 +1877,16 @@ def _assignment_ticket_has_other_running_nodes(
                 continue
             if str(payload.get("record_state") or "active").strip().lower() == "deleted":
                 continue
-            if str(payload.get("node_id") or "").strip() == excluded:
+            node_id = str(payload.get("node_id") or "").strip()
+            if not node_id or node_id == excluded:
                 continue
-            if str(payload.get("status") or "").strip().lower() == "running":
+            runtime_status = _assignment_runtime_status(
+                root,
+                ticket_id=ticket_id,
+                node_id=node_id,
+                persist_repair=False,
+            )
+            if str(runtime_status.get("assignment_status") or "").strip().lower() == "running":
                 return True
     except Exception:
         return False
@@ -2574,6 +2690,7 @@ def run_schedule_scan(cfg: Any, *, operator: str = "schedule-worker", now_at: st
                             cfg.root,
                             ticket_id=existing_ticket_id,
                             node_id=existing_node_id,
+                            persist_repair=True,
                         )
                         _record_schedule_trigger_progress(
                             cfg.root,
@@ -2750,6 +2867,7 @@ def _resume_pending_schedule_triggers(cfg: Any, *, operator: str = "schedule-wor
                 cfg.root,
                 ticket_id=assignment_ticket_id,
                 node_id=assignment_node_id,
+                persist_repair=True,
             )
             assignment_status = str(result_status.get("assignment_status") or "").strip().lower()
             result_state = str(result_status.get("result_status") or "").strip().lower()

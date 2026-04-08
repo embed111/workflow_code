@@ -222,7 +222,7 @@ def main() -> int:
         )
         return True
 
-    def fake_assignment_runtime_status(root_path, *, ticket_id: str, node_id: str):
+    def fake_assignment_runtime_status(root_path, *, ticket_id: str, node_id: str, persist_repair: bool = False):
         key = (str(ticket_id or "").strip(), str(node_id or "").strip())
         if key == ("asg-active", "node-active"):
             return {"assignment_status": "ready", "assignment_status_text": "待开始", "result_status": "queued"}

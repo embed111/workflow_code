@@ -130,7 +130,7 @@ def main() -> int:
 
     original_assignment_runtime_status = schedule_service._assignment_runtime_status
 
-    def fake_assignment_runtime_status(root_path, *, ticket_id: str, node_id: str):
+    def fake_assignment_runtime_status(root_path, *, ticket_id: str, node_id: str, persist_repair: bool = False):
         if str(ticket_id or "").strip() == assignment_ticket_id and str(node_id or "").strip() == assignment_node_id:
             return {
                 "assignment_status": "succeeded",
