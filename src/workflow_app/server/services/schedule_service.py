@@ -1563,10 +1563,117 @@ def _assignment_result_status_from_node_payload(node_payload: dict[str, Any]) ->
     return "queued"
 
 
+def _assignment_runtime_status_from_task_files(
+    root: Path,
+    *,
+    ticket_id: str,
+    node_id: str,
+) -> dict[str, str]:
+    ticket_text = str(ticket_id or "").strip()
+    node_text = str(node_id or "").strip()
+    if not ticket_text or not node_text:
+        return {}
+    resolver = globals().get("resolve_artifact_root_path")
+    if not callable(resolver):
+        return {}
+
+    def _read_payload(path: Path) -> dict[str, Any]:
+        read_json_fn = globals().get("_assignment_read_json")
+        if callable(read_json_fn):
+            try:
+                payload = read_json_fn(path, fallback={})
+            except TypeError:
+                try:
+                    payload = read_json_fn(path)
+                except Exception:
+                    payload = {}
+            except Exception:
+                payload = {}
+            if isinstance(payload, dict):
+                return dict(payload)
+        if not path.exists() or not path.is_file():
+            return {}
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            return {}
+        return dict(payload) if isinstance(payload, dict) else {}
+
+    try:
+        tasks_root = (Path(resolver(root)).resolve(strict=False) / "tasks" / ticket_text).resolve(strict=False)
+    except Exception:
+        return {}
+    task_payload = _read_payload(tasks_root / "task.json")
+    node_payload = _read_payload(tasks_root / "nodes" / (node_text + ".json"))
+    if not node_payload:
+        return {}
+
+    node_status = str(node_payload.get("status") or "").strip().lower()
+    status_text = str(node_payload.get("status_text") or "").strip()
+    if node_status not in {"succeeded", "failed"}:
+        load_run_records_fn = globals().get("_assignment_load_run_records")
+        active_run_ids_fn = globals().get("_active_assignment_run_ids")
+        run_row_is_live_fn = globals().get("_assignment_run_row_is_live")
+        now_local_fn = globals().get("now_local")
+        stale_grace_seconds = int(globals().get("DEFAULT_ASSIGNMENT_STALE_RUN_GRACE_SECONDS") or 15)
+        if (
+            callable(load_run_records_fn)
+            and callable(active_run_ids_fn)
+            and callable(run_row_is_live_fn)
+            and callable(now_local_fn)
+        ):
+            active_run_ids = {
+                str(run_id or "").strip()
+                for run_id in list(active_run_ids_fn() or [])
+                if str(run_id or "").strip()
+            }
+            live_found = False
+            for run in list(load_run_records_fn(root, ticket_id=ticket_text, node_id=node_text) or []):
+                run_status = str((run or {}).get("status") or "").strip().lower()
+                if run_status not in {"starting", "running"}:
+                    continue
+                try:
+                    is_live = bool(
+                        run_row_is_live_fn(
+                            run,
+                            active_run_ids=active_run_ids,
+                            now_dt=now_local_fn(),
+                            grace_seconds=stale_grace_seconds,
+                        )
+                    )
+                except TypeError:
+                    try:
+                        is_live = bool(run_row_is_live_fn(run, active_run_ids, now_local_fn(), stale_grace_seconds))
+                    except Exception:
+                        is_live = False
+                except Exception:
+                    is_live = False
+                if is_live:
+                    live_found = True
+                    break
+            if live_found:
+                node_status = "running"
+                if not status_text:
+                    status_text = SCHEDULE_RESULT_TEXT["running"]
+
+    result_status = _assignment_result_status_from_node_payload({"status": node_status})
+    return {
+        "assignment_status": node_status,
+        "assignment_status_text": status_text,
+        "assignment_graph_name": str(task_payload.get("graph_name") or "").strip(),
+        "assignment_node_name": str(node_payload.get("node_name") or node_text).strip(),
+        "result_status": result_status,
+        "result_status_text": SCHEDULE_RESULT_TEXT.get(result_status, SCHEDULE_RESULT_TEXT["pending"]),
+    }
+
+
 def _assignment_runtime_status(root: Path, *, ticket_id: str, node_id: str) -> dict[str, str]:
     if not ticket_id or not node_id:
         return {}
     try:
+        fast_payload = _assignment_runtime_status_from_task_files(root, ticket_id=ticket_id, node_id=node_id)
+        if fast_payload:
+            return fast_payload
         task_payload, node_records = _assignment_snapshot_for_schedule_status(root, ticket_id=ticket_id)
         node_payload = next(
             (
