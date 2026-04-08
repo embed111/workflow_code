@@ -25,16 +25,26 @@ def _assignment_process_pid_is_live(raw_pid: Any) -> bool:
             kernel32 = ctypes.windll.kernel32
             process_handle = kernel32.OpenProcess(0x1000, False, pid)
             if not process_handle:
-                return False
+                last_error = int(ctypes.get_last_error() or 0)
+                if last_error == 5:
+                    return True
+                if last_error in {87, 1168}:
+                    return False
+                raise OSError(last_error, "OpenProcess failed")
             try:
                 exit_code = ctypes.c_ulong()
                 if kernel32.GetExitCodeProcess(process_handle, ctypes.byref(exit_code)) == 0:
-                    return False
+                    last_error = int(ctypes.get_last_error() or 0)
+                    if last_error == 5:
+                        return True
+                    if last_error in {87, 1168}:
+                        return False
+                    raise OSError(last_error, "GetExitCodeProcess failed")
                 return int(exit_code.value) == 259
             finally:
                 kernel32.CloseHandle(process_handle)
         except Exception:
-            return False
+            pass
     try:
         os.kill(pid, 0)
         return True
@@ -57,12 +67,7 @@ def _assignment_run_row_is_live(
 ) -> bool:
     run_id = str((row["run_id"] if isinstance(row, sqlite3.Row) else row.get("run_id")) or "").strip()
     status = str((row["status"] if isinstance(row, sqlite3.Row) else row.get("status")) or "").strip().lower()
-    if run_id and run_id in active_run_ids:
-        return True
     raw_pid = row["provider_pid"] if isinstance(row, sqlite3.Row) else row.get("provider_pid")
-    pid_is_live = _assignment_process_pid_is_live(raw_pid)
-    if pid_is_live:
-        return True
     effective_grace_seconds = max(1, int(grace_seconds))
     if status == "starting":
         effective_grace_seconds = max(effective_grace_seconds, DEFAULT_ASSIGNMENT_PROVIDER_START_GRACE_SECONDS)
@@ -70,6 +75,27 @@ def _assignment_run_row_is_live(
         # Codex cold start can take far longer than the stale-running default window.
         # Keep a dispatch-created run alive until provider pid or the first real heartbeat lands.
         effective_grace_seconds = max(effective_grace_seconds, DEFAULT_ASSIGNMENT_PROVIDER_START_GRACE_SECONDS)
+    if run_id and run_id in active_run_ids:
+        return True
+    pid_is_live = _assignment_process_pid_is_live(raw_pid)
+    if pid_is_live:
+        # A live provider pid without an in-process handle is only trusted while the run
+        # record still receives fresh timestamps. Once those timestamps age out, treat it
+        # as a detached orphan and let stale recovery terminate the provider tree.
+        for field in ("latest_event_at", "updated_at", "started_at", "created_at"):
+            raw_value = row[field] if isinstance(row, sqlite3.Row) else row.get(field)
+            parsed = _parse_assignment_iso_datetime(raw_value)
+            if parsed is None:
+                continue
+            try:
+                if getattr(parsed, "tzinfo", None) is None and getattr(now_dt, "tzinfo", None) is not None:
+                    parsed = parsed.replace(tzinfo=now_dt.tzinfo)
+                age_seconds = abs((now_dt - parsed).total_seconds())
+            except Exception:
+                continue
+            if age_seconds <= effective_grace_seconds:
+                return True
+        return False
     for field in ("latest_event_at", "updated_at", "started_at", "created_at"):
         raw_value = row[field] if isinstance(row, sqlite3.Row) else row.get(field)
         parsed = _parse_assignment_iso_datetime(raw_value)

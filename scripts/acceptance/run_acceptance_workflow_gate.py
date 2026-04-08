@@ -1319,6 +1319,7 @@ def main() -> int:
         empty_root.mkdir(parents=True, exist_ok=True)
         # agent_search_root 语义是“工作区根路径”，必须包含 workflow/ 子目录。
         (empty_root / "workflow").mkdir(parents=True, exist_ok=True)
+        close_existing_sessions(base)
         sw_empty_status, sw_empty_payload = call(
             base,
             "POST",
