@@ -186,6 +186,66 @@ def _assignment_stdout_events_are_startup_only(stdout_text: str) -> bool:
     return True
 
 
+def _assignment_stdout_event_error_messages(stdout_text: str) -> list[str]:
+    messages: list[str] = []
+    lines = [str(line or "").strip() for line in str(stdout_text or "").splitlines() if str(line or "").strip()]
+    for line in lines:
+        try:
+            payload = json.loads(line)
+        except Exception:
+            continue
+        if not isinstance(payload, dict):
+            continue
+        event_type = str(payload.get("type") or "").strip().lower()
+        if event_type == "error":
+            message_text = str(payload.get("message") or "").strip()
+            if message_text:
+                messages.append(message_text)
+        failed_error = payload.get("error")
+        if isinstance(failed_error, dict):
+            failed_message = str(failed_error.get("message") or "").strip()
+            if failed_message:
+                messages.append(failed_message)
+    return messages
+
+
+def _assignment_stream_disconnect_detected(stdout_text: str, stderr_text: str) -> bool:
+    candidates = _assignment_stdout_event_error_messages(stdout_text)
+    stderr_value = str(stderr_text or "").strip()
+    if stderr_value:
+        candidates.append(stderr_value)
+    for item in candidates:
+        lowered = str(item or "").strip().lower()
+        if (
+            "stream disconnected before completion" in lowered
+            or "stream closed before response.completed" in lowered
+            or "连接中断" in lowered
+        ):
+            return True
+    return False
+
+
+def _assignment_should_retry_transient_stream_disconnect_failure(
+    *,
+    exit_code: int,
+    stdout_text: str,
+    stderr_text: str,
+    observed_payload: dict[str, Any],
+    elapsed_seconds: float,
+    attempt_number: int,
+) -> bool:
+    retry_limit = _assignment_transient_startup_retry_limit()
+    if retry_limit <= 0 or int(attempt_number or 0) > retry_limit:
+        return False
+    if int(exit_code or 0) == 0:
+        return False
+    if bool(observed_payload):
+        return False
+    if float(elapsed_seconds or 0.0) > float(_assignment_transient_startup_retry_max_seconds()):
+        return False
+    return _assignment_stream_disconnect_detected(stdout_text, stderr_text)
+
+
 def _assignment_should_retry_transient_startup_failure(
     *,
     exit_code: int,
@@ -1540,23 +1600,60 @@ def _assignment_execution_worker(
                     pass
         attempt_stdout_text = "".join(stdout_chunks[attempt_stdout_index:])
         attempt_stderr_text = "".join(stderr_chunks[attempt_stderr_index:])
+        observed_payload = last_observed_result_payload()
+        attempt_elapsed_seconds = time.monotonic() - attempt_started_monotonic
+        stream_disconnected = _assignment_stream_disconnect_detected(
+            attempt_stdout_text,
+            attempt_stderr_text,
+        )
         if exit_code != 0 and not failure_message:
-            failure_message = (
-                _short_assignment_text(attempt_stderr_text, 500)
-                or f"assignment execution failed with exit={exit_code}"
-            )
+            if stream_disconnected:
+                failure_message = "Codex 连接中断。"
+            else:
+                failure_message = (
+                    _short_assignment_text(attempt_stderr_text, 500)
+                    or f"assignment execution failed with exit={exit_code}"
+                )
         current_run_status = str(
             (_assignment_load_run_record(root, ticket_id=ticket_id, run_id=run_id) or {}).get("status") or ""
         ).strip().lower()
         if current_run_status == "cancelled":
             break
+        if _assignment_should_retry_transient_stream_disconnect_failure(
+            exit_code=exit_code,
+            stdout_text=attempt_stdout_text,
+            stderr_text=attempt_stderr_text,
+            observed_payload=observed_payload,
+            elapsed_seconds=attempt_elapsed_seconds,
+            attempt_number=attempt_number,
+        ):
+            _append_assignment_run_event(
+                files["events"],
+                event_type="provider_retry",
+                message="Provider 连接中断，已自动重试。",
+                created_at=iso_ts(now_local()),
+                detail={
+                    "attempt": attempt_number,
+                    "next_attempt": attempt_number + 1,
+                    "exit_code": int(exit_code or 0),
+                    "reason_code": "codex_stream_disconnected",
+                },
+            )
+            _assignment_touch_run_latest_event(
+                root,
+                ticket_id=ticket_id,
+                run_id=run_id,
+                latest_event="Provider 连接中断，自动重试中。",
+                latest_event_at=iso_ts(now_local()),
+            )
+            continue
         if _assignment_should_retry_transient_startup_failure(
             exit_code=exit_code,
             stdout_text=attempt_stdout_text,
             stderr_text=attempt_stderr_text,
             agent_message_count=len(agent_messages) - attempt_agent_message_index,
-            observed_payload=last_observed_result_payload(),
-            elapsed_seconds=time.monotonic() - attempt_started_monotonic,
+            observed_payload=observed_payload,
+            elapsed_seconds=attempt_elapsed_seconds,
             attempt_number=attempt_number,
         ):
             _append_assignment_run_event(

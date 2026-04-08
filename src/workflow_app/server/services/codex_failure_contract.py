@@ -382,6 +382,12 @@ def infer_codex_failure_detail_code(
         return "codex_command_not_found"
     if "codex returned no agent message" in text:
         return "codex_result_missing"
+    if (
+        "stream disconnected before completion" in text
+        or "stream closed before response.completed" in text
+        or "连接中断" in text
+    ):
+        return "codex_stream_disconnected"
     match = re.search(r"command exit code=(\d+)", text)
     if match:
         return f"codex_exec_failed_exit_{match.group(1)}"

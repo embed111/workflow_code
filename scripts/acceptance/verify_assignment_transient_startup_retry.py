@@ -31,6 +31,43 @@ if attempt == 1:
         sys.stderr.write("^C\n")
         sys.stderr.flush()
         raise SystemExit(1)
+    if mode == "stream_disconnect":
+        print(
+            json.dumps(
+                {
+                    "type": "item.completed",
+                    "item": {
+                        "type": "agent_message",
+                        "text": "我先补齐读链，再继续核对 runtime-upgrade 和 schedules。",
+                    },
+                },
+                ensure_ascii=False,
+            ),
+            flush=True,
+        )
+        print(
+            json.dumps(
+                {
+                    "type": "error",
+                    "message": "Reconnecting... 1/5 (stream disconnected before completion: simulated disconnect)",
+                },
+                ensure_ascii=False,
+            ),
+            flush=True,
+        )
+        print(
+            json.dumps(
+                {
+                    "type": "turn.failed",
+                    "error": {
+                        "message": "stream disconnected before completion: simulated disconnect",
+                    },
+                },
+                ensure_ascii=False,
+            ),
+            flush=True,
+        )
+        raise SystemExit(1)
     raise SystemExit(2)
 
 payload = {
@@ -224,11 +261,12 @@ def main() -> int:
     _setup_runtime_root(root)
     startup_only = _run_retry_case(ws, root, mode="startup_only")
     interrupt = _run_retry_case(ws, root, mode="interrupt")
+    stream_disconnect = _run_retry_case(ws, root, mode="stream_disconnect")
     print(
         json.dumps(
             {
                 "ok": True,
-                "cases": [startup_only, interrupt],
+                "cases": [startup_only, interrupt, stream_disconnect],
             },
             ensure_ascii=False,
             indent=2,
