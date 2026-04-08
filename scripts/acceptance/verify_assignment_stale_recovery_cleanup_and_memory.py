@@ -166,19 +166,13 @@ def main() -> int:
         ws._assignment_write_json(node_path, node_payload)
 
         assert ws._assignment_process_pid_is_live(proc.pid) is True, proc.pid
-        run_row_is_live_globals = ws._assignment_run_row_is_live.__globals__
-        original_pid_is_live = run_row_is_live_globals["_assignment_process_pid_is_live"]
-        run_row_is_live_globals["_assignment_process_pid_is_live"] = lambda _pid: False
-        try:
-            ws.get_assignment_graph(
-                root,
-                ticket_id,
-                include_test_data=False,
-                active_batch_size=20,
-                history_batch_size=20,
-            )
-        finally:
-            run_row_is_live_globals["_assignment_process_pid_is_live"] = original_pid_is_live
+        ws.get_assignment_graph(
+            root,
+            ticket_id,
+            include_test_data=False,
+            active_batch_size=20,
+            history_batch_size=20,
+        )
 
         for _ in range(20):
             if ws._assignment_process_pid_is_live(proc.pid) is False:

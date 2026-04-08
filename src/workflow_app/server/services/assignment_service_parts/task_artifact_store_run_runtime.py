@@ -106,6 +106,25 @@ def _assignment_touch_run_latest_event(
     _assignment_write_run_record(root, ticket_id=ticket_id, run_record=run_record, sync_index=False)
 
 
+def _assignment_touch_run_heartbeat(
+    root: Path,
+    *,
+    ticket_id: str,
+    run_id: str,
+    heartbeat_at: str,
+) -> None:
+    run_record = _assignment_load_run_record(root, ticket_id=ticket_id, run_id=run_id)
+    if not run_record:
+        return
+    current_status = str(run_record.get("status") or "").strip().lower()
+    if current_status not in {"starting", "running"}:
+        return
+    run_record["updated_at"] = heartbeat_at
+    if not str(run_record.get("latest_event_at") or "").strip():
+        run_record["latest_event_at"] = heartbeat_at
+    _assignment_write_run_record(root, ticket_id=ticket_id, run_record=run_record, sync_index=False)
+
+
 def _assignment_execution_codex_failure(
     root: Path,
     *,
@@ -1037,6 +1056,7 @@ def _finalize_assignment_execution_run(
     workspace_path_text = str(run_record.get("workspace_path") or "").strip()
     current_run_status = str(run_record.get("status") or "").strip().lower()
     if current_run_status == "cancelled":
+        _kill_assignment_run_process(run_id, provider_pid=run_record.get("provider_pid"))
         run_record["latest_event"] = _assignment_cancelled_run_final_message(run_record)
         run_record["latest_event_at"] = now_text
         run_record["exit_code"] = int(exit_code or 0)
@@ -1395,6 +1415,7 @@ def _assignment_execution_worker(
         attempt_started_at = iso_ts(now_local())
         attempt_started_monotonic = time.monotonic()
         mark_activity(attempt_started_monotonic)
+        last_heartbeat_monotonic = attempt_started_monotonic
         attempt_stdout_index = len(stdout_chunks)
         attempt_stderr_index = len(stderr_chunks)
         attempt_agent_message_index = len(agent_messages)
@@ -1448,6 +1469,15 @@ def _assignment_execution_worker(
                     break
                 except subprocess.TimeoutExpired:
                     now_monotonic = time.monotonic()
+                    if (now_monotonic - last_heartbeat_monotonic) >= float(DEFAULT_ASSIGNMENT_EVENT_STREAM_KEEPALIVE_S):
+                        heartbeat_at = iso_ts(now_local())
+                        _assignment_touch_run_heartbeat(
+                            root,
+                            ticket_id=ticket_id,
+                            run_id=run_id,
+                            heartbeat_at=heartbeat_at,
+                        )
+                        last_heartbeat_monotonic = now_monotonic
                     ready_at = observed_turn_completed_at_monotonic()
                     if ready_at > 0 and (now_monotonic - ready_at) >= final_result_grace_s:
                         forced_result_short_circuit = True
