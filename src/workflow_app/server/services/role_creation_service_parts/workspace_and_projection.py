@@ -41,18 +41,22 @@ def _render_workspace_agents_md(role_spec: dict[str, Any], *, workspace_name: st
         "## Collaboration\n"
         f"- collaboration_style: 我默认这样协作：{style}\n"
         f"- boundaries: 我的边界：{'；'.join(boundaries[:4]) or '待补充'}\n\n"
-        "## Memory Maintenance\n"
+        "## Memory Governance\n"
+        "- 经验入口以 `.codex/experience/index.md` 为准；正式工作前我会先读索引，再按其中“必读经验”顺序补充读取经验卡。\n"
+        "- 记忆库规范以 `.codex/MEMORY.md` 为准；我会先按那份规范执行读链、日切和月切检查。\n"
         "- 每轮有实际动作后，我都会向 `.codex/memory/YYYY-MM/YYYY-MM-DD.md` 追加一条结构化总结。\n"
-        "- 若当日日记缺失，我会先补齐骨架再继续工作。\n"
+        "- 若当日日记缺失，我会先补齐骨架再继续工作；需要补齐骨架或归档时，优先使用 `python scripts/manage_codex_memory.py repair-rollups --root .`。\n"
         "- 我的记忆默认用第一人称，带一点日记感；`next` 字段优先写绝对时间或明确下一步动作，便于 pm 检查连续性。\n\n"
         "## Startup Read Order\n"
         "1. `AGENTS.md`\n"
-        "2. `.codex/SOUL.md`\n"
-        "3. `.codex/USER.md`\n"
-        "4. `.codex/MEMORY.md`\n"
-        "5. `.codex/memory/全局记忆总览.md`\n"
-        "6. `.codex/memory/YYYY-MM/记忆总览.md`\n"
-        "7. `.codex/memory/YYYY-MM/YYYY-MM-DD.md`\n"
+        "2. `.codex/experience/index.md`\n"
+        "3. 读取 `.codex/experience/index.md` 中“必读经验”列出的经验文件\n"
+        "4. `.codex/SOUL.md`\n"
+        "5. `.codex/USER.md`\n"
+        "6. `.codex/MEMORY.md`\n"
+        "7. `.codex/memory/全局记忆总览.md`\n"
+        "8. `.codex/memory/YYYY-MM/记忆总览.md`\n"
+        "9. `.codex/memory/YYYY-MM/YYYY-MM-DD.md`\n"
     )
 
 
@@ -86,12 +90,141 @@ def _render_workspace_user_md(role_spec: dict[str, Any]) -> str:
     )
 
 
+def _render_workspace_memory_md() -> str:
+    return (
+        "# 工作区记忆规范\n\n"
+        "## 目的\n"
+        "- 本文件是当前工作区的顶层记忆规范。\n"
+        "- 具体轮次总结不要写在这里，只写入每日日记文件。\n"
+        "- 把 `.codex/` 视为 agent 记忆和内部指导，不得当成产品运行态。\n\n"
+        "## 必读顺序\n"
+        "1. `AGENTS.md`\n"
+        "2. `.codex/experience/index.md`\n"
+        "3. 读取 `.codex/experience/index.md` 中“必读经验”列出的经验文件\n"
+        "4. `.codex/SOUL.md`\n"
+        "5. `.codex/USER.md`\n"
+        "6. `.codex/MEMORY.md`\n"
+        "7. `.codex/memory/全局记忆总览.md`\n"
+        "8. `.codex/memory/YYYY-MM/记忆总览.md`\n"
+        "9. `.codex/memory/YYYY-MM/YYYY-MM-DD.md`\n\n"
+        "## 目录模型\n"
+        "- 经验索引：`.codex/experience/index.md`\n"
+        "- 经验卡：`.codex/experience/*.md`\n"
+        "- 全局总览：`.codex/memory/全局记忆总览.md`\n"
+        "- 月度总览：`.codex/memory/YYYY-MM/记忆总览.md`\n"
+        "- 每日日记：`.codex/memory/YYYY-MM/YYYY-MM-DD.md`\n\n"
+        "## 写入规则\n"
+        "- 经验卡只记录可复用模式、踩坑与规避规则；不要写成逐轮流水账。\n"
+        "- 出现新的稳定经验时，更新对应 `.codex/experience/*.md`，并同步维护 `index.md`。\n"
+        "- 每轮工作结束后，都要向当日日记追加一条带时间戳的总结。\n"
+        "- 每日日记条目默认使用第一人称，写成“我这轮 / 我刚刚确认到”的日记口吻，并保持结构化、可检索。\n"
+        "- 每日日记条目优先使用 `topic / context / actions / decisions / validation / artifacts / next` 结构。\n"
+        "- 当日总结只保留在当日日记中，直到次日开始。\n"
+        "- 当月总览只归档截至昨日的日级摘要。\n"
+        "- 全局总览只归档已闭月的月度总结。\n\n"
+        "## 每日条目字段说明\n"
+        "- `topic`：我这轮主要在做什么。\n"
+        "- `context`：我为什么开始处理这件事，包括触发原因或发现的缺口。\n"
+        "- `actions`：我实际改了什么、创建了什么、迁移了什么、检查了什么。\n"
+        "- `decisions`：我确认下来的规则、判断或会影响后续工作的结论。\n"
+        "- `validation`：我执行过的命令、检查项和观察结果。\n"
+        "- `artifacts`：我这轮触达的关键文件或目录。\n"
+        "- `next`：我接下来还要跟进什么、延后检查什么、满足什么条件后再归档。\n\n"
+        "## 归档检查\n"
+        "- 日切检查：新一天首轮工作前，确认昨日日记已汇总到对应月度总览。\n"
+        "- 月切检查：新一月首轮工作前，确认上月总览已汇总到全局总览。\n"
+        "- 如果发现必须的总览条目缺失，先补归档，再继续正常工作。\n\n"
+        "## 推荐命令\n"
+        "- `python scripts/manage_codex_memory.py status --root .`\n"
+        "- `python scripts/manage_codex_memory.py verify-rollups --root .`\n"
+        "- `python scripts/manage_codex_memory.py repair-rollups --root .`\n"
+        "- `python scripts/manage_codex_memory.py append --root . --topic \"<topic>\" --context \"<context>\" --actions \"<a|b>\" --decisions \"<a|b>\" --validation \"<a|b>\" --artifacts \"<a|b>\" --next \"<a|b>\"`\n"
+    )
+
+
+def _render_workspace_experience_index_md() -> str:
+    return (
+        "# 经验索引\n\n"
+        "## 先读这里\n"
+        "- 本文件是当前角色工作区的经验入口。\n"
+        "- 先读“必读经验”，再按需扩展阅读其他经验卡。\n"
+        "- 经验卡只记录可复用模式、踩坑复盘与规避动作，不记录单次流水账。\n\n"
+        "## 必读经验\n"
+        "- 暂无；等沉淀出稳定经验后再在这里追加。\n\n"
+        "## 经验文件\n"
+        "- 暂无。\n\n"
+        "## 更新规则\n"
+        "- 新经验优先补到已有经验卡；仅当主题明显不同再新建文件。\n"
+        "- 每次新增经验卡时，同步更新“必读经验”或“经验文件”引用。\n"
+        "- 如果只是一次性现象、还没验证稳定结论，不进入经验卡，只留在当日日记。\n"
+    )
+
+
+def _sync_workspace_experience_scaffold(asset_root: Path, codex_dir: Path) -> list[str]:
+    created: list[str] = []
+    source_dir = asset_root / ".codex" / "experience"
+    target_dir = codex_dir / "experience"
+    if source_dir.exists() and source_dir.is_dir():
+        for source_path in source_dir.rglob("*.md"):
+            if not source_path.is_file():
+                continue
+            relative_path = source_path.relative_to(source_dir)
+            target_path = target_dir / relative_path
+            _write_text(target_path, source_path.read_text(encoding="utf-8"))
+            created.append(target_path.as_posix())
+    index_path = target_dir / "index.md"
+    if not index_path.exists():
+        _write_text(index_path, _render_workspace_experience_index_md())
+        created.append(index_path.as_posix())
+    return created
+
+
+def _workspace_memory_spec_needs_fallback(text: str) -> bool:
+    normalized = str(text or "").strip()
+    if not normalized:
+        return True
+    if normalized in {"# Memory Spec", "# MEMORY"}:
+        return True
+    return "## 归档检查" not in normalized or ".codex/memory/YYYY-MM/YYYY-MM-DD.md" not in normalized
+
+
 def _render_memory_global_overview() -> str:
-    return "# 全局记忆总览\n\n- 当前角色工作区初始化完成后，闭月总结在这里归档。\n"
+    now_dt = now_local()
+    month_key = now_dt.strftime("%Y-%m")
+    day_key = now_dt.strftime("%Y-%m-%d")
+    return (
+        "# 全局记忆总览\n\n"
+        "## 角色说明\n"
+        "- 作用：提供跨月份的记忆索引，只归档已闭月的月度总结。\n"
+        f"- 后续读取：继续读取 `.codex/memory/{month_key}/记忆总览.md`。\n"
+        f"- 当前活动月份： `{month_key}`\n"
+        f"- 当前活动月份总览： `.codex/memory/{month_key}/记忆总览.md`\n\n"
+        "## 当前状态\n"
+        "- 已归档闭月数量： `0`\n"
+        "- 当前活动月份状态： `in_progress`\n"
+        f"- 当前活动日记： `.codex/memory/{month_key}/{day_key}.md`\n"
+        "- 全局归档说明：仅在闭月后把月度总结写入本文件；当前活动月份只保留索引，不复制日级增量。\n\n"
+        "## 已归档月份\n"
+        "- 暂无，等待闭月后归档。\n"
+    )
 
 
 def _render_memory_month_overview(month_key: str) -> str:
-    return f"# 记忆总览 {month_key}\n\n- 当前月份的已归档日级摘要会收口到这里。\n"
+    day_key = now_local().strftime("%Y-%m-%d")
+    return (
+        f"# 记忆总览 {month_key}\n\n"
+        "## 月份状态\n"
+        "- 状态： `in_progress`\n"
+        "- 已归档日记范围： `待补齐`\n"
+        f"- 当前活动日记： `.codex/memory/{month_key}/{day_key}.md`\n"
+        "- 月度归档目标： `.codex/memory/全局记忆总览.md`\n\n"
+        "## 归档规则\n"
+        "- 仅归档截至昨日的日级摘要。\n"
+        "- 当日新增总结只保留在对应的 `YYYY-MM-DD.md` 中，待日切后再归档。\n"
+        "- 若发生跨月，需先确认本月总览已被全局总览收录，再进入新月份工作。\n\n"
+        "## 已归档日索引\n"
+        "- 暂无，等待日切后归档。\n"
+    )
 
 
 def _render_memory_daily(day_key: str, month_key: str) -> str:
@@ -99,10 +232,19 @@ def _render_memory_daily(day_key: str, month_key: str) -> str:
         f"# 每日记忆 {day_key}\n\n"
         "## Metadata\n"
         f"- month: `{month_key}`\n"
-        f"- date: `{day_key}`\n\n"
+        f"- month_overview: `.codex/memory/{month_key}/记忆总览.md`\n"
+        "- archival_rule: 今日总结仅写入本文件，待日切后再归档到月度总览。\n\n"
         "## Writing Notes\n"
         "- 我默认用第一人称记录这一天的工作，语气可以带一点日记感，但要保持结构化、可检索。\n"
         "- 每条记录优先写清楚：topic / context / actions / decisions / validation / artifacts / next。\n\n"
+        "## Entry Schema\n"
+        "- topic: 本轮主主题\n"
+        "- context: 触发背景或问题来源\n"
+        "- actions: 本轮实际动作\n"
+        "- decisions: 对后续有影响的约束或结论\n"
+        "- validation: 已做检查与结果\n"
+        "- artifacts: 关键文件或目录\n"
+        "- next: 后续待跟进事项\n\n"
         "## Entries\n"
     )
 
@@ -168,10 +310,11 @@ def _initialize_role_workspace(cfg: Any, *, session_summary: dict[str, Any], rol
     _write_text(codex_dir / "USER.md", _render_workspace_user_md(role_spec))
     memory_spec_source = asset_root / ".codex" / "MEMORY.md"
     memory_script_source = asset_root / "scripts" / "manage_codex_memory.py"
-    if memory_spec_source.exists():
-        _write_text(codex_dir / "MEMORY.md", memory_spec_source.read_text(encoding="utf-8"))
-    else:
-        _write_text(codex_dir / "MEMORY.md", "# Memory Spec\n")
+    memory_spec_text = memory_spec_source.read_text(encoding="utf-8") if memory_spec_source.exists() else ""
+    if _workspace_memory_spec_needs_fallback(memory_spec_text):
+        memory_spec_text = _render_workspace_memory_md()
+    _write_text(codex_dir / "MEMORY.md", memory_spec_text)
+    _sync_workspace_experience_scaffold(asset_root, codex_dir)
     if memory_script_source.exists():
         _write_text(scripts_dir / "manage_codex_memory.py", memory_script_source.read_text(encoding="utf-8"))
     else:
@@ -216,6 +359,7 @@ def _initialize_role_workspace(cfg: Any, *, session_summary: dict[str, Any], rol
         f"  - {(workspace_path / '.codex' / 'SOUL.md').as_posix()}\n"
         f"  - {(workspace_path / '.codex' / 'USER.md').as_posix()}\n"
         f"  - {(workspace_path / '.codex' / 'MEMORY.md').as_posix()}\n"
+        f"  - {(workspace_path / '.codex' / 'experience' / 'index.md').as_posix()}\n"
         f"  - {(workspace_path / '.codex' / 'memory' / '全局记忆总览.md').as_posix()}\n"
         f"  - {(memory_dir / '记忆总览.md').as_posix()}\n"
         f"  - {(memory_dir / f'{day_key}.md').as_posix()}\n"

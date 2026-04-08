@@ -118,9 +118,11 @@ def main() -> int:
     now_dt = ws.now_local()
     month_key = now_dt.strftime("%Y-%m")
     day_key = now_dt.strftime("%Y-%m-%d")
+    experience_index = agent_workspace / ".codex" / "experience" / "index.md"
     global_path = agent_workspace / ".codex" / "memory" / "全局记忆总览.md"
     month_path = agent_workspace / ".codex" / "memory" / month_key / "记忆总览.md"
     day_path = agent_workspace / ".codex" / "memory" / month_key / f"{day_key}.md"
+    assert not experience_index.exists(), experience_index
     assert not global_path.exists(), global_path
     assert not month_path.exists(), month_path
     assert not day_path.exists(), day_path
@@ -132,9 +134,11 @@ def main() -> int:
         now_text=ws.iso_ts(ws.now_local()),
     )
 
+    assert experience_index.exists(), experience_index
     assert global_path.exists(), global_path
     assert month_path.exists(), month_path
     assert day_path.exists(), day_path
+    assert "## 必读经验" in experience_index.read_text(encoding="utf-8"), experience_index.read_text(encoding="utf-8")
     assert day_key in day_path.read_text(encoding="utf-8"), day_path.read_text(encoding="utf-8")
     assert month_key in month_path.read_text(encoding="utf-8"), month_path.read_text(encoding="utf-8")
     assert month_key in global_path.read_text(encoding="utf-8"), global_path.read_text(encoding="utf-8")
@@ -148,6 +152,7 @@ def main() -> int:
                 "run_id": str(prep.get("run_id") or "").strip(),
                 "workspace_path": agent_workspace.as_posix(),
                 "created_paths": [
+                    experience_index.as_posix(),
                     global_path.as_posix(),
                     month_path.as_posix(),
                     day_path.as_posix(),

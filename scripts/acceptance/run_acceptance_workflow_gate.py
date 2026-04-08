@@ -812,6 +812,32 @@ def run_assignment_provider_liveness_guard_probe(repo_root: Path) -> tuple[bool,
     return ok, detail
 
 
+def run_role_workspace_memory_governance_probe(repo_root: Path) -> tuple[bool, dict[str, object]]:
+    probe = (repo_root / "scripts" / "acceptance" / "verify_role_workspace_memory_governance.py").resolve()
+    proc = subprocess.run(
+        [sys.executable, str(probe)],
+        cwd=str(repo_root),
+        capture_output=True,
+        text=True,
+    )
+    detail: dict[str, object] = {
+        "script": probe.as_posix(),
+        "returncode": int(proc.returncode),
+    }
+    stdout = str(proc.stdout or "").strip()
+    stderr = str(proc.stderr or "").strip()
+    if stdout:
+        try:
+            detail["payload"] = json.loads(stdout)
+        except Exception:
+            detail["stdout"] = stdout
+    if stderr:
+        detail["stderr"] = stderr
+    payload = detail.get("payload") if isinstance(detail.get("payload"), dict) else {}
+    ok = proc.returncode == 0 and bool((payload or {}).get("ok", proc.returncode == 0))
+    return ok, detail
+
+
 def run_prod_watchdog_pending_upgrade_probe(repo_root: Path) -> tuple[bool, dict[str, object]]:
     probe = (repo_root / "scripts" / "acceptance" / "verify_prod_watchdog_pending_upgrade_fallback.py").resolve()
     proc = subprocess.run(
@@ -1160,6 +1186,18 @@ def main() -> int:
         )
         if not assignment_provider_liveness_guard_ok:
             errors.append("assignment provider liveness guard probe failed")
+        role_workspace_memory_governance_ok, role_workspace_memory_governance_detail = (
+            run_role_workspace_memory_governance_probe(repo_root)
+        )
+        results.append(
+            (
+                "role_workspace_memory_governance",
+                role_workspace_memory_governance_ok,
+                role_workspace_memory_governance_detail,
+            )
+        )
+        if not role_workspace_memory_governance_ok:
+            errors.append("role workspace memory governance probe failed")
         self_iteration_alignment_ok, self_iteration_alignment_detail = run_assignment_self_iteration_schedule_alignment_probe(repo_root)
         results.append(
             (

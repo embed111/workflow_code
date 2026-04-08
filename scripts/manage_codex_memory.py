@@ -10,6 +10,11 @@ from pathlib import Path
 GLOBAL_OVERVIEW_NAME = "全局记忆总览.md"
 MONTHLY_OVERVIEW_NAME = "记忆总览.md"
 
+LEGACY_GLOBAL_PLACEHOLDERS = {
+    "# 全局记忆总览\n\n- 当前角色工作区初始化完成后，闭月总结在这里归档。",
+    "# 全局记忆总览\n\n## 当前状态\n- 当前活动月份： `2026-04`\n- 当前活动月份总览： `.codex/memory/2026-04/记忆总览.md`",
+}
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Manage and validate .codex memory files.")
@@ -62,6 +67,10 @@ def parse_args() -> argparse.Namespace:
     verify_parser.add_argument("--root", type=Path, default=Path("."), help="Workspace root path.")
     verify_parser.add_argument("--date", type=parse_date, default=None, help="Target date in YYYY-MM-DD format.")
 
+    repair_parser = subparsers.add_parser("repair-rollups", help="Repair missing scaffold files and archive day/month rollovers.")
+    repair_parser.add_argument("--root", type=Path, default=Path("."), help="Workspace root path.")
+    repair_parser.add_argument("--date", type=parse_date, default=None, help="Target date in YYYY-MM-DD format.")
+
     return parser.parse_args()
 
 
@@ -112,6 +121,53 @@ def required_paths(root: Path, target_date: dt.date) -> list[Path]:
     ]
 
 
+def read_text(path: Path) -> str:
+    return path.read_text(encoding="utf-8") if path.exists() else ""
+
+
+def build_global_template(target_date: dt.date) -> str:
+    month_value = target_date.strftime("%Y-%m")
+    return (
+        "# 全局记忆总览\n\n"
+        "## 角色说明\n"
+        "- 作用：提供跨月份的记忆索引，只归档已闭月的月度总结。\n"
+        f"- 后续读取：继续读取 `.codex/memory/{month_value}/{MONTHLY_OVERVIEW_NAME}`。\n"
+        f"- 当前活动月份： `{month_value}`\n"
+        f"- 当前活动月份总览： `.codex/memory/{month_value}/{MONTHLY_OVERVIEW_NAME}`\n\n"
+        "## 当前状态\n"
+        "- 已归档闭月数量： `0`\n"
+        "- 当前活动月份状态： `in_progress`\n"
+        f"- 当前活动日记： `.codex/memory/{month_value}/{target_date.isoformat()}.md`\n"
+        "- 全局归档说明：仅在闭月后把月度总结写入本文件；当前活动月份只保留索引，不复制日级增量。\n\n"
+        "## 已归档月份\n"
+        "- 暂无，等待闭月后归档。\n\n"
+        "## 活动月份导航\n"
+        f"### {month_value}\n"
+        "- 状态：当前活动月份，尚未进入全局归档\n"
+        f"- 总览路径： `.codex/memory/{month_value}/{MONTHLY_OVERVIEW_NAME}`\n"
+        f"- 日记范围： `{month_value}-01` 至今\n"
+        "- 重点：等待当前工作区持续积累日记与月度摘要后再收口。\n"
+    )
+
+
+def build_monthly_template(target_date: dt.date) -> str:
+    month_value = target_date.strftime("%Y-%m")
+    return (
+        f"# 记忆总览 {month_value}\n\n"
+        "## 月份状态\n"
+        "- 状态： `in_progress`\n"
+        "- 已归档日记范围： `待补齐`\n"
+        f"- 当前活动日记： `.codex/memory/{month_value}/{target_date.isoformat()}.md`\n"
+        "- 月度归档目标： `.codex/memory/全局记忆总览.md`\n\n"
+        "## 归档规则\n"
+        "- 仅归档截至昨日的日级摘要。\n"
+        "- 当日新增总结只保留在对应的 `YYYY-MM-DD.md` 中，待日切后再归档。\n"
+        "- 若发生跨月，需先确认本月总览已被全局总览收录，再进入新月份工作。\n\n"
+        "## 已归档日索引\n"
+        "- 暂无，等待日切后归档。\n"
+    )
+
+
 def build_daily_template(target_date: dt.date) -> str:
     month_value = target_date.strftime("%Y-%m")
     return (
@@ -135,15 +191,79 @@ def build_daily_template(target_date: dt.date) -> str:
     )
 
 
-def ensure_daily_memory(root: Path, target_date: dt.date) -> Path:
+def _is_legacy_global_placeholder(text: str) -> bool:
+    normalized = str(text or "").strip()
+    if not normalized:
+        return True
+    if normalized in LEGACY_GLOBAL_PLACEHOLDERS:
+        return True
+    return "## " not in normalized and "### " not in normalized
+
+
+def _is_legacy_month_placeholder(text: str, target_date: dt.date) -> bool:
+    normalized = str(text or "").strip()
+    if not normalized:
+        return True
+    legacy_exact = {
+        f"# 记忆总览 {target_date.strftime('%Y-%m')}\n\n- 当前月份的已归档日级摘要会收口到这里。",
+        (
+            f"# 记忆总览 {target_date.strftime('%Y-%m')}\n\n"
+            "## 月份状态\n"
+            "- 状态： `in_progress`\n"
+            f"- 当前活动日记： `.codex/memory/{target_date.strftime('%Y-%m')}/{target_date.isoformat()}.md`\n"
+        ).strip(),
+    }
+    if normalized in legacy_exact:
+        return True
+    return "## " not in normalized and "### " not in normalized
+
+
+def _daily_has_real_entries(text: str) -> bool:
+    if not text.strip():
+        return False
+    marker = text.split("## Entries", 1)
+    body = marker[1] if len(marker) > 1 else text
+    return bool(re.search(r"^###\s+\d{4}-\d{2}-\d{2}T", body, re.MULTILINE))
+
+
+def ensure_memory_scaffold(root: Path, target_date: dt.date) -> list[str]:
+    created_or_upgraded: list[str] = []
+    global_path = global_overview_path(root)
+    month_path = monthly_overview_path(root, target_date)
     daily_path = daily_memory_path(root, target_date)
+
+    global_path.parent.mkdir(parents=True, exist_ok=True)
+    month_path.parent.mkdir(parents=True, exist_ok=True)
     daily_path.parent.mkdir(parents=True, exist_ok=True)
-    if not daily_path.exists():
+
+    global_text = read_text(global_path)
+    if not global_text or _is_legacy_global_placeholder(global_text):
+        global_path.write_text(build_global_template(target_date), encoding="utf-8")
+        created_or_upgraded.append(relative_to_root(root, global_path))
+
+    month_text = read_text(month_path)
+    if not month_text or _is_legacy_month_placeholder(month_text, target_date):
+        month_path.write_text(build_monthly_template(target_date), encoding="utf-8")
+        created_or_upgraded.append(relative_to_root(root, month_path))
+
+    daily_text = read_text(daily_path)
+    if not daily_text:
         daily_path.write_text(build_daily_template(target_date), encoding="utf-8")
-    return daily_path
+        created_or_upgraded.append(relative_to_root(root, daily_path))
+    elif not _daily_has_real_entries(daily_text) and "## Entry Schema" not in daily_text:
+        daily_path.write_text(build_daily_template(target_date), encoding="utf-8")
+        created_or_upgraded.append(relative_to_root(root, daily_path))
+
+    return created_or_upgraded
+
+
+def ensure_daily_memory(root: Path, target_date: dt.date) -> Path:
+    ensure_memory_scaffold(root, target_date)
+    return daily_memory_path(root, target_date)
 
 
 def print_status(root: Path, target_date: dt.date) -> int:
+    ensure_memory_scaffold(root, target_date)
     read_order = [
         Path("AGENTS.md"),
         Path(".codex/SOUL.md"),
@@ -236,22 +356,94 @@ def append_summary(root: Path, target_date: dt.date, args: argparse.Namespace) -
     return 0
 
 
+def _monthly_entry_exists(monthly_text: str, target_date: dt.date) -> bool:
+    pattern = re.compile(rf"^### {re.escape(target_date.isoformat())}\s*$", re.MULTILINE)
+    return bool(pattern.search(monthly_text))
+
+
+def _global_entry_exists(global_text: str, month_value: str) -> bool:
+    pattern = re.compile(rf"^### {re.escape(month_value)}\s*$", re.MULTILINE)
+    return bool(pattern.search(global_text))
+
+
+def _daily_topic_from_text(target_date: dt.date, daily_text: str) -> str:
+    topics = [item.strip() for item in re.findall(r"^- topic:\s*(.+)$", daily_text, re.MULTILINE) if item.strip()]
+    if topics:
+        return topics[-1]
+    titles = [
+        item.strip()
+        for item in re.findall(r"^###\s+\d{4}-\d{2}-\d{2}T[^\n|]*\|\s*(.+)$", daily_text, re.MULTILINE)
+        if item.strip()
+    ]
+    if titles:
+        return titles[-1]
+    if _daily_has_real_entries(daily_text):
+        return f"{target_date.isoformat()} 工作纪要"
+    return "日切归档占位"
+
+
+def _daily_summary_from_text(target_date: dt.date, daily_text: str) -> str:
+    if not _daily_has_real_entries(daily_text):
+        return "当日日记已创建但未追加正式工作条目。"
+    summary_lines = [item.strip() for item in re.findall(r"^- summary:\s*(.+)$", daily_text, re.MULTILINE) if item.strip()]
+    if summary_lines:
+        return "；".join(summary_lines[-2:])[:240]
+    decisions = [item.strip() for item in re.findall(r"^- decisions:\s*(.+)$", daily_text, re.MULTILINE) if item.strip()]
+    if decisions:
+        return f"基于当日日记自动归档：{decisions[-1][:180]}"
+    return f"基于 {target_date.isoformat()} 当日日记自动归档，详见对应日记。"
+
+
+def _build_monthly_archive_entry(root: Path, target_date: dt.date) -> str:
+    daily_path = daily_memory_path(root, target_date)
+    daily_text = read_text(daily_path)
+    month_value = target_date.strftime("%Y-%m")
+    topic = _daily_topic_from_text(target_date, daily_text)
+    summary = _daily_summary_from_text(target_date, daily_text)
+    return (
+        f"\n\n### {target_date.isoformat()}\n"
+        f"- 主题： {topic}\n"
+        f"- 摘要： {summary}\n"
+        f"- 日记路径： `.codex/memory/{month_value}/{target_date.isoformat()}.md`\n"
+    )
+
+
+def _build_global_archive_entry(root: Path, month_date: dt.date) -> str:
+    month_value = month_date.strftime("%Y-%m")
+    month_path = monthly_overview_path(root, month_date)
+    month_text = read_text(month_path)
+    archived_days = re.findall(r"^### (\d{4}-\d{2}-\d{2})\s*$", month_text, re.MULTILINE)
+    range_text = f"`{archived_days[0]}` 至 `{archived_days[-1]}`" if archived_days else f"`{month_value}`"
+    summary = (
+        f"本月已归档日记数量：`{len(archived_days)}`；详见 `.codex/memory/{month_value}/{MONTHLY_OVERVIEW_NAME}`。"
+        if archived_days
+        else f"本月总览已建立，后续详见 `.codex/memory/{month_value}/{MONTHLY_OVERVIEW_NAME}`。"
+    )
+    return (
+        f"\n\n### {month_value}\n"
+        "- 状态： `closed`\n"
+        f"- 月度总览： `.codex/memory/{month_value}/{MONTHLY_OVERVIEW_NAME}`\n"
+        f"- 月内范围： {range_text}\n"
+        f"- 月度摘要： {summary}\n"
+    )
+
+
 def verify_rollups(root: Path, target_date: dt.date) -> int:
+    ensure_memory_scaffold(root, target_date)
     issues: list[str] = []
     messages: list[str] = []
     yesterday = target_date - dt.timedelta(days=1)
 
     yesterday_daily = daily_memory_path(root, yesterday)
     yesterday_monthly = monthly_overview_path(root, yesterday)
-    global_overview = global_overview_path(root)
+    global_path = global_overview_path(root)
 
     if yesterday_daily.exists():
         if not yesterday_monthly.exists():
             issues.append(f"missing monthly overview for {yesterday.strftime('%Y-%m')}")
         else:
             monthly_text = yesterday_monthly.read_text(encoding="utf-8")
-            archived_daily_pattern = re.compile(rf"^### {re.escape(yesterday.isoformat())}\s*$", re.MULTILINE)
-            if not archived_daily_pattern.search(monthly_text):
+            if not _monthly_entry_exists(monthly_text, yesterday):
                 issues.append(
                     f"yesterday daily memory {yesterday.isoformat()} is not archived in "
                     f"{relative_to_root(root, yesterday_monthly)}"
@@ -264,20 +456,19 @@ def verify_rollups(root: Path, target_date: dt.date) -> int:
         messages.append(f"DAY_ROLLOVER_SKIPPED {yesterday.isoformat()} daily memory not found")
 
     if yesterday.strftime("%Y-%m") != target_date.strftime("%Y-%m"):
-        if not global_overview.exists():
-            issues.append(f"missing global overview {relative_to_root(root, global_overview)}")
+        if not global_path.exists():
+            issues.append(f"missing global overview {relative_to_root(root, global_path)}")
         else:
-            global_text = global_overview.read_text(encoding="utf-8")
-            archived_month_pattern = re.compile(rf"^### {re.escape(yesterday.strftime('%Y-%m'))}\s*$", re.MULTILINE)
-            if not archived_month_pattern.search(global_text):
+            global_text = global_path.read_text(encoding="utf-8")
+            if not _global_entry_exists(global_text, yesterday.strftime("%Y-%m")):
                 issues.append(
                     f"closed month {yesterday.strftime('%Y-%m')} is not archived in "
-                    f"{relative_to_root(root, global_overview)}"
+                    f"{relative_to_root(root, global_path)}"
                 )
             else:
                 messages.append(
                     f"MONTH_ROLLOVER_OK {yesterday.strftime('%Y-%m')} -> "
-                    f"{relative_to_root(root, global_overview)}"
+                    f"{relative_to_root(root, global_path)}"
                 )
     else:
         messages.append("MONTH_ROLLOVER_SKIPPED current date is still in the same month as yesterday")
@@ -288,6 +479,39 @@ def verify_rollups(root: Path, target_date: dt.date) -> int:
         print(f"ERROR {issue}")
 
     return 1 if issues else 0
+
+
+def repair_rollups(root: Path, target_date: dt.date) -> int:
+    changed = ensure_memory_scaffold(root, target_date)
+    yesterday = target_date - dt.timedelta(days=1)
+    yesterday_daily = daily_memory_path(root, yesterday)
+    yesterday_monthly = monthly_overview_path(root, yesterday)
+    global_path = global_overview_path(root)
+
+    if yesterday_daily.exists():
+        ensure_memory_scaffold(root, yesterday)
+        monthly_text = read_text(yesterday_monthly)
+        if not _monthly_entry_exists(monthly_text, yesterday):
+            with yesterday_monthly.open("a", encoding="utf-8") as handle:
+                handle.write(_build_monthly_archive_entry(root, yesterday))
+            changed.append(relative_to_root(root, yesterday_monthly))
+
+    if yesterday.strftime("%Y-%m") != target_date.strftime("%Y-%m") and yesterday_monthly.exists():
+        global_text = read_text(global_path)
+        month_value = yesterday.strftime("%Y-%m")
+        if not _global_entry_exists(global_text, month_value):
+            with global_path.open("a", encoding="utf-8") as handle:
+                handle.write(_build_global_archive_entry(root, yesterday))
+            changed.append(relative_to_root(root, global_path))
+
+    if changed:
+        print("REPAIRED")
+        for item in dict.fromkeys(changed):
+            print(f"UPDATED {item}")
+    else:
+        print("REPAIRED")
+        print("UPDATED none")
+    return verify_rollups(root, target_date)
 
 
 def main() -> int:
@@ -301,6 +525,8 @@ def main() -> int:
         return append_summary(root, target_date, args)
     if args.command == "verify-rollups":
         return verify_rollups(root, target_date)
+    if args.command == "repair-rollups":
+        return repair_rollups(root, target_date)
     raise ValueError(f"Unsupported command: {args.command}")
 
 
