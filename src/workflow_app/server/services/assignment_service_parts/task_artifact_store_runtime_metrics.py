@@ -210,40 +210,6 @@ def get_assignment_runtime_metrics(root: Path, *, include_test_data: bool = True
             include_test_data=include_test_data,
         )
     try:
-        conn = connect_db(root)
-        try:
-            marks = ",".join("?" for _ in active_run_ids)
-            row = conn.execute(
-                """
-                SELECT
-                    COUNT(1) AS active_execution_count,
-                    COUNT(DISTINCT CASE
-                        WHEN COALESCE(n.assigned_agent_id, '')<>'' THEN n.assigned_agent_id
-                        ELSE NULL
-                    END) AS running_agent_count
-                FROM assignment_execution_runs r
-                JOIN assignment_graphs g ON g.ticket_id = r.ticket_id
-                LEFT JOIN assignment_nodes n
-                  ON n.ticket_id = r.ticket_id
-                 AND n.node_id = r.node_id
-                WHERE r.run_id IN ("""
-                + marks
-                + """)
-                  AND (?=1 OR COALESCE(g.is_test_data,0)=0)
-                """,
-                (*active_run_ids, 1 if include_test_data else 0),
-            ).fetchone()
-        finally:
-            conn.close()
-        active_execution_count = int((row or {"active_execution_count": 0})["active_execution_count"] or 0)
-        running_agent_count = int((row or {"running_agent_count": 0})["running_agent_count"] or 0)
-        return {
-            "running_task_count": max(0, active_execution_count),
-            "running_agent_count": max(0, running_agent_count),
-            "active_execution_count": max(0, active_execution_count),
-            "agent_call_count": max(0, active_execution_count),
-        }
-    except Exception:
         file_metrics = _get_assignment_runtime_metrics_from_files(
             root,
             active_run_ids=active_run_ids,
@@ -251,6 +217,11 @@ def get_assignment_runtime_metrics(root: Path, *, include_test_data: bool = True
         )
         if int(file_metrics.get("running_task_count") or 0) > 0:
             return file_metrics
+        return _get_assignment_runtime_metrics_from_node_files(
+            root,
+            include_test_data=include_test_data,
+        )
+    except Exception:
         return _get_assignment_runtime_metrics_from_node_files(
             root,
             include_test_data=include_test_data,

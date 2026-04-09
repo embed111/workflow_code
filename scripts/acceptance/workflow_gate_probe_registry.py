@@ -167,6 +167,11 @@ SCRIPT_PROBE_DEFINITIONS: tuple[ScriptProbeDefinition, ...] = (
         failure_message="dashboard active agent count probe failed",
     ),
     ScriptProbeDefinition(
+        key="assignment_runtime_metrics_node_fallback",
+        relative_path="scripts/acceptance/verify_assignment_runtime_metrics_node_fallback.py",
+        failure_message="assignment runtime metrics node fallback probe failed",
+    ),
+    ScriptProbeDefinition(
         key="role_workspace_memory_governance",
         relative_path="scripts/acceptance/verify_role_workspace_memory_governance.py",
         failure_message="role workspace memory governance probe failed",

@@ -365,6 +365,7 @@ def _workboard_payload(cfg, *, include_test_data: bool) -> dict:
                 target_task_dir = task_dir
                 break
     if isinstance(target_task_dir, Path):
+        current_ticket_id = str(target_task_dir.name or "").strip()
         nodes_root = target_task_dir / "nodes"
         if nodes_root.exists() and nodes_root.is_dir():
             raw_nodes = []
@@ -397,6 +398,7 @@ def _workboard_payload(cfg, *, include_test_data: bool) -> dict:
                         "failed": [],
                         "blocked": [],
                     }
+                node_id = str(node.get("node_id") or "").strip()
                 run_snapshot = {}
                 if status == "running" and node_id:
                     cache_key = f"{current_ticket_id}:{node_id}"
@@ -409,10 +411,10 @@ def _workboard_payload(cfg, *, include_test_data: bool) -> dict:
                         )
                         run_snapshot_cache[cache_key] = run_snapshot
                 item = {
-                    "node_id": str(node.get("node_id") or "").strip(),
+                    "node_id": node_id,
                     "node_name": ws._assignment_display_node_name(
                         node,
-                        fallback=str(node.get("node_id") or "").strip(),
+                        fallback=node_id,
                     ),
                     "status": status,
                     "status_text": str(node.get("status_text") or "").strip(),
