@@ -73,31 +73,44 @@ def main() -> int:
                 break
             time.sleep(0.2)
 
-        schedule_info = dict(detail.get("schedule") or {})
-        schedules = schedule_service.list_schedules(root)
-        backup_items = [
-            item
-            for item in list(schedules.get("items") or [])
-            if str(item.get("expected_artifact") or "").strip() == "workflow-pm-wake-summary"
-        ]
-        backup_schedule_id = str(backup_items[0].get("schedule_id") or "").strip() if backup_items else ""
-        backup_detail = schedule_service.get_schedule_detail(root, backup_schedule_id) if backup_schedule_id else {}
-        backup_schedule = dict(backup_detail.get("schedule") or {})
-
         assert str(schedule_info.get("last_result_status") or "").strip().lower() == "failed", detail
         assert "smoke baseline report missing" in str(schedule_info.get("last_result_summary") or "").strip(), detail
+        schedules = {}
+        backup_items = []
+        backup_detail = {}
+        backup_schedule = {}
+        for _ in range(20):
+            schedules = schedule_service.list_schedules(root)
+            backup_items = [
+                item
+                for item in list(schedules.get("items") or [])
+                if str(item.get("expected_artifact") or "").strip() == "workflow-pm-wake-summary"
+            ]
+            backup_schedule_id = str(backup_items[0].get("schedule_id") or "").strip() if backup_items else ""
+            backup_detail = schedule_service.get_schedule_detail(root, backup_schedule_id) if backup_schedule_id else {}
+            backup_schedule = dict(backup_detail.get("schedule") or {})
+            if len(backup_items) == 1 and bool(str(backup_items[0].get("next_trigger_at") or "").strip()):
+                break
+            time.sleep(0.2)
+
         assert len(backup_items) == 1, schedules
         assert bool(str(backup_items[0].get("next_trigger_at") or "").strip()), backup_items[0]
         assert str(backup_items[0].get("assigned_agent_id") or "").strip() == "workflow", backup_items[0]
         assert "docs/workflow/governance/PM版本推进计划.md" in str(backup_schedule.get("launch_summary") or ""), backup_schedule
+        assert "docs/workflow/reports/7x24发布边界收口方案-20260409.md" in str(backup_schedule.get("launch_summary") or ""), backup_schedule
+        assert "root_sync_state=" in str(backup_schedule.get("launch_summary") or ""), backup_schedule
         assert "UCD/设计优化" in str(backup_schedule.get("launch_summary") or ""), backup_schedule
         assert "需求提出 -> 澄清/评审 -> 形成基线 -> 变更控制 -> 开发实现 -> 基于基线测试 -> 验收 -> 归档回溯" in str(
             backup_schedule.get("execution_checklist") or ""
         ), backup_schedule
+        assert "发布边界收口模式" in str(backup_schedule.get("execution_checklist") or ""), backup_schedule
         assert "workflow_devmate / workflow_testmate / workflow_qualitymate / workflow_bugmate" in str(
             backup_schedule.get("execution_checklist") or ""
         ), backup_schedule
         assert "active 版本、泳道、生命周期阶段" in str(backup_schedule.get("done_definition") or ""), backup_schedule
+        assert "root_sync_state / ahead_count / dirty_tracked_count / untracked_count / push_block_reason / next_push_batch" in str(
+            backup_schedule.get("done_definition") or ""
+        ), backup_schedule
 
         print(
             json.dumps(

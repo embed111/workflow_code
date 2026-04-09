@@ -5,6 +5,12 @@ from urllib import error as urllib_error
 from urllib import parse as urllib_parse
 from urllib import request as urllib_request
 
+from workflow_app.server.services.release_boundary_service import (
+    RELEASE_BOUNDARY_REPORT_PATH,
+    collect_release_boundary_snapshot,
+    format_release_boundary_prompt_lines,
+)
+
 ASSIGNMENT_SELF_ITERATION_AGENT_IDS = {"workflow"}
 ASSIGNMENT_SELF_ITERATION_SCHEDULE_PREFIX = "[持续迭代]"
 ASSIGNMENT_SELF_ITERATION_SUCCESS_DELAY_MINUTES = 15
@@ -58,6 +64,7 @@ def _assignment_pm_wake_schedule_name(agent_id: str) -> str:
 
 def _assignment_self_iteration_schedule_payload(
     *,
+    root: Path | None = None,
     agent_id: str,
     ticket_id: str,
     node_id: str,
@@ -68,6 +75,8 @@ def _assignment_self_iteration_schedule_payload(
     summary_text = _short_assignment_text(result_summary, 240) or "上一轮已完成，继续推进 workflow 工程质量提升。"
     version_plan_path = ASSIGNMENT_SELF_ITERATION_VERSION_PLAN_PATH
     wake_requirement_path = ASSIGNMENT_SELF_ITERATION_WAKE_REQUIREMENT_PATH
+    release_boundary = collect_release_boundary_snapshot(runtime_root=root) if root is not None else {}
+    release_boundary_lines = format_release_boundary_prompt_lines(release_boundary)
     return {
         "schedule_name": _assignment_self_iteration_schedule_name(agent_id),
         "enabled": True,
@@ -79,6 +88,7 @@ def _assignment_self_iteration_schedule_payload(
                 f"先读版本计划：{version_plan_path}",
                 f"再对照持续唤醒需求：{wake_requirement_path}",
                 f"周期性工作泳道：{ASSIGNMENT_SELF_ITERATION_PERIODIC_LANES_TEXT}",
+                *release_boundary_lines,
                 f"上一轮 ticket: {ticket_id}",
                 f"上一轮 node: {node_id}",
                 f"上一轮结果: {summary_text}",
@@ -89,25 +99,30 @@ def _assignment_self_iteration_schedule_payload(
                 f"1. 先读取 `{version_plan_path}`，确认当前 active 版本和当前优先任务包。",
                 f"2. 同时对照 `{wake_requirement_path}`，先定位当前生命周期阶段：`{ASSIGNMENT_SELF_ITERATION_LIFECYCLE_TEXT}`。",
                 f"3. 从 `{ASSIGNMENT_SELF_ITERATION_PERIODIC_LANES_TEXT}` 中选出本轮最高价值泳道；若当前 active 版本没有可执行任务，就先补 baseline、变更控制或下一个任务包，不允许空转。",
-                "4. 再检查 healthz、dashboard、assignments、schedules、runs 的真实状态，不要只看前端表象。",
-                "5. 检查 `/api/runtime-upgrade/status`；若 `can_upgrade=true` 且当前无运行中任务，直接调用 `/api/runtime-upgrade/apply` 完成无痛升级，并在重连后继续推进。",
-                f"5.1 {ASSIGNMENT_SELF_UPGRADE_HINT}",
-                "6. 在推进开发实现前，先明确本轮沿用的 baseline、需要变更控制的内容，以及基于哪条基线做后续测试与验收。",
-                "7. 优先推进当前 active 版本里最高优先级且未完成的任务包，不要跳版抢做新功能。",
-                "8. 若当前任务包已完成，先更新版本计划状态，再挑同版本下一个 queued 包；只有当前版本出口门槛满足后才切到下一版本。",
-                f"9. 定期评估并派发小伙伴：对开发/测试/质量/缺陷修复相关工作，给 {ASSIGNMENT_SELF_ITERATION_TEAMMATES_TEXT} 创建或续挂对应任务，不要长期让协作链闲置。",
-                "10. 在代码工作区完成最小必要改动，并跑命中改动面的验证、基于基线测试和必要验收。",
-                "11. 更新 `.codex/memory/...` 时，在 `next` 明确写出下一次主线/保底触发时间，同时写清本轮泳道与生命周期阶段。",
-                "12. 输出本轮结论、证据路径，并确保系统已经挂上下一轮可执行任务或唤醒计划。",
+                "4. 先记录当前根仓同步快照里的 `root_sync_state / ahead_count / dirty_tracked_count / untracked_count / push_block_reason / next_push_batch`，不要只写“继续收 Git 边界”。",
+                f"4.1 若快照显示根仓未同步或本地工作区 dirty，就立即读取 `{RELEASE_BOUNDARY_REPORT_PATH}` 并进入发布边界收口模式：先冻结同工作区新增实现，按小批次验证并推回 `../workflow_code/main`。",
+                "4.2 在至少一个已验证小批次推回根仓，或明确写出阻塞原因前，不要继续扩当前同工作区功能面；除非 `prod` 主链断裂、升级止血或高优先事故。",
+                "5. 再检查 healthz、dashboard、assignments、schedules、runs 的真实状态，不要只看前端表象。",
+                "6. 检查 `/api/runtime-upgrade/status`；若 `can_upgrade=true` 且当前无运行中任务，直接调用 `/api/runtime-upgrade/apply` 完成无痛升级，并在重连后继续推进。",
+                f"6.1 {ASSIGNMENT_SELF_UPGRADE_HINT}",
+                "7. 在推进开发实现前，先明确本轮沿用的 baseline、需要变更控制的内容，以及基于哪条基线做后续测试与验收。",
+                "8. 优先推进当前 active 版本里最高优先级且未完成的任务包，不要跳版抢做新功能。",
+                "9. 若当前任务包已完成，先更新版本计划状态，再挑同版本下一个 queued 包；只有当前版本出口门槛满足后才切到下一版本。",
+                f"10. 定期评估并派发小伙伴：对开发/测试/质量/缺陷修复相关工作，给 {ASSIGNMENT_SELF_ITERATION_TEAMMATES_TEXT} 创建或续挂对应任务，不要长期让协作链闲置。",
+                "11. 在代码工作区完成最小必要改动，并跑命中改动面的验证、基于基线测试和必要验收。",
+                "12. 更新 `.codex/memory/...` 时，在 `next` 明确写出下一次主线/保底触发时间，同时写清本轮泳道与生命周期阶段。",
+                "13. 输出本轮结论、证据路径，并确保系统已经挂上下一轮可执行任务或唤醒计划。",
             ]
         ).strip(),
         "done_definition": "\n".join(
             [
                 f"1. 当前活跃版本对应任务包有可交付结果，且版本计划 `{version_plan_path}` 已同步最新状态。",
                 "2. 本轮明确记录了当前周期性泳道、生命周期阶段，以及是否发生 baseline/变更控制更新。",
-                "3. 本轮附带验证证据，而不是只给方向性描述。",
-                "4. 如有需要，本轮已经给对应小伙伴挂好下一步任务或交接任务。",
-                "5. 若本轮没有新的 ready 任务，也必须保证下一次唤醒已经排上，7x24 连续推进不断链。",
+                "3. 本轮显式记录了 `root_sync_state / ahead_count / dirty_tracked_count / untracked_count / push_block_reason / next_push_batch`。",
+                "4. 若 release boundary 未收口，本轮至少完成了一个已验证小批次推回根仓，或明确写清阻塞原因与下一批次。",
+                "5. 本轮附带验证证据，而不是只给方向性描述。",
+                "6. 如有需要，本轮已经给对应小伙伴挂好下一步任务或交接任务。",
+                "7. 若本轮没有新的 ready 任务，也必须保证下一次唤醒已经排上，7x24 连续推进不断链。",
             ]
         ),
         "priority": priority,
@@ -212,6 +227,7 @@ def _assignment_persisted_schedule_next_trigger_at(result: dict[str, Any], fallb
 
 def _assignment_pm_wake_schedule_payload(
     *,
+    root: Path | None = None,
     agent_id: str,
     result_summary: str,
     next_trigger_at: str,
@@ -219,6 +235,8 @@ def _assignment_pm_wake_schedule_payload(
     summary_text = _short_assignment_text(result_summary, 240) or "检查 prod 当前是否仍保留未来可执行入口，并在断链时立即补链。"
     version_plan_path = ASSIGNMENT_SELF_ITERATION_VERSION_PLAN_PATH
     wake_requirement_path = ASSIGNMENT_SELF_ITERATION_WAKE_REQUIREMENT_PATH
+    release_boundary = collect_release_boundary_snapshot(runtime_root=root) if root is not None else {}
+    release_boundary_lines = format_release_boundary_prompt_lines(release_boundary)
     return {
         "schedule_name": _assignment_pm_wake_schedule_name(agent_id),
         "enabled": True,
@@ -230,6 +248,7 @@ def _assignment_pm_wake_schedule_payload(
                 f"先读版本计划：{version_plan_path}",
                 f"再对照持续唤醒需求：{wake_requirement_path}",
                 f"周期性工作泳道：{ASSIGNMENT_SELF_ITERATION_PERIODIC_LANES_TEXT}",
+                *release_boundary_lines,
                 f"最近上下文: {summary_text}",
             ]
         ).strip(),
@@ -237,14 +256,16 @@ def _assignment_pm_wake_schedule_payload(
             [
                 f"1. 读取 `{version_plan_path}` 与 `{wake_requirement_path}`，确认当前 active 版本、任务包，以及所处生命周期阶段：`{ASSIGNMENT_SELF_ITERATION_LIFECYCLE_TEXT}`。",
                 f"2. 从 `{ASSIGNMENT_SELF_ITERATION_PERIODIC_LANES_TEXT}` 中判断当前最该推进的泳道；若 active 版本没有可执行任务，立即补 baseline、变更控制或下一条当前版本任务。",
-                "3. 检查 prod 当前 schedules、assignment graph、ready/running 节点、最近 runs 与 `/api/runtime-upgrade/status` 真相。",
-                "3.1 若看到 `workflow` 已到时的 ready 节点堆积、`running_task_count=0`，或 recent trigger/message 出现 `assigned agent already has running node` 但找不到真实 live workflow run.json/events.log，必须判定为断链/假健康，立即补链或重派发，不能按“还有 future 入口”算通过。",
-                "4. 若 `can_upgrade=true` 且当前无运行中任务，直接调用 `/api/runtime-upgrade/apply` 完成无痛升级，再继续巡检。",
-                f"4.1 {ASSIGNMENT_SELF_UPGRADE_HINT}",
-                "5. 若 [持续迭代] workflow 没有未来入口，立即补一条未来可执行入口或当前版本任务。",
-                f"6. 若测试/质量/开发/缺陷修复泳道缺少执行者，给 {ASSIGNMENT_SELF_ITERATION_TEAMMATES_TEXT} 创建或续挂任务。",
-                "7. 更新 `.codex/memory/...` 时，在 `next` 明确写出下一次主线/保底触发时间，同时标注本轮泳道与生命周期阶段。",
-                "8. 输出本次保底巡检结论、证据路径和下一次建议唤醒时间。",
+                "3. 先记录当前根仓同步快照里的 `root_sync_state / ahead_count / dirty_tracked_count / untracked_count / push_block_reason / next_push_batch`。",
+                f"3.1 若快照显示根仓未同步或本地工作区 dirty，就立即读取 `{RELEASE_BOUNDARY_REPORT_PATH}` 并切到发布边界收口模式：先冻结同工作区新增实现，优先恢复小步推根仓节奏。",
+                "4. 检查 prod 当前 schedules、assignment graph、ready/running 节点、最近 runs 与 `/api/runtime-upgrade/status` 真相。",
+                "4.1 若看到 `workflow` 已到时的 ready 节点堆积、`running_task_count=0`，或 recent trigger/message 出现 `assigned agent already has running node` 但找不到真实 live workflow run.json/events.log，必须判定为断链/假健康，立即补链或重派发，不能按“还有 future 入口”算通过。",
+                "5. 若 `can_upgrade=true` 且当前无运行中任务，直接调用 `/api/runtime-upgrade/apply` 完成无痛升级，再继续巡检。",
+                f"5.1 {ASSIGNMENT_SELF_UPGRADE_HINT}",
+                "6. 若 [持续迭代] workflow 没有未来入口，立即补一条未来可执行入口或当前版本任务。",
+                f"7. 若测试/质量/开发/缺陷修复泳道缺少执行者，给 {ASSIGNMENT_SELF_ITERATION_TEAMMATES_TEXT} 创建或续挂任务。",
+                "8. 更新 `.codex/memory/...` 时，在 `next` 明确写出下一次主线/保底触发时间，同时标注本轮泳道与生命周期阶段。",
+                "9. 输出本次保底巡检结论、证据路径和下一次建议唤醒时间。",
             ]
         ).strip(),
         "done_definition": "\n".join(
@@ -252,7 +273,8 @@ def _assignment_pm_wake_schedule_payload(
                 "1. prod 至少保留一条未来可执行的 workflow 主线入口。",
                 "2. 不能存在 `workflow` 已到时 ready 节点堆积但没有真实 live run 的假健康现场。",
                 "3. 本次巡检结论明确写出 active 版本、泳道、生命周期阶段与证据。",
-                "4. 若主链已断，本轮已经完成补链而不是只留口头说明。",
+                "4. 本次巡检显式记录了 `root_sync_state / ahead_count / dirty_tracked_count / untracked_count / push_block_reason / next_push_batch`。",
+                "5. 若主链已断，本轮已经完成补链而不是只留口头说明。",
             ]
         ).strip(),
         "priority": "P1",
@@ -286,6 +308,7 @@ def _assignment_queue_pm_wake_schedule(
             candidate_next=next_trigger_at,
         )
     payload = _assignment_pm_wake_schedule_payload(
+        root=root,
         agent_id=agent_text,
         result_summary=result_summary,
         next_trigger_at=next_trigger_at,
@@ -329,6 +352,7 @@ def _assignment_queue_self_iteration_schedule(
             candidate_next=next_trigger_at,
         )
     payload = _assignment_self_iteration_schedule_payload(
+        root=root,
         agent_id=agent_id,
         ticket_id=ticket_id,
         node_id=node_id,
