@@ -1088,6 +1088,7 @@ def _finalize_assignment_execution_run(
     stderr_text: str,
     result_payload: dict[str, Any],
     failure_message: str,
+    suppress_followup_dispatch: bool = False,
 ) -> None:
     now_text = iso_ts(now_local())
     snapshot = _assignment_snapshot_from_files(
@@ -1365,16 +1366,14 @@ def _finalize_assignment_execution_run(
             )
     except Exception:
         upgrade_request_result = {}
-    if not bool(upgrade_request_result.get("suppress_dispatch")):
-        try:
-            dispatch_assignment_next(
-                root,
-                ticket_id_text=ticket_id,
-                operator="assignment-executor",
-                include_test_data=True,
-            )
-        except Exception:
-            pass
+    _assignment_finalize_followup_dispatch(
+        root,
+        ticket_id=ticket_id,
+        node_id=node_id,
+        run_id=run_id,
+        target_status=str(node_record.get("status") or "").strip().lower() or ("succeeded" if success else "failed"),
+        suppress_dispatch=bool(upgrade_request_result.get("suppress_dispatch")) or bool(suppress_followup_dispatch),
+    )
 
 
 def _assignment_execution_worker(

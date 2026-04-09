@@ -238,6 +238,7 @@ def _assignment_pm_wake_schedule_payload(
                 f"1. 读取 `{version_plan_path}` 与 `{wake_requirement_path}`，确认当前 active 版本、任务包，以及所处生命周期阶段：`{ASSIGNMENT_SELF_ITERATION_LIFECYCLE_TEXT}`。",
                 f"2. 从 `{ASSIGNMENT_SELF_ITERATION_PERIODIC_LANES_TEXT}` 中判断当前最该推进的泳道；若 active 版本没有可执行任务，立即补 baseline、变更控制或下一条当前版本任务。",
                 "3. 检查 prod 当前 schedules、assignment graph、ready/running 节点、最近 runs 与 `/api/runtime-upgrade/status` 真相。",
+                "3.1 若看到 `workflow` 已到时的 ready 节点堆积、`running_task_count=0`，或 recent trigger/message 出现 `assigned agent already has running node` 但找不到真实 live workflow run.json/events.log，必须判定为断链/假健康，立即补链或重派发，不能按“还有 future 入口”算通过。",
                 "4. 若 `can_upgrade=true` 且当前无运行中任务，直接调用 `/api/runtime-upgrade/apply` 完成无痛升级，再继续巡检。",
                 f"4.1 {ASSIGNMENT_SELF_UPGRADE_HINT}",
                 "5. 若 [持续迭代] workflow 没有未来入口，立即补一条未来可执行入口或当前版本任务。",
@@ -249,8 +250,9 @@ def _assignment_pm_wake_schedule_payload(
         "done_definition": "\n".join(
             [
                 "1. prod 至少保留一条未来可执行的 workflow 主线入口。",
-                "2. 本次巡检结论明确写出 active 版本、泳道、生命周期阶段与证据。",
-                "3. 若主链已断，本轮已经完成补链而不是只留口头说明。",
+                "2. 不能存在 `workflow` 已到时 ready 节点堆积但没有真实 live run 的假健康现场。",
+                "3. 本次巡检结论明确写出 active 版本、泳道、生命周期阶段与证据。",
+                "4. 若主链已断，本轮已经完成补链而不是只留口头说明。",
             ]
         ).strip(),
         "priority": "P1",

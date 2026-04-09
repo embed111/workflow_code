@@ -433,6 +433,7 @@ def _assignment_try_recover_terminal_run_from_files(
         stderr_text=stderr_text,
         result_payload=result_payload if isinstance(result_payload, dict) else {},
         failure_message=failure_message,
+        suppress_followup_dispatch=True,
     )
     return True
 

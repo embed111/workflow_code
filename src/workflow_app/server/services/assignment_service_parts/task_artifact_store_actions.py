@@ -1085,6 +1085,7 @@ def override_assignment_node_status(
                 stderr_text=str(exc),
                 result_payload={},
                 failure_message=f"assignment execution worker start failed: {exc}",
+                suppress_followup_dispatch=True,
             )
     return {
         "ticket_id": ticket_id,

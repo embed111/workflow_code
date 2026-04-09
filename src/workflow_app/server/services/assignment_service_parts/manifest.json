@@ -14,6 +14,7 @@
     "task_artifact_store_queries.py",
     "task_artifact_store_runtime_metrics.py",
     "task_artifact_store_run_runtime.py",
+    "task_artifact_store_finalize_followup.py",
     "task_artifact_store_execution.py",
     "task_artifact_store_actions.py",
     "task_artifact_store_test_bootstrap.py"

@@ -251,6 +251,7 @@ def dispatch_assignment_next(
                     stderr_text=str(exc),
                     result_payload={},
                     failure_message=f"assignment execution worker start failed: {exc}",
+                    suppress_followup_dispatch=True,
                 )
         dispatched_node_ids = {item["node_id"] for item in dispatched}
         dispatched_nodes = [
