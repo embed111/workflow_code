@@ -654,6 +654,8 @@
       const d = await getJSON('/api/dashboard');
       applyShowTestDataPolicyPayload(d);
       state.dashboardMetrics = d && typeof d === 'object' ? d : {};
+      state.dashboardLastRefreshAtMs = Date.now();
+      state.dashboardLastFetchedAt = safe(d && d.fetched_at).trim();
       state.dashboardError = '';
       renderGlobalRuntimeMetricLine();
       if (safe(activeTabName).trim().toLowerCase() === 'task-center' && typeof renderAssignmentCenter === 'function') {

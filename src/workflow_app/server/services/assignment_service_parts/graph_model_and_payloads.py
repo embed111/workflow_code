@@ -4,6 +4,80 @@ ASSIGNMENT_GLOBAL_GRAPH_NAME = "任务中心全局主图"
 ASSIGNMENT_GLOBAL_GRAPH_SOURCE_WORKFLOW = "workflow-ui"
 ASSIGNMENT_GLOBAL_GRAPH_REQUEST_ID = "workflow-ui-global-graph-v1"
 ASSIGNMENT_GLOBAL_GRAPH_SUMMARY = "任务中心手动创建（全局主图）"
+_ASSIGNMENT_DISPLAY_RE = __import__("re")
+_ASSIGNMENT_DISPLAY_MOJIBAKE_RE = _ASSIGNMENT_DISPLAY_RE.compile(r"(?:Ã.|Â.|å.|ä.|ç.|é.|è.|ê.|î.|ï.|ô.|û.)")
+_ASSIGNMENT_WORKFLOW_MAINLINE_ARTIFACT = "continuous-improvement-report.md"
+_ASSIGNMENT_WORKFLOW_PATROL_ARTIFACT = "workflow-pm-wake-summary"
+
+
+def _assignment_display_text(raw: Any) -> str:
+    text = str(raw or "").strip()
+    if not text:
+        return ""
+    if "?" in text and not text.replace("?", "").strip():
+        return ""
+    if "\ufffd" in text:
+        return ""
+    if not _ASSIGNMENT_DISPLAY_RE.search(r"[\u0080-\uFFFF]", text):
+        return text
+    if not _ASSIGNMENT_DISPLAY_MOJIBAKE_RE.search(text):
+        return text
+    try:
+        repaired = text.encode("latin-1", errors="strict").decode("utf-8").strip()
+    except Exception:
+        return text
+    return repaired or text
+
+
+def _assignment_display_text_looks_garbled(raw: Any) -> bool:
+    text = str(raw or "").strip()
+    if not text:
+        return False
+    if "\ufffd" in text:
+        return True
+    return bool(_ASSIGNMENT_DISPLAY_RE.search(r"\?{2,}", text))
+
+
+def _assignment_display_node_name(node: dict[str, Any], *, fallback: str = "") -> str:
+    row = dict(node or {})
+    raw_node_name = str(row.get("node_name") or "").strip()
+    node_name = _assignment_display_text(raw_node_name)
+    if node_name and not _assignment_display_text_looks_garbled(raw_node_name):
+        return node_name
+    for candidate in (
+        _assignment_display_text(row.get("expected_artifact")),
+        _assignment_display_text(fallback),
+        str(row.get("node_id") or "").strip(),
+    ):
+        if candidate:
+            return candidate
+    return "-"
+
+
+def _assignment_is_workflow_mainline_node(node: dict[str, Any]) -> bool:
+    row = dict(node or {})
+    agent_id = str(row.get("assigned_agent_id") or "").strip().lower()
+    if agent_id != "workflow":
+        return False
+    node_name = _assignment_display_node_name(row)
+    expected_artifact = str(row.get("expected_artifact") or "").strip().lower()
+    return (
+        expected_artifact == _ASSIGNMENT_WORKFLOW_MAINLINE_ARTIFACT
+        or node_name.startswith("[持续迭代] workflow")
+    )
+
+
+def _assignment_is_workflow_patrol_node(node: dict[str, Any]) -> bool:
+    row = dict(node or {})
+    agent_id = str(row.get("assigned_agent_id") or "").strip().lower()
+    if agent_id != "workflow":
+        return False
+    node_name = _assignment_display_node_name(row)
+    expected_artifact = str(row.get("expected_artifact") or "").strip().lower()
+    return (
+        expected_artifact == _ASSIGNMENT_WORKFLOW_PATROL_ARTIFACT
+        or node_name.startswith("pm持续唤醒 - workflow 主线巡检")
+    )
 
 
 def _node_blocking_reasons(
@@ -23,7 +97,7 @@ def _node_blocking_reasons(
             {
                 "code": reason_code,
                 "node_id": upstream_id,
-                "node_name": str(upstream.get("node_name") or upstream_id),
+                "node_name": _assignment_display_node_name(upstream, fallback=upstream_id),
                 "status": upstream_status,
                 "status_text": _node_status_text(upstream_status),
             }
@@ -39,6 +113,7 @@ def _serialize_node(
     downstream_map: dict[str, list[str]],
 ) -> dict[str, Any]:
     node_id = str(node.get("node_id") or "").strip()
+    display_node_name = _assignment_display_node_name(node, fallback=node_id)
     upstream_ids = list(upstream_map.get(node_id) or [])
     downstream_ids = list(downstream_map.get(node_id) or [])
     status = str(node.get("status") or "").strip().lower()
@@ -46,10 +121,12 @@ def _serialize_node(
     delivery_target_agent_id = _node_delivery_target_agent_id(node)
     delivery_target_agent_name = _node_delivery_target_agent_name(node)
     delivery_inbox_relative_path = _node_delivery_inbox_relative_path(node)
+    is_workflow_mainline = _assignment_is_workflow_mainline_node(node)
+    is_workflow_patrol = _assignment_is_workflow_patrol_node(node)
     return {
         "node_id": node_id,
         "ticket_id": str(node.get("ticket_id") or "").strip(),
-        "node_name": str(node.get("node_name") or "").strip(),
+        "node_name": display_node_name,
         "source_schedule_id": str(node.get("source_schedule_id") or "").strip(),
         "planned_trigger_at": str(node.get("planned_trigger_at") or "").strip(),
         "trigger_instance_id": str(node.get("trigger_instance_id") or "").strip(),
@@ -85,12 +162,14 @@ def _serialize_node(
         "failure_reason": str(node.get("failure_reason") or "").strip(),
         "created_at": str(node.get("created_at") or "").strip(),
         "updated_at": str(node.get("updated_at") or "").strip(),
+        "is_workflow_mainline": is_workflow_mainline,
+        "is_workflow_patrol": is_workflow_patrol,
         "upstream_node_ids": upstream_ids,
         "downstream_node_ids": downstream_ids,
         "upstream_nodes": [
             {
                 "node_id": upstream_id,
-                "node_name": str((node_map_by_id.get(upstream_id) or {}).get("node_name") or upstream_id),
+                "node_name": _assignment_display_node_name(node_map_by_id.get(upstream_id) or {}, fallback=upstream_id),
                 "status": str((node_map_by_id.get(upstream_id) or {}).get("status") or "").strip().lower(),
             }
             for upstream_id in upstream_ids
@@ -98,7 +177,7 @@ def _serialize_node(
         "downstream_nodes": [
             {
                 "node_id": downstream_id,
-                "node_name": str((node_map_by_id.get(downstream_id) or {}).get("node_name") or downstream_id),
+                "node_name": _assignment_display_node_name(node_map_by_id.get(downstream_id) or {}, fallback=downstream_id),
                 "status": str((node_map_by_id.get(downstream_id) or {}).get("status") or "").strip().lower(),
             }
             for downstream_id in downstream_ids

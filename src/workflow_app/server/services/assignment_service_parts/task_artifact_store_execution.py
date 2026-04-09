@@ -1,6 +1,274 @@
 from __future__ import annotations
 
 
+def _assignment_active_run_record(root: Path, *, ticket_id: str, node_id: str) -> dict[str, Any]:
+    for row in _assignment_load_run_records(root, ticket_id=ticket_id, node_id=node_id):
+        if str(row.get("status") or "").strip().lower() in {"starting", "running"}:
+            return dict(row)
+    return {}
+
+
+def _assignment_execution_thread_should_daemon(operator: str) -> bool:
+    raw = str(os.getenv("WORKFLOW_ASSIGNMENT_EXECUTION_THREAD_DAEMON") or "").strip().lower()
+    if raw in {"1", "true", "yes", "on"}:
+        return True
+    if raw in {"0", "false", "no", "off"}:
+        return False
+    operator_text = str(operator or "").strip().lower()
+    # PM-triggered one-shot dispatches can originate from a short-lived local process.
+    # Keep worker threads non-daemon so helper runs are not orphaned when that host exits.
+    if operator_text.startswith("pm-"):
+        return False
+    return True
+
+
+def _assignment_execution_worker_guarded(
+    root: Path,
+    *,
+    run_id: str,
+    ticket_id: str,
+    node_id: str,
+    workspace_path: Path,
+    command: list[str],
+    command_summary: str,
+    prompt_text: str,
+    operator: str = "",
+) -> None:
+    try:
+        _assignment_execution_worker(
+            root,
+            run_id=run_id,
+            ticket_id=ticket_id,
+            node_id=node_id,
+            workspace_path=workspace_path,
+            command=command,
+            command_summary=command_summary,
+            prompt_text=prompt_text,
+        )
+    except Exception as exc:
+        failed_at = iso_ts(now_local())
+        failure_message = f"assignment execution worker bootstrap failed: {exc}"
+        traceback_text = traceback.format_exc()
+        try:
+            files = _assignment_run_file_paths(root, ticket_id, run_id)
+            _append_assignment_run_event(
+                files["events"],
+                event_type="provider_start_failed",
+                message=f"Provider 启动前异常: {exc}",
+                created_at=failed_at,
+                detail={
+                    "exception_type": type(exc).__name__,
+                    "operator": str(operator or "").strip(),
+                },
+            )
+            _append_assignment_run_text(files["stderr"], traceback_text)
+        except Exception:
+            pass
+        try:
+            _finalize_assignment_execution_run(
+                root,
+                run_id=run_id,
+                ticket_id=ticket_id,
+                node_id=node_id,
+                exit_code=1,
+                stdout_text="",
+                stderr_text=traceback_text,
+                result_payload={},
+                failure_message=failure_message,
+            )
+        except Exception:
+            pass
+
+
+def _assignment_dispatch_candidates(snapshot: dict[str, Any]) -> list[dict[str, Any]]:
+    rows = [
+        dict(node)
+        for node in list(snapshot.get("nodes") or [])
+        if str(node.get("status") or "").strip().lower() == "ready"
+    ]
+    rows.sort(
+        key=lambda item: (
+            int(item.get("priority") or 0),
+            str(item.get("created_at") or ""),
+            str(item.get("node_id") or ""),
+        )
+    )
+    return rows
+
+
+def _assignment_dispatch_snapshot(
+    root: Path,
+    *,
+    ticket_id: str,
+    include_test_data: bool,
+    reconcile_running: bool,
+) -> dict[str, Any]:
+    task_record = _assignment_load_task_record(root, ticket_id)
+    if not _assignment_task_visible(task_record, include_test_data=include_test_data):
+        raise AssignmentCenterError(
+            404,
+            "assignment graph not found",
+            "assignment_graph_not_found",
+            {"ticket_id": ticket_id},
+        )
+    node_records = _assignment_load_node_records(root, ticket_id, include_deleted=True)
+    task_record, node_records, changed = _assignment_recompute_task_state(
+        root,
+        task_record=task_record,
+        node_records=node_records,
+        reconcile_running=reconcile_running,
+    )
+    if changed:
+        _assignment_store_snapshot(root, task_record=task_record, node_records=node_records)
+    active_nodes = _assignment_active_node_records(node_records)
+    settings = get_assignment_concurrency_settings(root)
+    system_counts = _assignment_system_running_counts(root, include_test_data=include_test_data)
+    scheduler_payload = _assignment_scheduler_payload(
+        task_record,
+        active_nodes,
+        system_limit=int(settings.get("global_concurrency_limit") or DEFAULT_ASSIGNMENT_CONCURRENCY_LIMIT),
+        settings_updated_at=str(settings.get("updated_at") or ""),
+        system_counts=system_counts,
+    )
+    edges = _assignment_active_edges(task_record, active_nodes)
+    node_map_by_id = _node_map(active_nodes)
+    upstream_map, downstream_map = _edge_maps(edges)
+    return {
+        "graph_row": task_record,
+        "nodes": active_nodes,
+        "all_nodes": node_records,
+        "edges": edges,
+        "node_map_by_id": node_map_by_id,
+        "upstream_map": upstream_map,
+        "downstream_map": downstream_map,
+        "metrics_summary": _graph_metrics(active_nodes),
+        "scheduler": scheduler_payload,
+        "serialized_nodes": [],
+    }
+
+
+def _prepare_assignment_execution_run(
+    root: Path,
+    *,
+    ticket_id: str,
+    node_id: str,
+    now_text: str,
+    snapshot_override: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    _ensure_assignment_support_tables(root)
+    snapshot = dict(snapshot_override or {})
+    if not snapshot:
+        snapshot = _assignment_snapshot_from_files(
+            root,
+            ticket_id,
+            include_test_data=True,
+            reconcile_running=True,
+        )
+    serialized_node = next(
+        (
+            node
+            for node in list(snapshot.get("serialized_nodes") or [])
+            if str(node.get("node_id") or "").strip() == node_id
+        ),
+        {},
+    )
+    if not serialized_node:
+        target_node = next(
+            (
+                dict(node)
+                for node in list(snapshot.get("nodes") or [])
+                if str(node.get("node_id") or "").strip() == node_id
+            ),
+            {},
+        )
+        if target_node:
+            serialized_node = _serialize_node(
+                target_node,
+                node_map_by_id=dict(snapshot.get("node_map_by_id") or {}),
+                upstream_map=dict(snapshot.get("upstream_map") or {}),
+                downstream_map=dict(snapshot.get("downstream_map") or {}),
+            )
+    if not serialized_node:
+        raise AssignmentCenterError(404, "assignment node not found", "assignment_node_not_found", {"node_id": node_id})
+    upstream_nodes = [
+        snapshot["node_map_by_id"].get(str(item.get("node_id") or "").strip()) or {}
+        for item in list(serialized_node.get("upstream_nodes") or [])
+    ]
+    conn = connect_db(root)
+    try:
+        conn.execute("BEGIN")
+        workspace_path = _resolve_assignment_workspace_path(
+            conn,
+            root,
+            agent_id=str(serialized_node.get("assigned_agent_id") or "").strip(),
+        )
+        settings = _assignment_execution_settings_from_conn(conn)
+        conn.commit()
+    finally:
+        conn.close()
+    provider = _normalize_execution_provider(settings.get("execution_provider"))
+    prompt_text = _build_assignment_execution_prompt(
+        graph_row=snapshot["graph_row"],
+        node=serialized_node,
+        upstream_nodes=upstream_nodes,
+        workspace_path=workspace_path,
+        delivery_inbox_path=_node_delivery_inbox_dir(root, serialized_node),
+    )
+    command, command_summary = _build_assignment_execution_command(
+        provider=provider,
+        codex_command_path=str(settings.get("codex_command_path") or ""),
+        command_template=str(settings.get("command_template") or ""),
+        workspace_path=workspace_path,
+    )
+    run_id = assignment_run_id()
+    files = _assignment_run_file_paths(root, ticket_id, run_id)
+    files["trace_dir"].mkdir(parents=True, exist_ok=True)
+    _write_assignment_run_text(files["prompt"], prompt_text)
+    _write_assignment_run_text(files["stdout"], "")
+    _write_assignment_run_text(files["stderr"], "")
+    _write_assignment_run_text(files["events"], "")
+    _append_assignment_run_event(
+        files["events"],
+        event_type="dispatch",
+        message="调度器已创建真实执行批次。",
+        created_at=now_text,
+        detail={"command_summary": command_summary},
+    )
+    run_record = _assignment_build_run_record(
+        run_id=run_id,
+        ticket_id=ticket_id,
+        node_id=node_id,
+        provider=provider,
+        workspace_path=workspace_path.as_posix(),
+        status="starting",
+        command_summary=command_summary,
+        prompt_ref=files["prompt"].as_posix(),
+        stdout_ref=files["stdout"].as_posix(),
+        stderr_ref=files["stderr"].as_posix(),
+        result_ref=files["result"].as_posix(),
+        latest_event="已创建运行批次，等待 provider 启动。",
+        latest_event_at=now_text,
+        exit_code=0,
+        started_at=now_text,
+        finished_at="",
+        created_at=now_text,
+        updated_at=now_text,
+    )
+    _assignment_write_run_record(root, ticket_id=ticket_id, run_record=run_record)
+    return {
+        "run_id": run_id,
+        "ticket_id": ticket_id,
+        "node_id": node_id,
+        "provider": provider,
+        "workspace_path": workspace_path,
+        "prompt_text": prompt_text,
+        "command": command,
+        "command_summary": command_summary,
+        "files": files,
+        "node": serialized_node,
+    }
+
+
 def dispatch_assignment_next(
     root: Path,
     *,

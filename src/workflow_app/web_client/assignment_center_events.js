@@ -546,11 +546,11 @@
   function assignmentViewTabsProbePass(output) {
     return output.active_tab === 'task-center' &&
       !!output.ticket_id &&
-      output.primary_view === 'graph' &&
-      output.graph_visible &&
-      !output.workboard_visible &&
-      output.graph_tab_active &&
-      !output.workboard_tab_active &&
+      output.primary_view === 'workboard' &&
+      !output.graph_visible &&
+      output.workboard_visible &&
+      !output.graph_tab_active &&
+      output.workboard_tab_active &&
       output.view_tabs_workboard_pass &&
       output.view_tabs_graph_pass;
   }

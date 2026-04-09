@@ -559,6 +559,190 @@
     };
   }
 
+  function assignmentWorkboardRefreshIso(refreshAtMs, fallbackIso) {
+    const localMs = Math.max(0, Number(refreshAtMs || 0));
+    if (localMs > 0) {
+      try {
+        return new Date(localMs).toISOString();
+      } catch (_) {
+        // fall through to server timestamp
+      }
+    }
+    return safe(fallbackIso).trim();
+  }
+
+  function assignmentWorkboardFreshnessSnapshot() {
+    const localRefreshAtMs = Math.max(
+      0,
+      Number(state.assignmentGraphLastRefreshAtMs || 0),
+      Number(state.dashboardLastRefreshAtMs || 0),
+    );
+    const serverFetchedAt = safe(state.dashboardLastFetchedAt).trim();
+    const refreshIso = assignmentWorkboardRefreshIso(localRefreshAtMs, serverFetchedAt);
+    const refreshMs = localRefreshAtMs > 0
+      ? localRefreshAtMs
+      : (refreshIso ? new Date(refreshIso).getTime() : NaN);
+    const ageMs = Number.isFinite(refreshMs) && refreshMs > 0
+      ? Math.max(0, Date.now() - refreshMs)
+      : NaN;
+    let tone = 'muted';
+    let label = '刷新时间待确认';
+    if (Number.isFinite(ageMs)) {
+      if (ageMs <= 15000) {
+        tone = 'success';
+        label = '数据新鲜';
+      } else if (ageMs <= 60000) {
+        tone = 'muted';
+        label = '数据稍旧';
+      } else {
+        tone = 'blocked';
+        label = '数据已过期';
+      }
+    }
+    const sourceLabel = Number(state.assignmentGraphLastRefreshAtMs || 0) >= Number(state.dashboardLastRefreshAtMs || 0)
+      ? '任务图'
+      : 'dashboard';
+    let detail = '最近一次任务中心刷新时间还未建立。';
+    if (refreshIso) {
+      detail = '最近刷新 ' + assignmentFormatBeijingTime(refreshIso);
+      if (Number.isFinite(ageMs)) {
+        detail += ' · ' + formatElapsedMs(ageMs) + ' 前';
+      }
+      detail += ' · 来源 ' + sourceLabel;
+    }
+    return {
+      tone: tone,
+      label: label,
+      detail: detail,
+      ageMs: ageMs,
+      refreshIso: refreshIso,
+    };
+  }
+
+  function assignmentWorkboardConnectionSnapshot() {
+    const mode = assignmentExecutionMode();
+    const refreshModeText = assignmentExecutionRefreshModeText(mode);
+    const pollIntervalMs = Math.max(
+      250,
+      Number(state.assignmentExecutionPollIntervalMs || assignmentExecutionSettingsPayload().poll_interval_ms || 450),
+    );
+    const streamConnected = !!state.assignmentExecutionEventSource && !!state.assignmentExecutionEventSourceConnected;
+    if (streamConnected) {
+      return {
+        tone: 'running',
+        label: '实时流已连接',
+        detail: refreshModeText + ' 正在推送节点变化；若断线会回退到 ' + String(pollIntervalMs) + 'ms 兜底刷新。',
+      };
+    }
+    if (safe(mode).trim().toLowerCase() === 'event_stream') {
+      return {
+        tone: 'blocked',
+        label: '已回退短轮询',
+        detail: '实时流当前未连通，任务中心暂用 ' + String(pollIntervalMs) + 'ms 轮询保活。',
+      };
+    }
+    return {
+      tone: 'muted',
+      label: refreshModeText + ' 模式',
+      detail: '当前没有事件流连接，任务中心按 ' + String(pollIntervalMs) + 'ms 轮询刷新。',
+    };
+  }
+
+  function assignmentWorkboardGuidanceSnapshot(currentMainline, nextMainline, patrolNode, schedulePreview, workflowGroup) {
+    const handoffNote = safe(workflowGroup && workflowGroup.workflowMainlineHandoffNote).trim();
+    const currentStatus = safe(currentMainline && currentMainline.status).trim().toLowerCase();
+    const patrolStatus = safe(patrolNode && patrolNode.status).trim().toLowerCase();
+    const futureCount = (Array.isArray(schedulePreview) ? schedulePreview : []).filter((item) => {
+      const nextTrigger = safe(item && (item.next_trigger_at || item.next_trigger_text)).trim();
+      return !!nextTrigger && nextTrigger !== '停用中';
+    }).length;
+    if (currentMainline && currentStatus === 'running') {
+      return {
+        tone: 'running',
+        label: nextMainline ? '继续等待当前主线' : '继续观察当前主线',
+        detail: nextMainline
+          ? '当前真正会消耗 token 的主线还在执行，下一棒已经排队，先不要抢着介入。'
+          : '当前真正会消耗 token 的主线还在执行，优先等待收尾和下一次接棒。',
+      };
+    }
+    if (nextMainline && patrolNode && patrolStatus === 'running') {
+      return {
+        tone: 'blocked',
+        label: '保底巡检正在占槽',
+        detail: handoffNote || '保底巡检仍在运行，真正的 [持续迭代] workflow 还在等待接棒。',
+      };
+    }
+    if (nextMainline) {
+      return {
+        tone: 'muted',
+        label: '等待运行槽释放',
+        detail: handoffNote || '当前没有 running 主线，但下一棒已经 ready，先观察占槽任务是否正常收尾。',
+      };
+    }
+    if (futureCount > 0) {
+      return {
+        tone: 'muted',
+        label: '等待下一次定时触发',
+        detail: '当前图内没有 ready 接棒，但至少还有 ' + String(futureCount) + ' 条 future 入口，不必急着人工补链。',
+      };
+    }
+    return {
+      tone: 'fail',
+      label: '需要人工介入',
+      detail: '当前同时缺少 running 主线、ready 接棒和 future 入口，需立即补链或重派发。',
+    };
+  }
+
+  function assignmentWorkboardStatusCardHtml(title, value, detail, tone) {
+    return (
+      "<section class='assignment-workboard-status-card " + escapeHtml(safe(tone).trim() || 'muted') + "'>" +
+      "<div class='assignment-workboard-status-k'>" + escapeHtml(title) + '</div>' +
+      "<div class='assignment-workboard-status-v'>" + escapeHtml(value) + '</div>' +
+      "<div class='assignment-workboard-status-note'>" + escapeHtml(detail) + '</div>' +
+      '</section>'
+    );
+  }
+
+  function assignmentIsWorkflowMainline(item) {
+    const row = item && typeof item === 'object' ? item : {};
+    if (row.is_workflow_mainline) return true;
+    const agentId = safe(row.assigned_agent_id || row.agent_id).trim().toLowerCase();
+    const expectedArtifact = safe(row.expected_artifact).trim().toLowerCase();
+    const nodeName = safe(row.node_name).trim();
+    return agentId === 'workflow' && (
+      expectedArtifact === 'continuous-improvement-report.md' ||
+      nodeName.indexOf('[持续迭代] workflow') === 0
+    );
+  }
+
+  function assignmentIsWorkflowPatrol(item) {
+    const row = item && typeof item === 'object' ? item : {};
+    if (row.is_workflow_patrol) return true;
+    const agentId = safe(row.assigned_agent_id || row.agent_id).trim().toLowerCase();
+    const expectedArtifact = safe(row.expected_artifact).trim().toLowerCase();
+    const nodeName = safe(row.node_name).trim();
+    return agentId === 'workflow' && (
+      expectedArtifact === 'workflow-pm-wake-summary' ||
+      nodeName.indexOf('pm持续唤醒 - workflow 主线巡检') === 0
+    );
+  }
+
+  function assignmentAnnotateWorkboardGroup(group) {
+    const current = group && typeof group === 'object' ? group : {};
+    const running = Array.isArray(current.running) ? current.running : [];
+    const queued = Array.isArray(current.queued) ? current.queued : [];
+    const runningMainline = running.find((item) => assignmentIsWorkflowMainline(item));
+    const queuedMainline = queued.find((item) => assignmentIsWorkflowMainline(item));
+    const patrolRunning = running.find((item) => assignmentIsWorkflowPatrol(item));
+    current.workflowMainlineHandoffPending = !!queuedMainline && !runningMainline;
+    current.workflowMainlineHandoffNote = current.workflowMainlineHandoffPending
+      ? (patrolRunning
+        ? '保底巡检仍在运行，真正的 [持续迭代] workflow 还在待执行。'
+        : '真正的 [持续迭代] workflow 还在待执行。')
+      : '';
+    return current;
+  }
+
   function assignmentWorkboardGroups() {
     const graphData = state.assignmentGraphData && typeof state.assignmentGraphData === 'object'
       ? state.assignmentGraphData
@@ -571,7 +755,7 @@
       const grouped = Array.isArray(metrics.assignment_workboard_agents)
         ? metrics.assignment_workboard_agents
         : [];
-      return grouped.map((item) => ({
+      return grouped.map((item) => assignmentAnnotateWorkboardGroup({
         key: safe(item && item.agent_id).trim() || safe(item && item.agent_name).trim(),
         agentId: safe(item && item.agent_id).trim(),
         agentName: safe(item && item.agent_name).trim() || safe(item && item.agent_id).trim() || '未指派',
@@ -579,6 +763,8 @@
         queued: Array.isArray(item && item.queued) ? item.queued : [],
         failed: Array.isArray(item && item.failed) ? item.failed : [],
         blocked: Array.isArray(item && item.blocked) ? item.blocked : [],
+        workflowMainlineHandoffPending: !!(item && item.workflow_mainline_handoff_pending),
+        workflowMainlineHandoffNote: safe(item && item.workflow_mainline_handoff_note).trim(),
       }));
     }
     const map = new Map();
@@ -611,7 +797,7 @@
         bucket.queued.push(row);
       }
     });
-    return Array.from(map.values()).sort((left, right) => {
+    return Array.from(map.values()).map((item) => assignmentAnnotateWorkboardGroup(item)).sort((left, right) => {
       const leftScore = left.running.length * 100 + left.queued.length * 10 + left.failed.length;
       const rightScore = right.running.length * 100 + right.queued.length * 10 + right.failed.length;
       if (leftScore !== rightScore) return rightScore - leftScore;
@@ -637,6 +823,154 @@
     }).join('');
   }
 
+  function assignmentWorkboardNodeMetaText(item, fallbackStatus) {
+    const row = item && typeof item === 'object' ? item : {};
+    const parts = [];
+    const priorityLabel = safe(row.priority_label || row.priority).trim();
+    const statusText = safe(row.status_text).trim() || safe(fallbackStatus).trim();
+    const agentName = safe(row.assigned_agent_name || row.agent_id).trim();
+    if (priorityLabel) parts.push(priorityLabel);
+    if (statusText) parts.push(statusText);
+    if (agentName && !assignmentIsWorkflowMainline(row) && !assignmentIsWorkflowPatrol(row)) {
+      parts.push(agentName);
+    }
+    return parts.join(' · ') || '-';
+  }
+
+  function assignmentWorkboardNodeTimingText(item) {
+    const row = item && typeof item === 'object' ? item : {};
+    const updatedAt = safe(row.updated_at).trim();
+    const plannedTriggerAt = safe(row.planned_trigger_at).trim();
+    if (updatedAt) {
+      let detail = '最近更新 ' + assignmentFormatBeijingTime(updatedAt);
+      const updatedMs = new Date(updatedAt).getTime();
+      if (Number.isFinite(updatedMs) && updatedMs > 0) {
+        detail += ' · ' + formatElapsedMs(Math.max(0, Date.now() - updatedMs)) + ' 前';
+      }
+      return detail;
+    }
+    if (plannedTriggerAt) {
+      return '计划时间 ' + assignmentFormatBeijingTime(plannedTriggerAt);
+    }
+    return '';
+  }
+
+  function assignmentWorkboardNodeStageSnapshot(item) {
+    const row = item && typeof item === 'object' ? item : {};
+    const label = safe(row.latest_run_stage_label).trim();
+    const detail = safe(row.latest_run_stage_detail).trim();
+    const stageAt = safe(row.latest_run_stage_at || row.latest_run_event_at).trim();
+    if (!label && !detail) return null;
+    let timeText = '';
+    if (stageAt) {
+      timeText = '阶段时间 ' + assignmentFormatBeijingTime(stageAt);
+      const stageMs = new Date(stageAt).getTime();
+      if (Number.isFinite(stageMs) && stageMs > 0) {
+        timeText += ' · ' + formatElapsedMs(Math.max(0, Date.now() - stageMs)) + ' 前';
+      }
+    }
+    return {
+      label: label || '当前阶段',
+      detail: detail || '阶段摘要已建立，等待下一条进度更新。',
+      timeText: timeText,
+    };
+  }
+
+  function assignmentWorkboardFocusStageHtml(item) {
+    const stage = assignmentWorkboardNodeStageSnapshot(item);
+    if (!stage) return '';
+    return (
+      "<div class='assignment-workboard-focus-stage'>" +
+      "<div class='assignment-workboard-focus-stage-label'>" + escapeHtml(stage.label) + '</div>' +
+      "<div class='assignment-workboard-focus-stage-detail'>" + escapeHtml(stage.detail) + '</div>' +
+      (stage.timeText
+        ? "<div class='assignment-workboard-focus-stage-time'>" + escapeHtml(stage.timeText) + '</div>'
+        : '') +
+      '</div>'
+    );
+  }
+
+  function assignmentWorkboardFocusCardHtml(item, options) {
+    const row = item && typeof item === 'object' ? item : {};
+    const opts = options && typeof options === 'object' ? options : {};
+    const nodeId = safe(row.node_id).trim();
+    const tone = safe(opts.tone).trim() || assignmentStatusTone(row.status) || 'future';
+    const title = safe(row.node_name || row.node_id).trim() || safe(opts.emptyTitle).trim() || '暂无节点';
+    const metaText = assignmentWorkboardNodeMetaText(row, opts.fallbackStatus);
+    const timingText = assignmentWorkboardNodeTimingText(row);
+    const noteText = safe(opts.note).trim() || safe(opts.emptyNote).trim();
+    const innerHtml =
+      "<div class='assignment-workboard-focus-eyebrow'>" + escapeHtml(safe(opts.eyebrow).trim() || '任务') + '</div>' +
+      "<div class='assignment-workboard-focus-title'>" + escapeHtml(title) + '</div>' +
+      "<div class='assignment-workboard-focus-meta'>" + escapeHtml(metaText) + '</div>' +
+      (timingText ? "<div class='assignment-workboard-focus-time'>" + escapeHtml(timingText) + '</div>' : '') +
+      assignmentWorkboardFocusStageHtml(row) +
+      (noteText ? "<div class='assignment-workboard-focus-note'>" + escapeHtml(noteText) + '</div>' : '');
+    if (!nodeId) {
+      return "<div class='assignment-workboard-focus-card " + escapeHtml(tone) + " is-empty'>" + innerHtml + '</div>';
+    }
+    return (
+      "<button class='assignment-workboard-focus-card " + escapeHtml(tone) + "' type='button' data-assignment-workboard-node='" +
+      escapeHtml(nodeId) +
+      "'>" +
+      innerHtml +
+      '</button>'
+    );
+  }
+
+  function assignmentWorkboardGroupCardHtml(group) {
+    const item = group && typeof group === 'object' ? group : {};
+    const tone = item.running.length ? 'running' : (item.failed.length ? 'fail' : 'future');
+    return (
+      "<section class='assignment-workboard-group-card'>" +
+      "<div class='assignment-workboard-group-head'>" +
+      "<div>" +
+      "<div class='assignment-workboard-group-title'>" + escapeHtml(safe(item.agentName).trim() || '未指派') + '</div>' +
+      "<div class='assignment-workboard-group-meta'>" +
+      escapeHtml('运行中 ' + item.running.length + ' · 待执行 ' + item.queued.length + ' · 失败 ' + item.failed.length) +
+      '</div>' +
+      '</div>' +
+      "<span class='assignment-chip " + escapeHtml(tone) + "'>" + escapeHtml(tone === 'running' ? '活跃' : (tone === 'fail' ? '需处理' : '排队中')) + '</span>' +
+      '</div>' +
+      (safe(item.workflowMainlineHandoffNote).trim()
+        ? "<div class='assignment-workboard-inline-note warn'>" + escapeHtml(item.workflowMainlineHandoffNote) + '</div>'
+        : '') +
+      (item.running.length
+        ? "<div class='assignment-workboard-list-title'>正在执行</div><div class='running-task-list'>" + assignmentWorkboardTaskButtons(item.running, '运行中') + '</div>'
+        : '') +
+      (item.queued.length
+        ? "<div class='assignment-workboard-list-title'>待执行</div><div class='running-task-list'>" + assignmentWorkboardTaskButtons(item.queued, '待执行') + '</div>'
+        : '') +
+      (item.failed.length
+        ? "<div class='assignment-workboard-list-title'>失败池</div><div class='running-task-list'>" + assignmentWorkboardTaskButtons(item.failed, '失败') + '</div>'
+        : '') +
+      (item.blocked.length
+        ? "<div class='assignment-workboard-inline-note'>阻塞 " + escapeHtml(String(item.blocked.length)) + ' 项</div>'
+        : '') +
+      '</section>'
+    );
+  }
+
+  function assignmentWorkboardScheduleCardHtml(item) {
+    const row = item && typeof item === 'object' ? item : {};
+    const scheduleName = safe(row.schedule_name || row.schedule_id).trim() || '-';
+    const statusText = safe(row.last_result_status_text || row.last_result_status).trim() || 'pending';
+    const nextTrigger = safe(row.next_trigger_text || row.next_trigger_at).trim() || '-';
+    const lastSummary = safe(row.last_result_summary).trim();
+    return (
+      "<div class='assignment-workboard-schedule-card'>" +
+      "<div class='row between'>" +
+      "<strong>" + escapeHtml(scheduleName) + "</strong>" +
+      "<span class='assignment-chip muted'>" + escapeHtml(statusText) + '</span>' +
+      '</div>' +
+      "<div class='assignment-workboard-schedule-meta'>下次触发 · " + escapeHtml(nextTrigger) + '</div>' +
+      (lastSummary
+        ? "<div class='assignment-workboard-schedule-meta'>最近结果 · " + escapeHtml(lastSummary) + '</div>'
+        : '') +
+      '</div>'
+    );
+  }
+
   function renderAssignmentWorkboard() {
     const host = $('assignmentWorkboard');
     if (!host) return;
@@ -649,65 +983,163 @@
     const queuedCount = groups.reduce((sum, item) => sum + item.queued.length, 0);
     const failedCount = groups.reduce((sum, item) => sum + item.failed.length, 0);
     const activeAgents = groups.filter((item) => item.running.length > 0 || item.queued.length > 0).length;
+    const workflowGroup = groups.find((item) => safe(item.agentId || item.agentName).trim().toLowerCase() === 'workflow') || null;
+    const currentMainline = workflowGroup
+      ? (workflowGroup.running.find((item) => assignmentIsWorkflowMainline(item)) || workflowGroup.running[0] || null)
+      : null;
+    const nextMainline = workflowGroup
+      ? (workflowGroup.queued.find((item) => assignmentIsWorkflowMainline(item)) || workflowGroup.queued[0] || null)
+      : null;
+    const patrolNode = workflowGroup
+      ? (
+        workflowGroup.running.find((item) => assignmentIsWorkflowPatrol(item)) ||
+        workflowGroup.queued.find((item) => assignmentIsWorkflowPatrol(item)) ||
+        null
+      )
+      : null;
+    const helperGroups = groups.filter((item) => safe(item.agentId || item.agentName).trim().toLowerCase() !== 'workflow');
+    const failurePool = groups
+      .flatMap((item) => Array.isArray(item.failed) ? item.failed : [])
+      .slice(0, 4);
     const schedulePreview = Array.isArray(metrics.schedule_workboard_preview) ? metrics.schedule_workboard_preview.slice(0, 4) : [];
-    const summaryHtml =
+    const freshness = assignmentWorkboardFreshnessSnapshot();
+    const connection = assignmentWorkboardConnectionSnapshot();
+    const headerHtml =
       "<div class='assignment-panel-head'>" +
-      "<div><div class='card-title'>工作状态看板</div><div class='hint'>当前按任务中心主图聚合各小伙伴的正在执行、待执行和失败任务。</div></div>" +
+      "<div><div class='card-title'>任务看板</div><div class='hint'>默认先看 workflow 主线、接棒和失败池，不必先钻进长图。</div></div>" +
       "<div class='assignment-head-actions'>" +
       "<span class='assignment-chip " + escapeHtml(goal.tone) + "'>" + escapeHtml(goal.title) + "</span>" +
       "<span class='assignment-chip muted'>" + escapeHtml(goal.detail) + "</span>" +
-      "</div></div>" +
+      '</div>' +
+      '</div>';
+    const summaryHtml =
       "<div class='assignment-workboard-body'>" +
-      "<div class='assignment-detail-grid assignment-detail-grid-tight'>" +
+      "<div class='assignment-workboard-summary-grid'>" +
       assignmentStatHtml('活跃小伙伴', escapeHtml(String(activeAgents))) +
       assignmentStatHtml('运行中任务', escapeHtml(String(runningCount))) +
       assignmentStatHtml('待执行任务', escapeHtml(String(queuedCount))) +
       assignmentStatHtml('失败任务', escapeHtml(String(failedCount))) +
-      "</div>";
+      '</div>';
     if (!groups.length) {
-      host.innerHTML = summaryHtml + "<div class='hint'>主图当前没有可展示的运行中或待执行任务。</div></div>";
+      host.innerHTML = headerHtml + summaryHtml + "<div class='assignment-workboard-inline-note'>主图当前没有可展示的运行中或待执行任务。</div></div>";
       return;
     }
+    const handoffNote = safe(workflowGroup && workflowGroup.workflowMainlineHandoffNote).trim();
+    const focusHtml =
+      "<section class='assignment-workboard-section'>" +
+      "<div class='assignment-workboard-section-head'>" +
+      "<div>" +
+      "<div class='assignment-workboard-section-title'>主线焦点</div>" +
+      "<div class='assignment-workboard-section-meta'>把当前主线、下一棒和保底巡检固定在同一屏里观察。</div>" +
+      '</div>' +
+      "<span class='assignment-chip muted'>workflow 主线</span>" +
+      '</div>' +
+      "<div class='assignment-workboard-focus-grid'>" +
+      assignmentWorkboardFocusCardHtml(currentMainline, {
+        eyebrow: '当前主线',
+        fallbackStatus: currentMainline ? '运行中' : '待接棒',
+        tone: currentMainline ? assignmentStatusTone(currentMainline.status) : 'future',
+        emptyTitle: '当前没有 running 主线',
+        note: currentMainline
+          ? '当前真正会消耗 token 的连续迭代节点。'
+          : '当前没有 running 主线，优先看右侧接棒和保底是否仍在。',
+      }) +
+      assignmentWorkboardFocusCardHtml(nextMainline, {
+        eyebrow: '下一棒',
+        fallbackStatus: nextMainline ? '待执行' : '未排队',
+        tone: nextMainline ? assignmentStatusTone(nextMainline.status) : 'future',
+        emptyTitle: '当前没有 ready 接棒',
+        note: nextMainline
+          ? (handoffNote || '下一棒已进图，等待 running 槽释放。')
+          : '当前没有 ready 接棒节点，需结合右侧定时任务判断是否还保有 future 出口。',
+      }) +
+      assignmentWorkboardFocusCardHtml(patrolNode, {
+        eyebrow: '保底巡检',
+        fallbackStatus: patrolNode ? '保底入口' : '未命中',
+        tone: patrolNode ? assignmentStatusTone(patrolNode.status) : 'future',
+        emptyTitle: '当前图内没有保底巡检节点',
+        note: patrolNode
+          ? '保底巡检仍在图里，主线异常时会优先检查接力是否断链。'
+          : '当前图里没有保底巡检节点，请同时看右侧 schedule 是否仍保留 future 入口。',
+      }) +
+      '</div>' +
+      (handoffNote
+        ? "<div class='assignment-workboard-inline-note warn'>" + escapeHtml(handoffNote) + '</div>'
+        : '') +
+      '</section>';
+    const guidance = assignmentWorkboardGuidanceSnapshot(
+      currentMainline,
+      nextMainline,
+      patrolNode,
+      schedulePreview,
+      workflowGroup,
+    );
+    const statusStripHtml =
+      "<div class='assignment-workboard-status-strip'>" +
+      assignmentWorkboardStatusCardHtml('数据新鲜度', freshness.label, freshness.detail, freshness.tone) +
+      assignmentWorkboardStatusCardHtml('连接状态', connection.label, connection.detail, connection.tone) +
+      assignmentWorkboardStatusCardHtml('当前建议', guidance.label, guidance.detail, guidance.tone) +
+      '</div>';
     const groupsHtml =
-      "<div class='assignment-audit-list' style='margin-top:10px'>" +
-      groups.map((group) => (
-        "<div class='assignment-audit-item'>" +
-        "<div class='row between'>" +
-        "<strong>" + escapeHtml(group.agentName) + "</strong>" +
-        "<span class='assignment-chip " + escapeHtml(group.running.length ? 'running' : (group.failed.length ? 'fail' : 'future')) + "'>" +
-        escapeHtml('运行中 ' + group.running.length + ' · 待执行 ' + group.queued.length + ' · 失败 ' + group.failed.length) +
-        "</span>" +
-        "</div>" +
-        (group.running.length
-          ? "<div class='hint' style='margin-top:6px'>正在执行</div><div class='running-task-list'>" + assignmentWorkboardTaskButtons(group.running, '运行中') + "</div>"
-          : '') +
-        (group.queued.length
-          ? "<div class='hint' style='margin-top:6px'>待执行</div><div class='running-task-list'>" + assignmentWorkboardTaskButtons(group.queued, '待执行') + "</div>"
-          : '') +
-        (group.failed.length
-          ? "<div class='hint' style='margin-top:6px'>待处理失败</div><div class='running-task-list'>" + assignmentWorkboardTaskButtons(group.failed, '失败') + "</div>"
-          : '') +
-        (group.blocked.length
-          ? "<div class='hint' style='margin-top:6px'>阻塞 " + escapeHtml(String(group.blocked.length)) + " 项</div>"
-          : '') +
-        "</div>"
-      )).join('') +
-      "</div>";
-    const scheduleHtml = schedulePreview.length
-      ? (
-        "<div class='assignment-audit-list' style='margin-top:10px'>" +
-        schedulePreview.map((item) => (
-          "<div class='assignment-audit-item'>" +
-          "<div class='row between'><strong>" + escapeHtml(safe(item && item.schedule_name).trim() || safe(item && item.schedule_id).trim() || '-') + "</strong>" +
-          "<span class='assignment-chip muted'>" + escapeHtml(safe(item && (item.last_result_status || 'pending')).trim() || 'pending') + "</span></div>" +
-          "<div class='hint' style='margin-top:6px'>下次触发: " + escapeHtml(safe(item && item.next_trigger_at).trim() || '-') + "</div>" +
-          "</div>"
-        )).join('') +
-        "</div>"
-      )
-      : "<div class='hint' style='margin-top:10px'>最近未拿到定时任务预览。</div>";
-    host.innerHTML = summaryHtml + groupsHtml +
-      "<div class='hint' style='margin-top:12px'>最近定时任务</div>" + scheduleHtml + "</div>";
+      "<section class='assignment-workboard-section'>" +
+      "<div class='assignment-workboard-section-head'>" +
+      "<div>" +
+      "<div class='assignment-workboard-section-title'>协作泳道</div>" +
+      "<div class='assignment-workboard-section-meta'>固定显示当前 helper 的活跃任务和失败池，避免信息全堆到一条长列表里。</div>" +
+      '</div>' +
+      "<span class='assignment-chip muted'>helper " + escapeHtml(String(helperGroups.length)) + "</span>" +
+      '</div>' +
+      (
+        helperGroups.length
+          ? "<div class='assignment-workboard-group-grid'>" + helperGroups.map((group) => assignmentWorkboardGroupCardHtml(group)).join('') + '</div>'
+          : "<div class='assignment-workboard-inline-note'>当前没有额外 helper 接棒，主线暂由 workflow 自己推进。</div>"
+      ) +
+      '</section>';
+    const failureHtml =
+      "<section class='assignment-workboard-section'>" +
+      "<div class='assignment-workboard-section-head'>" +
+      "<div>" +
+      "<div class='assignment-workboard-section-title'>近期失败池</div>" +
+      "<div class='assignment-workboard-section-meta'>先看 active 版本窗口内最靠前的失败节点，不把所有历史失败都摊平。</div>" +
+      '</div>' +
+      "<span class='assignment-chip fail'>失败 " + escapeHtml(String(failurePool.length)) + '</span>' +
+      '</div>' +
+      (
+        failurePool.length
+          ? "<div class='running-task-list'>" + assignmentWorkboardTaskButtons(failurePool, '失败') + '</div>'
+          : "<div class='assignment-workboard-inline-note'>当前没有需要优先处理的失败节点。</div>"
+      ) +
+      '</section>';
+    const scheduleHtml =
+      "<section class='assignment-workboard-section'>" +
+      "<div class='assignment-workboard-section-head'>" +
+      "<div>" +
+      "<div class='assignment-workboard-section-title'>定时入口</div>" +
+      "<div class='assignment-workboard-section-meta'>主线与保底是否还有 future 出口，优先在这里判断。</div>" +
+      '</div>' +
+      "<span class='assignment-chip muted'>schedule " + escapeHtml(String(schedulePreview.length)) + '</span>' +
+      '</div>' +
+      (
+        schedulePreview.length
+          ? "<div class='assignment-workboard-schedule-list'>" + schedulePreview.map((item) => assignmentWorkboardScheduleCardHtml(item)).join('') + '</div>'
+          : "<div class='assignment-workboard-inline-note'>最近未拿到定时任务预览。</div>"
+      ) +
+      '</section>';
+    host.innerHTML =
+      headerHtml +
+      summaryHtml +
+      statusStripHtml +
+      "<div class='assignment-workboard-layout'>" +
+      "<div class='assignment-workboard-stage'>" +
+      focusHtml +
+      groupsHtml +
+      '</div>' +
+      "<aside class='assignment-workboard-rail'>" +
+      failureHtml +
+      scheduleHtml +
+      '</aside>' +
+      '</div>' +
+      '</div>';
   }
 
   function assignmentGraphOptionLabel(item) {
@@ -744,9 +1176,35 @@
 
   function pickAssignmentDefaultNode(graphData) {
     const rows = Array.isArray(graphData && graphData.nodes) ? graphData.nodes : [];
-    const preferred = rows.find((item) => safe(item && item.status).trim().toLowerCase() === 'running') ||
-      rows.find((item) => safe(item && item.status).trim().toLowerCase() === 'failed') ||
-      rows[0];
+    function assignmentDefaultNodeRank(item) {
+      const row = item && typeof item === 'object' ? item : {};
+      const status = safe(row.status).trim().toLowerCase();
+      const isWorkflowMainline = !!row.is_workflow_mainline;
+      if (isWorkflowMainline && status === 'running') return 0;
+      if (isWorkflowMainline && status === 'ready') return 1;
+      if (isWorkflowMainline && status === 'pending') return 2;
+      if (isWorkflowMainline && status === 'blocked') return 3;
+      if (status === 'running') return 4;
+      if (status === 'ready') return 5;
+      if (status === 'pending') return 6;
+      if (status === 'blocked') return 7;
+      if (isWorkflowMainline) return 8;
+      if (status === 'failed' || status === 'succeeded') return 9;
+      return 10;
+    }
+    const preferred = rows.slice().sort((left, right) => {
+      const rankDiff = assignmentDefaultNodeRank(left) - assignmentDefaultNodeRank(right);
+      if (rankDiff !== 0) return rankDiff;
+      const fields = ['updated_at', 'completed_at', 'created_at', 'node_id'];
+      for (let index = 0; index < fields.length; index += 1) {
+        const field = fields[index];
+        const leftValue = safe(left && left[field]).trim();
+        const rightValue = safe(right && right[field]).trim();
+        if (leftValue === rightValue) continue;
+        return rightValue.localeCompare(leftValue, 'zh-CN');
+      }
+      return 0;
+    })[0];
     return safe(preferred && preferred.node_id).trim();
   }
 
@@ -784,6 +1242,7 @@
     const skipDetail = !!opts.skipDetail;
     if (!ticketId) {
       state.assignmentGraphData = null;
+      state.assignmentGraphLastRefreshAtMs = 0;
       state.assignmentScheduler = null;
       state.assignmentActiveLoaded = 0;
       stopAssignmentExecutionRealtime();
@@ -800,6 +1259,7 @@
       const data = await getJSON(assignmentGraphUrl(ticketId));
       if (seq !== state.assignmentGraphRequestSeq) return null;
       state.assignmentGraphData = data;
+      state.assignmentGraphLastRefreshAtMs = Date.now();
       state.assignmentScheduler = data.graph && data.graph.scheduler ? data.graph.scheduler : null;
       state.assignmentSelectedTicketId = ticketId;
       if (!safe(state.assignmentSelectedNodeId).trim()) {

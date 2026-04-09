@@ -1,12 +1,5 @@
 from __future__ import annotations
 
-from workflow_app.server.services.codex_failure_contract import (
-    build_codex_failure,
-    build_retry_action,
-    infer_codex_failure_detail_code,
-)
-
-
 _ASSIGNMENT_STALE_RECOVERY_LOCK_GUARD = threading.Lock()
 _ASSIGNMENT_STALE_RECOVERY_LOCKS: dict[str, threading.Lock] = {}
 
@@ -435,6 +428,7 @@ def _assignment_try_recover_terminal_run_from_files(
         failure_message=failure_message,
         suppress_followup_dispatch=True,
     )
+    _kill_assignment_run_process(run_id, provider_pid=int(run_record.get("provider_pid") or 0))
     return True
 
 
@@ -530,14 +524,32 @@ def _assignment_reconcile_stale_task_state_internal(
                         changed = True
                         updated_nodes.append(current)
                         continue
+                    failure_base_text = str(
+                        current.get("failure_reason") or "运行句柄缺失或 workflow 已重启，请手动重跑。"
+                    ).strip()
+                    preserved_result_ref = str(current.get("result_ref") or "").strip()
+                    preserved_result_payload: dict[str, Any] = {}
+                    if preserved_result_ref:
+                        existing_payload = _assignment_read_json(Path(preserved_result_ref))
+                        if isinstance(existing_payload, dict) and _assignment_result_payload_has_meaningful_content(
+                            existing_payload
+                        ):
+                            preserved_result_payload = existing_payload
+                        else:
+                            preserved_result_ref = ""
                     current["status"] = "failed"
                     current["status_text"] = _node_status_text("failed")
                     current["completed_at"] = now_text
                     current["success_reason"] = ""
-                    current["result_ref"] = ""
-                    current["failure_reason"] = str(
-                        current.get("failure_reason") or "运行句柄缺失或 workflow 已重启，请手动重跑。"
-                    ).strip()
+                    current["result_ref"] = preserved_result_ref
+                    current["failure_reason"] = (
+                        _assignment_failure_message_with_result_context(
+                            failure_base_text,
+                            result_payload=preserved_result_payload,
+                        )
+                        if preserved_result_ref
+                        else failure_base_text
+                    )
                     current["updated_at"] = now_text
                     changed = True
                     for run in _assignment_load_run_records(root, ticket_id=ticket_id, node_id=node_id):
@@ -547,6 +559,23 @@ def _assignment_reconcile_stale_task_state_internal(
                         run_id = str(run.get("run_id") or "").strip()
                         workspace_path_text = str(run.get("workspace_path") or "").strip()
                         provider_pid = int(run.get("provider_pid") or 0)
+                        run_result_ref = str(run.get("result_ref") or "").strip()
+                        run_result_payload: dict[str, Any] = {}
+                        refs = _assignment_run_file_paths(root, ticket_id, run_id) if run_id else {}
+                        result_path = refs.get("result") if isinstance(refs, dict) else None
+                        if not run_result_ref and isinstance(result_path, Path) and result_path.exists():
+                            run_result_ref = result_path.as_posix()
+                        if isinstance(result_path, Path) and result_path.exists():
+                            raw_result_payload = _assignment_read_json(result_path)
+                            if isinstance(raw_result_payload, dict):
+                                run_result_payload = raw_result_payload
+                        if (
+                            not preserved_result_ref
+                            and run_result_ref
+                            and _assignment_result_payload_has_meaningful_content(run_result_payload)
+                        ):
+                            preserved_result_ref = run_result_ref
+                            preserved_result_payload = run_result_payload
                         run["status"] = "cancelled"
                         run["latest_event"] = "检测到运行句柄缺失，已自动结束当前批次。"
                         run["latest_event_at"] = now_text
@@ -554,6 +583,15 @@ def _assignment_reconcile_stale_task_state_internal(
                         run["updated_at"] = now_text
                         _assignment_write_run_record(root, ticket_id=ticket_id, run_record=run)
                         _kill_assignment_run_process(run_id, provider_pid=provider_pid)
+                        current["result_ref"] = preserved_result_ref
+                        current["failure_reason"] = (
+                            _assignment_failure_message_with_result_context(
+                                failure_base_text,
+                                result_payload=preserved_result_payload,
+                            )
+                            if preserved_result_ref
+                            else failure_base_text
+                        )
                         try:
                             memory_detail = _append_assignment_workspace_memory_round(
                                 workspace_path_text,
@@ -561,11 +599,14 @@ def _assignment_reconcile_stale_task_state_internal(
                                 node_record=current,
                                 run_id=run_id,
                                 exit_code=int(run.get("exit_code") or 1),
-                                result_ref=str(run.get("result_ref") or "").strip(),
-                                summary_text=str(current.get("failure_reason") or "").strip()
-                                or "运行句柄缺失或 workflow 已重启，请手动重跑。",
+                                result_ref=preserved_result_ref or run_result_ref,
+                                summary_text=str(current.get("failure_reason") or "").strip() or failure_base_text,
                                 artifact_paths=list(current.get("artifact_paths") or []),
-                                warnings=[],
+                                warnings=(
+                                    list(preserved_result_payload.get("warnings") or [])
+                                    if preserved_result_ref
+                                    else []
+                                ),
                                 appended_at=now_text,
                             )
                             if memory_detail:
@@ -599,7 +640,7 @@ def _assignment_reconcile_stale_task_state_internal(
                             operator="assignment-system",
                             reason="recover stale running node without live execution",
                             target_status="failed",
-                            detail={},
+                            detail={"result_ref": preserved_result_ref},
                             created_at=now_text,
                         )
                         try:
@@ -645,255 +686,6 @@ def _assignment_reconcile_stale_task_state(
     return next_task, next_nodes
 
 
-def _assignment_refresh_pause_state_from_files(
-    task_record: dict[str, Any],
-    node_records: list[dict[str, Any]],
-) -> tuple[dict[str, Any], bool]:
-    current = dict(task_record)
-    state = str(current.get("scheduler_state") or "idle").strip().lower() or "idle"
-    if state != "pause_pending":
-        return current, False
-    running_count = sum(
-        1
-        for node in list(node_records or [])
-        if str(node.get("record_state") or "active").strip().lower() != "deleted"
-        and str(node.get("status") or "").strip().lower() == "running"
-    )
-    if running_count > 0:
-        return current, False
-    current["scheduler_state"] = "paused"
-    current["updated_at"] = iso_ts(now_local())
-    return current, True
-
-
-def _assignment_recompute_task_state(
-    root: Path,
-    *,
-    task_record: dict[str, Any],
-    node_records: list[dict[str, Any]],
-    sticky_node_ids: set[str] | None = None,
-    reconcile_running: bool = True,
-    live_keys: set[tuple[str, str]] | None = None,
-) -> tuple[dict[str, Any], list[dict[str, Any]], bool]:
-    current_task = dict(task_record)
-    current_nodes = [dict(item) for item in list(node_records or [])]
-    changed = False
-    if reconcile_running:
-        current_task, current_nodes, stale_changed = _assignment_reconcile_stale_task_state_internal(
-            root,
-            task_record=current_task,
-            node_records=current_nodes,
-            live_keys=live_keys,
-        )
-        changed = changed or stale_changed
-    active_nodes = _assignment_active_node_records(current_nodes)
-    active_edges = _assignment_active_edges(current_task, active_nodes)
-    current_nodes, edge_sync_changed = _assignment_apply_edges_to_nodes(current_nodes, active_edges)
-    changed = changed or edge_sync_changed
-    sticky = {
-        str(item or "").strip()
-        for item in list(sticky_node_ids or set())
-        if str(item or "").strip()
-    }
-    upstream_map, _downstream_map = _edge_maps(active_edges)
-    status_map = {
-        str(node.get("node_id") or "").strip(): str(node.get("status") or "").strip().lower()
-        for node in _assignment_active_node_records(current_nodes)
-    }
-    now_text = iso_ts(now_local())
-    recomputed_nodes: list[dict[str, Any]] = []
-    for row in current_nodes:
-        current = dict(row)
-        if str(current.get("record_state") or "active").strip().lower() == "deleted":
-            recomputed_nodes.append(current)
-            continue
-        node_id = str(current.get("node_id") or "").strip()
-        if node_id in sticky:
-            recomputed_nodes.append(current)
-            continue
-        current_status = str(current.get("status") or "").strip().lower()
-        next_status = _derive_node_status(
-            node_id,
-            current_status=current_status,
-            node_status_map=status_map,
-            upstream_map=upstream_map,
-        )
-        if next_status != current_status:
-            current["status"] = next_status
-            current["status_text"] = _node_status_text(next_status)
-            current["updated_at"] = now_text
-            if next_status in {"pending", "ready", "blocked"}:
-                current["completed_at"] = ""
-                if current_status not in {"failed", "succeeded"}:
-                    current["success_reason"] = ""
-                    current["result_ref"] = ""
-                    current["failure_reason"] = ""
-            changed = True
-            status_map[node_id] = next_status
-        recomputed_nodes.append(current)
-    current_nodes = recomputed_nodes
-    refreshed_task, pause_changed = _assignment_refresh_pause_state_from_files(current_task, current_nodes)
-    current_task = refreshed_task
-    changed = changed or pause_changed
-    next_edges = _assignment_active_edges(current_task, _assignment_active_node_records(current_nodes))
-    if json.dumps(current_task.get("edges") or [], ensure_ascii=False, sort_keys=True) != json.dumps(
-        next_edges,
-        ensure_ascii=False,
-        sort_keys=True,
-    ):
-        current_task["edges"] = list(next_edges)
-        changed = True
-    if changed:
-        current_task["updated_at"] = now_text
-    return current_task, current_nodes, changed
-
-
-def _assignment_store_snapshot(root: Path, *, task_record: dict[str, Any], node_records: list[dict[str, Any]]) -> None:
-    ticket_id = str(task_record.get("ticket_id") or "").strip()
-    if not ticket_id:
-        raise AssignmentCenterError(400, "ticket_id required", "ticket_id_required")
-    _assignment_write_json(_assignment_graph_record_path(root, ticket_id), task_record)
-    for node_record in list(node_records or []):
-        node_id = str(node_record.get("node_id") or "").strip()
-        if not node_id:
-            continue
-        _assignment_write_json(_assignment_node_record_path(root, ticket_id, node_id), node_record)
-    _assignment_refresh_structure_guides(root, ticket_id)
-    _assignment_publish_runtime_event(
-        ticket_id=ticket_id,
-        kind="snapshot",
-        status=str(task_record.get("record_state") or "active").strip().lower(),
-        scheduler_state=str(task_record.get("scheduler_state") or "").strip().lower(),
-        event_type="snapshot_updated",
-    )
-
-
-def _assignment_scheduler_payload(
-    task_record: dict[str, Any],
-    nodes: list[dict[str, Any]],
-    *,
-    system_limit: int,
-    settings_updated_at: str,
-    system_counts: dict[str, int],
-) -> dict[str, Any]:
-    graph_running_node_count = sum(
-        1
-        for item in list(nodes or [])
-        if str(item.get("status") or "").strip().lower() == "running"
-    )
-    running_agents = {
-        str(item.get("assigned_agent_id") or "").strip()
-        for item in list(nodes or [])
-        if str(item.get("status") or "").strip().lower() == "running"
-        and str(item.get("assigned_agent_id") or "").strip()
-    }
-    graph_limit = int(task_record.get("global_concurrency_limit") or 0)
-    return {
-        "state": str(task_record.get("scheduler_state") or "idle").strip().lower() or "idle",
-        "state_text": _scheduler_state_text(task_record.get("scheduler_state") or "idle"),
-        "running_agent_count": len(running_agents),
-        "system_running_agent_count": int(system_counts.get("system_running_agent_count") or 0),
-        "graph_running_node_count": int(graph_running_node_count),
-        "system_running_node_count": int(system_counts.get("system_running_node_count") or 0),
-        "global_concurrency_limit": int(system_limit),
-        "graph_concurrency_limit": graph_limit,
-        "effective_concurrency_limit": _graph_effective_limit(
-            graph_limit=graph_limit,
-            system_limit=system_limit,
-        ),
-        "pause_note": str(task_record.get("pause_note") or "").strip(),
-        "settings_updated_at": str(settings_updated_at or ""),
-    }
-
-
-def _assignment_system_running_counts(root: Path, *, include_test_data: bool) -> dict[str, int]:
-    try:
-        metrics = get_assignment_runtime_metrics(root, include_test_data=include_test_data)
-    except Exception:
-        metrics = {}
-    return {
-        "system_running_node_count": int(
-            metrics.get("running_task_count")
-            or metrics.get("active_execution_count")
-            or 0
-        ),
-        "system_running_agent_count": int(metrics.get("running_agent_count") or 0),
-    }
-
-
-def _assignment_snapshot_from_files(
-    root: Path,
-    ticket_id: str,
-    *,
-    include_test_data: bool = True,
-    reconcile_running: bool = True,
-    sticky_node_ids: set[str] | None = None,
-    include_scheduler: bool = True,
-    include_serialized_nodes: bool = True,
-    persist_changes: bool = True,
-) -> dict[str, Any]:
-    ticket_id = _assignment_resolve_graph_ticket_id(root, ticket_id)
-    task_record = _assignment_load_task_record(root, ticket_id)
-    if not _assignment_task_visible(task_record, include_test_data=include_test_data):
-        raise AssignmentCenterError(
-            404,
-            "assignment graph not found",
-            "assignment_graph_not_found",
-            {"ticket_id": ticket_id},
-        )
-    node_records = _assignment_load_node_records(root, ticket_id, include_deleted=True)
-    task_record, node_records, changed = _assignment_recompute_task_state(
-        root,
-        task_record=task_record,
-        node_records=node_records,
-        sticky_node_ids=sticky_node_ids,
-        reconcile_running=reconcile_running,
-    )
-    if changed and persist_changes:
-        _assignment_store_snapshot(root, task_record=task_record, node_records=node_records)
-    active_nodes = _assignment_active_node_records(node_records)
-    edges = _assignment_active_edges(task_record, active_nodes)
-    node_map_by_id = _node_map(active_nodes)
-    upstream_map, downstream_map = _edge_maps(edges)
-    scheduler_payload = {}
-    if include_scheduler:
-        settings = get_assignment_concurrency_settings(root)
-        system_counts = _assignment_system_running_counts(root, include_test_data=include_test_data)
-        scheduler_payload = _assignment_scheduler_payload(
-            task_record,
-            active_nodes,
-            system_limit=int(settings.get("global_concurrency_limit") or DEFAULT_ASSIGNMENT_CONCURRENCY_LIMIT),
-            settings_updated_at=str(settings.get("updated_at") or ""),
-            system_counts=system_counts,
-        )
-    serialized_nodes: list[dict[str, Any]] = []
-    if include_serialized_nodes:
-        serialized_nodes = [
-            _serialize_node(
-                node,
-                node_map_by_id=node_map_by_id,
-                upstream_map=upstream_map,
-                downstream_map=downstream_map,
-            )
-            for node in active_nodes
-        ]
-    is_test_data = bool(task_record.get("is_test_data"))
-    for node in serialized_nodes:
-        node["is_test_data"] = is_test_data
-    return {
-        "graph_row": task_record,
-        "nodes": active_nodes,
-        "all_nodes": node_records,
-        "edges": edges,
-        "node_map_by_id": node_map_by_id,
-        "upstream_map": upstream_map,
-        "downstream_map": downstream_map,
-        "metrics_summary": _graph_metrics(active_nodes),
-        "scheduler": scheduler_payload,
-        "serialized_nodes": serialized_nodes,
-    }
-
-
 def _assignment_find_ticket_by_source_request(
     root: Path,
     *,
@@ -930,380 +722,6 @@ def _assignment_find_ticket_by_source_request(
             continue
         return ticket_id
     return ""
-
-
-def _assignment_load_runs(
-    root: Path,
-    *,
-    ticket_id: str,
-    node_id: str,
-    limit: int = 5,
-) -> list[dict[str, Any]]:
-    rows = _assignment_load_run_records(root, ticket_id=ticket_id, node_id=node_id)
-    return rows[: max(1, int(limit))]
-
-
-def _assignment_selected_node_codex_failure(
-    *,
-    ticket_id: str,
-    selected_node: dict[str, Any],
-    latest_run: dict[str, Any],
-    run_count: int,
-) -> dict[str, Any]:
-    current_run = latest_run if isinstance(latest_run, dict) else {}
-    stored = current_run.get("codex_failure") if isinstance(current_run.get("codex_failure"), dict) else {}
-    if stored:
-        return stored
-    failure_text = str(selected_node.get("failure_reason") or "").strip()
-    if not failure_text:
-        return {}
-    return build_codex_failure(
-        feature_key="assignment_node_execution",
-        attempt_id=str(current_run.get("run_id") or selected_node.get("node_id") or "").strip(),
-        attempt_count=max(1, int(run_count or 0)),
-        failure_detail_code=infer_codex_failure_detail_code(
-            failure_text,
-            fallback="assignment_execution_failed",
-        ),
-        failure_message=failure_text,
-        retry_action=build_retry_action(
-            "rerun_assignment_node",
-            payload={
-                "ticket_id": str(ticket_id or "").strip(),
-                "node_id": str(selected_node.get("node_id") or "").strip(),
-                "run_id": str(current_run.get("run_id") or "").strip(),
-            },
-        ),
-        trace_refs={
-            "prompt": str(current_run.get("prompt_ref") or "").strip(),
-            "stdout": str(current_run.get("stdout_ref") or "").strip(),
-            "stderr": str(current_run.get("stderr_ref") or "").strip(),
-            "result": str(current_run.get("result_ref") or "").strip(),
-        },
-        failed_at=str(
-            current_run.get("finished_at")
-            or current_run.get("updated_at")
-            or selected_node.get("completed_at")
-            or ""
-        ).strip(),
-    )
-
-
-def _assignment_run_summary(root: Path, row: dict[str, Any], *, include_content: bool) -> dict[str, Any]:
-    run_id = str(row.get("run_id") or "").strip()
-    ticket_id = str(row.get("ticket_id") or "").strip()
-    provider_pid = max(0, int(row.get("provider_pid") or 0))
-    refs = _assignment_run_file_paths(root, ticket_id, run_id) if run_id and ticket_id else {}
-    events_path = refs.get("events")
-    prompt_path = refs.get("prompt")
-    stdout_path = refs.get("stdout")
-    stderr_path = refs.get("stderr")
-    result_path = refs.get("result")
-    prompt_ref = str(row.get("prompt_ref") or (prompt_path.as_posix() if isinstance(prompt_path, Path) else "")).strip()
-    stdout_ref = str(row.get("stdout_ref") or (stdout_path.as_posix() if isinstance(stdout_path, Path) else "")).strip()
-    stderr_ref = str(row.get("stderr_ref") or (stderr_path.as_posix() if isinstance(stderr_path, Path) else "")).strip()
-    result_ref = str(row.get("result_ref") or (result_path.as_posix() if isinstance(result_path, Path) else "")).strip()
-    events = _tail_assignment_run_events(events_path) if isinstance(events_path, Path) else []
-    codex_failure = row.get("codex_failure") if isinstance(row.get("codex_failure"), dict) else {}
-    return {
-        "run_id": run_id,
-        "ticket_id": ticket_id,
-        "node_id": str(row.get("node_id") or "").strip(),
-        "provider": str(row.get("provider") or "").strip(),
-        "workspace_path": str(row.get("workspace_path") or "").strip(),
-        "status": _normalize_run_status(row.get("status") or "starting"),
-        "status_text": _node_status_text(
-            "running" if str(row.get("status") or "").strip().lower() == "running" else row.get("status") or ""
-        ),
-        "command_summary": str(row.get("command_summary") or "").strip(),
-        "prompt_ref": prompt_ref,
-        "stdout_ref": stdout_ref,
-        "stderr_ref": stderr_ref,
-        "result_ref": result_ref,
-        "latest_event": str(row.get("latest_event") or "").strip(),
-        "latest_event_at": str(row.get("latest_event_at") or "").strip(),
-        "exit_code": int(row.get("exit_code") or 0),
-        "started_at": str(row.get("started_at") or "").strip(),
-        "finished_at": str(row.get("finished_at") or "").strip(),
-        "created_at": str(row.get("created_at") or "").strip(),
-        "updated_at": str(row.get("updated_at") or "").strip(),
-        "provider_pid": provider_pid or None,
-        "event_count": len(events),
-        "events": events,
-        "codex_failure": codex_failure,
-        "prompt_text": (
-            _read_assignment_run_text(prompt_ref, preview_chars=_assignment_run_preview_chars(prompt_ref))
-            if include_content
-            else ""
-        ),
-        "stdout_text": (
-            _read_assignment_run_text(stdout_ref, preview_chars=_assignment_run_preview_chars(stdout_ref))
-            if include_content
-            else ""
-        ),
-        "stderr_text": (
-            _read_assignment_run_text(stderr_ref, preview_chars=_assignment_run_preview_chars(stderr_ref))
-            if include_content
-            else ""
-        ),
-        "result_text": (
-            _read_assignment_run_text(result_ref, preview_chars=_assignment_run_preview_chars(result_ref))
-            if include_content
-            else ""
-        ),
-    }
-
-
-def _assignment_normalize_cancelled_run_summary(
-    run_summary: dict[str, Any],
-    *,
-    selected_node: dict[str, Any],
-    audit_refs: list[dict[str, Any]],
-) -> dict[str, Any]:
-    current = dict(run_summary or {})
-    if str(current.get("status") or "").strip().lower() != "cancelled":
-        return current
-    latest_event = str(current.get("latest_event") or "").strip()
-    if "人工结束" not in latest_event:
-        return current
-    failure_reason = str(selected_node.get("failure_reason") or "").strip()
-    has_stale_recovery_audit = any(
-        str(item.get("action") or "").strip().lower() == "recover_stale_running"
-        for item in list(audit_refs or [])
-    )
-    stale_failure = "运行句柄缺失" in failure_reason or "workflow 已重启" in failure_reason
-    if not has_stale_recovery_audit and not stale_failure:
-        return current
-    current["latest_event"] = "检测到运行句柄缺失或 workflow 已重启，已自动结束当前批次，后台结果不再回写节点状态。"
-    return current
-
-
-def _assignment_management_actions(
-    node: dict[str, Any],
-    *,
-    blocking_reasons: list[dict[str, Any]],
-) -> list[str]:
-    if not isinstance(node, dict) or not node:
-        return []
-    status = str(node.get("status") or "").strip().lower()
-    actions: list[str] = []
-    if status == "running":
-        actions.extend(["mark-success", "mark-failed"])
-    else:
-        actions.append("override-status")
-        if status == "failed":
-            actions.append("rerun")
-        actions.append("delete")
-    actions.append("deliver-artifact")
-    if list(node.get("artifact_paths") or []):
-        actions.append("view-artifact")
-    if status == "blocked" and not blocking_reasons and "override-status" not in actions:
-        actions.append("override-status")
-    seen: set[str] = set()
-    ordered: list[str] = []
-    for action in actions:
-        key = str(action or "").strip().lower()
-        if not key or key in seen:
-            continue
-        seen.add(key)
-        ordered.append(key)
-    return ordered
-
-
-def _assignment_status_detail_payload(
-    root: Path,
-    *,
-    ticket_id: str,
-    node_id: str = "",
-    include_test_data: bool = True,
-) -> dict[str, Any]:
-    snapshot = _assignment_snapshot_from_files(
-        root,
-        ticket_id,
-        include_test_data=include_test_data,
-        reconcile_running=True,
-        include_scheduler=False,
-        include_serialized_nodes=False,
-    )
-    ticket_id = str(snapshot["graph_row"].get("ticket_id") or ticket_id).strip()
-    selected_node = snapshot["node_map_by_id"].get(node_id) or _assignment_default_selected_node(snapshot["nodes"])
-    selected_serialized = (
-        _serialize_node(
-            selected_node,
-            node_map_by_id=snapshot["node_map_by_id"],
-            upstream_map=snapshot["upstream_map"],
-            downstream_map=snapshot["downstream_map"],
-        )
-        if selected_node
-        else {}
-    )
-    blocking_reasons = list(selected_serialized.get("blocking_reasons") or [])
-    management_actions = _assignment_management_actions(selected_serialized, blocking_reasons=blocking_reasons)
-    if isinstance(selected_serialized, dict) and selected_serialized:
-        selected_serialized["management_actions"] = list(management_actions)
-    run_rows = (
-        _assignment_load_runs(
-            root,
-            ticket_id=ticket_id,
-            node_id=str(selected_serialized.get("node_id") or "").strip(),
-            limit=5,
-        )
-        if selected_serialized
-        else []
-    )
-    run_summaries = [
-        _assignment_run_summary(root, row, include_content=index == 0)
-        for index, row in enumerate(run_rows)
-    ]
-    audit_refs = []
-    for row in _assignment_load_audit_records(
-        root,
-        ticket_id=ticket_id,
-        node_id=str(selected_serialized.get("node_id") or "").strip(),
-        limit=12,
-    ):
-        audit_refs.append(
-            {
-                "audit_id": str(row.get("audit_id") or "").strip(),
-                "action": str(row.get("action") or "").strip(),
-                "operator": str(row.get("operator") or "").strip(),
-                "reason": str(row.get("reason") or "").strip(),
-                "target_status": str(row.get("target_status") or "").strip(),
-                "ref": str(row.get("ref") or "").strip(),
-                "created_at": str(row.get("created_at") or "").strip(),
-                "detail": dict(row.get("detail") or {}),
-            }
-        )
-    run_summaries = [
-        _assignment_normalize_cancelled_run_summary(
-            run_summary,
-            selected_node=selected_serialized,
-            audit_refs=audit_refs,
-        )
-        for run_summary in run_summaries
-    ]
-    node_codex_failure = _assignment_selected_node_codex_failure(
-        ticket_id=ticket_id,
-        selected_node=selected_serialized,
-        latest_run=run_summaries[0] if run_summaries else {},
-        run_count=len(run_summaries),
-    )
-    if isinstance(selected_serialized, dict) and selected_serialized:
-        selected_serialized["codex_failure"] = node_codex_failure
-    return {
-        "ticket_id": ticket_id,
-        "graph_overview": _graph_overview_payload(
-            snapshot["graph_row"],
-            metrics_summary=snapshot["metrics_summary"],
-            scheduler_state_payload=snapshot["scheduler"],
-        ),
-        "selected_node": selected_serialized,
-        "blocking_reasons": blocking_reasons,
-        "available_actions": management_actions,
-        "audit_refs": audit_refs,
-        "codex_failure": node_codex_failure,
-        "execution_chain": {
-            "poll_mode": assignment_execution_refresh_mode(),
-            "poll_interval_ms": DEFAULT_ASSIGNMENT_EXECUTION_POLL_INTERVAL_MS,
-            "latest_run": run_summaries[0] if run_summaries else {},
-            "recent_runs": run_summaries,
-        },
-    }
-
-
-def _assignment_node_status_text(row: dict[str, Any]) -> str:
-    return str(row.get("status") or "").strip().lower()
-
-
-def _assignment_active_node_group(row: dict[str, Any]) -> int:
-    status = _assignment_node_status_text(row)
-    if status == "running":
-        return 0
-    if status == "ready":
-        return 1
-    if status == "pending":
-        return 2
-    if status == "blocked":
-        return 3
-    return 4
-
-
-def _assignment_sort_active_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    items = [dict(row) for row in list(rows or [])]
-    items.sort(
-        key=lambda row: (
-            str(row.get("updated_at") or ""),
-            str(row.get("created_at") or ""),
-            str(row.get("node_id") or ""),
-        ),
-        reverse=True,
-    )
-    items.sort(
-        key=lambda row: (
-            _assignment_active_node_group(row),
-            int(row.get("priority") or 0),
-        )
-    )
-    return items
-
-
-def _assignment_default_selected_node(rows: list[dict[str, Any]]) -> dict[str, Any]:
-    best_row: dict[str, Any] = {}
-    best_group: int | None = None
-    best_recency: tuple[str, str, str, str] = ("", "", "", "")
-    for row in list(rows or []):
-        current = dict(row)
-        status = _assignment_node_status_text(current)
-        if status == "running":
-            group = 0
-        elif status == "ready":
-            group = 1
-        elif status == "pending":
-            group = 2
-        elif status == "blocked":
-            group = 3
-        elif status in {"succeeded", "failed"}:
-            group = 4
-        else:
-            group = 5
-        recency = (
-            str(current.get("updated_at") or ""),
-            str(current.get("completed_at") or ""),
-            str(current.get("created_at") or ""),
-            str(current.get("node_id") or ""),
-        )
-        if best_group is None or group < best_group or (group == best_group and recency > best_recency):
-            best_row = current
-            best_group = group
-            best_recency = recency
-    return best_row
-
-
-def _assignment_sort_completed_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    items = [dict(row) for row in list(rows or [])]
-    items.sort(
-        key=lambda row: (
-            str(row.get("completed_at") or ""),
-            str(row.get("created_at") or ""),
-            str(row.get("node_id") or ""),
-        ),
-        reverse=True,
-    )
-    return items
-
-
-def _assignment_build_node_catalog(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    return [
-        {
-            "node_id": str(row.get("node_id") or "").strip(),
-            "node_name": str(row.get("node_name") or "").strip(),
-            "status": _assignment_node_status_text(row),
-            "priority": int(row.get("priority") or 0),
-            "priority_label": assignment_priority_label(row.get("priority")),
-        }
-        for row in list(rows or [])
-        if str(row.get("node_id") or "").strip()
-    ]
 
 
 def list_assignments(

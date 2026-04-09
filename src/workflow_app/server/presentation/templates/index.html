@@ -552,12 +552,12 @@
             <div class='assignment-view-tabs' role='tablist' aria-label='任务中心主视图'>
               <button
                 id='assignmentWorkboardTabBtn'
-                class='assignment-view-tab'
+                class='assignment-view-tab active'
                 type='button'
                 role='tab'
                 data-assignment-primary-view='workboard'
                 aria-controls='assignmentWorkboardSection'
-                aria-selected='false'
+                aria-selected='true'
               >
                 任务看板
               </button>
@@ -568,7 +568,7 @@
                 role='tab'
                 data-assignment-primary-view='graph'
                 aria-controls='assignmentGraphSection'
-                aria-selected='true'
+                aria-selected='false'
               >
                 任务图
               </button>
@@ -579,7 +579,6 @@
               class='assignment-tab-panel'
               role='tabpanel'
               aria-labelledby='assignmentWorkboardTabBtn'
-              hidden
             >
               <div id='assignmentWorkboard' class='assignment-workboard-panel'>
                 <div class='hint'>工作状态看板加载中...</div>
@@ -591,6 +590,7 @@
               class='assignment-graph-panel assignment-tab-panel'
               role='tabpanel'
               aria-labelledby='assignmentGraphTabBtn'
+              hidden
             >
               <div class='assignment-panel-head'>
                 <div>

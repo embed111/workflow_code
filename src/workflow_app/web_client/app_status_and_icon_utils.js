@@ -66,6 +66,8 @@
     allowManualPolicyInput: true,
     policyClosureStats: {},
     dashboardMetrics: {},
+    dashboardLastRefreshAtMs: 0,
+    dashboardLastFetchedAt: '',
     dashboardError: '',
     sessionPolicyGateState: 'idle_unselected',
     sessionPolicyGateReason: '请先选择角色',
@@ -186,6 +188,7 @@
     assignmentSelectedTicketId: '',
     assignmentPrimaryView: readSavedAssignmentPrimaryView(),
     assignmentGraphData: null,
+    assignmentGraphLastRefreshAtMs: 0,
     assignmentSelectedNodeId: '',
     assignmentScheduler: null,
     artifactRootPath: '',
@@ -301,14 +304,14 @@
   }
 
   function normalizeAssignmentPrimaryView(value) {
-    return safe(value).trim().toLowerCase() === 'workboard' ? 'workboard' : 'graph';
+    return safe(value).trim().toLowerCase() === 'graph' ? 'graph' : 'workboard';
   }
 
   function readSavedAssignmentPrimaryView() {
     try {
       return normalizeAssignmentPrimaryView(localStorage.getItem(assignmentPrimaryViewCacheKey));
     } catch (_) {
-      return 'graph';
+      return 'workboard';
     }
   }
 
