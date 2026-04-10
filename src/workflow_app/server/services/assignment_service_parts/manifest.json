@@ -3,6 +3,8 @@
     "assignment_execution_timeout_policy.py",
     "running_state_reconciliation.py",
     "workspace_state_and_metrics.py",
+    "assignment_workspace_agent_memory.py",
+    "assignment_graph_runtime_metrics.py",
     "graph_model_and_payloads.py",
     "execution_store_and_test_graph.py",
     "graph_queries_and_preparation.py",
