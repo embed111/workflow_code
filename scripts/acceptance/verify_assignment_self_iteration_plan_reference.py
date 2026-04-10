@@ -49,6 +49,9 @@ def main() -> int:
     assert "workflow_devmate / workflow_testmate / workflow_qualitymate / workflow_bugmate" in execution_checklist, payload
     assert "/api/runtime-upgrade/status" in execution_checklist, payload
     assert "/api/runtime-upgrade/apply" in execution_checklist, payload
+    assert "不要使用 bash heredoc" in execution_checklist, payload
+    assert "不要把 `scripts/*.ps1` 这类通配路径直接交给 `rg`" in execution_checklist, payload
+    assert "不要手工猜测 run_id" in execution_checklist, payload
     assert "在 `next` 明确写出下一次主线/保底触发时间" in execution_checklist, payload
     assert "下一次唤醒已经排上" in done_definition, payload
     assert "周期性泳道、生命周期阶段" in done_definition, payload
@@ -64,6 +67,9 @@ def main() -> int:
     assert "workflow_devmate / workflow_testmate / workflow_qualitymate / workflow_bugmate" in pm_wake_execution_checklist, pm_wake_payload
     assert "/api/runtime-upgrade/status" in pm_wake_execution_checklist, pm_wake_payload
     assert "/api/runtime-upgrade/apply" in pm_wake_execution_checklist, pm_wake_payload
+    assert "不要使用 bash heredoc" in pm_wake_execution_checklist, pm_wake_payload
+    assert "不要把 `scripts/*.ps1` 这类通配路径直接交给 `rg`" in pm_wake_execution_checklist, pm_wake_payload
+    assert "不要手工猜测 run_id" in pm_wake_execution_checklist, pm_wake_payload
     assert "active 版本、泳道、生命周期阶段" in pm_wake_done_definition, pm_wake_payload
     assert "root_sync_state / ahead_count / dirty_tracked_count / untracked_count / push_block_reason / next_push_batch" in pm_wake_done_definition, pm_wake_payload
     assert "异常治理现场" in execution_checklist, payload
@@ -103,6 +109,9 @@ def main() -> int:
     assert "异常治理现场" in workflow_prompt, workflow_prompt
     assert "../workflow_code" in workflow_prompt, workflow_prompt
     assert "workspace_path 限制" in workflow_prompt, workflow_prompt
+    assert "不要使用 bash heredoc" in workflow_prompt, workflow_prompt
+    assert "不要把 `scripts/*.ps1` 这类通配路径直接交给 `rg`" in workflow_prompt, workflow_prompt
+    assert "不要手工猜测 run_id" in workflow_prompt, workflow_prompt
     assert "异常治理现场" not in testmate_prompt, testmate_prompt
 
     print(
