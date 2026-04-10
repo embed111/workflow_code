@@ -120,6 +120,80 @@ def _list_workspace_local_skills(workspace_path_raw: Any) -> list[str]:
     return items
 
 
+def _assignment_running_agent_ids(cfg: AppConfig, *, include_test_data: bool) -> set[str]:
+    root_value = getattr(cfg, "root", None)
+    if root_value is None:
+        return set()
+    try:
+        runtime_root = Path(root_value).resolve(strict=False)
+    except Exception:
+        try:
+            runtime_root = Path(str(root_value or "")).resolve(strict=False)
+        except Exception:
+            return set()
+    assignment_service = None
+    try:
+        from workflow_app.server.services import assignment_service as assignment_service  # type: ignore[no-redef]
+    except Exception:
+        assignment_service = None
+    state_fn = globals().get("_assignment_system_running_state")
+    if not callable(state_fn) and assignment_service is not None:
+        state_fn = getattr(assignment_service, "_assignment_system_running_state", None)
+    if callable(state_fn):
+        try:
+            state = state_fn(runtime_root, include_test_data=include_test_data)
+        except Exception:
+            state = {}
+        agents = {
+            str(agent_id or "").strip()
+            for agent_id in list((state or {}).get("running_agents") or [])
+            if str(agent_id or "").strip()
+        }
+        if agents or isinstance(state, dict):
+            return agents
+    live_keys_fn = globals().get("_assignment_live_run_keys_from_files")
+    node_path_fn = globals().get("_assignment_node_record_path")
+    read_json_fn = globals().get("_assignment_read_json")
+    if assignment_service is not None:
+        if not callable(live_keys_fn):
+            live_keys_fn = getattr(assignment_service, "_assignment_live_run_keys_from_files", None)
+        if not callable(node_path_fn):
+            node_path_fn = getattr(assignment_service, "_assignment_node_record_path", None)
+        if not callable(read_json_fn):
+            read_json_fn = getattr(assignment_service, "_assignment_read_json", None)
+    if not (callable(live_keys_fn) and callable(node_path_fn) and callable(read_json_fn)):
+        return set()
+    try:
+        live_keys = live_keys_fn(runtime_root)
+    except Exception:
+        return set()
+    agents: set[str] = set()
+    for ticket_id, node_id in list(live_keys or []):
+        try:
+            node = read_json_fn(node_path_fn(runtime_root, str(ticket_id or "").strip(), str(node_id or "").strip())) or {}
+        except Exception:
+            node = {}
+        agent_id = str(node.get("assigned_agent_id") or "").strip()
+        if agent_id:
+            agents.add(agent_id)
+    return agents
+
+
+def _effective_agent_runtime_status(
+    registry_runtime_status: Any,
+    *,
+    assignment_running: bool,
+) -> tuple[str, str]:
+    raw_status = str(registry_runtime_status or "idle").strip().lower() or "idle"
+    if raw_status == "creating":
+        return "creating", "agent_registry"
+    if assignment_running:
+        return "running", "assignment_live_execution"
+    if raw_status and raw_status not in {"idle", "running"}:
+        return raw_status, "agent_registry"
+    return "idle", "assignment_live_execution"
+
+
 def sync_training_agent_registry(cfg: AppConfig) -> list[dict[str, Any]]:
     root = cfg.agent_search_root
     if root is None:
@@ -160,6 +234,7 @@ def sync_training_agent_registry(cfg: AppConfig) -> list[dict[str, Any]]:
         return []
 
     available = list_available_agents(cfg, analyze_policy=False)
+    assignment_running_agents = _assignment_running_agent_ids(cfg, include_test_data=True)
     now_text = iso_ts(now_local())
     _REGISTRY_SYNC_LOCK.acquire()
     try:
@@ -281,9 +356,13 @@ def sync_training_agent_registry(cfg: AppConfig) -> list[dict[str, Any]]:
             active_role_profile_ref = (
                 str(existed["active_role_profile_ref"] or "").strip() if existed is not None else ""
             )
-            runtime_status = (
+            registry_runtime_status = (
                 str(existed["runtime_status"] or "").strip().lower() if existed is not None else ""
             ) or "idle"
+            runtime_status, _runtime_status_source = _effective_agent_runtime_status(
+                registry_runtime_status,
+                assignment_running=agent_id in assignment_running_agents,
+            )
 
             existing_release_meta: dict[tuple[str, str, str], dict[str, str]] = {}
             existing_release_meta_loose: dict[tuple[str, str], dict[str, str]] = {}
@@ -544,6 +623,7 @@ def list_training_agents_overview(
     items: list[dict[str, Any]] = []
     latest_release_at = ""
     git_available_count = 0
+    assignment_running_agents = _assignment_running_agent_ids(cfg, include_test_data=include_test_data)
     for row in rows:
         tags_raw = str(row["status_tags_json"] or "[]")
         try:
@@ -559,8 +639,15 @@ def list_training_agents_overview(
                 skills_value = []
         except Exception:
             skills_value = []
+        agent_id = str(row["agent_id"] or "")
+        registry_runtime_status = str(row["runtime_status"] or "idle").strip().lower() or "idle"
+        assignment_runtime_status = "running" if agent_id in assignment_running_agents else "idle"
+        runtime_status, runtime_status_source = _effective_agent_runtime_status(
+            registry_runtime_status,
+            assignment_running=assignment_runtime_status == "running",
+        )
         item = {
-            "agent_id": str(row["agent_id"] or ""),
+            "agent_id": agent_id,
             "agent_name": str(row["agent_name"] or ""),
             "vector_icon": str(row["vector_icon"] or ""),
             "workspace_path": str(row["workspace_path"] or ""),
@@ -570,7 +657,10 @@ def list_training_agents_overview(
             "lifecycle_state": normalize_lifecycle_state(row["lifecycle_state"]),
             "training_gate_state": normalize_training_gate_state(row["training_gate_state"]),
             "parent_agent_id": str(row["parent_agent_id"] or ""),
-            "runtime_status": str(row["runtime_status"] or "idle").strip().lower() or "idle",
+            "runtime_status": runtime_status,
+            "runtime_status_source": runtime_status_source,
+            "registry_runtime_status": registry_runtime_status,
+            "assignment_runtime_status": assignment_runtime_status,
             "core_capabilities": str(row["core_capabilities"] or ""),
             "capability_summary": str(row["capability_summary"] or ""),
             "knowledge_scope": str(row["knowledge_scope"] or ""),

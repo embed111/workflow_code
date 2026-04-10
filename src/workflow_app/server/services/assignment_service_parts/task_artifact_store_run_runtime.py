@@ -259,11 +259,6 @@ def _assignment_system_running_state(root: Path, *, include_test_data: bool) -> 
         for run_id in _active_assignment_run_ids()
         if str(run_id or "").strip()
     }
-    if not active_run_ids:
-        return {
-            "running_agents": set(),
-            "running_node_count": 0,
-        }
     now_dt = now_local()
     running_agents: set[str] = set()
     running_node_keys: set[tuple[str, str]] = set()
