@@ -123,6 +123,7 @@ def main() -> int:
     )
     node_id = str((created.get("node") or {}).get("node_id") or "").strip()
     assert ticket_id and node_id
+    source_report_text = source_report.read_text(encoding="utf-8")
 
     run_id = "arun-finalize-idempotency"
     files = ws._assignment_run_file_paths(root, ticket_id, run_id)
@@ -184,12 +185,29 @@ def main() -> int:
     first_run = ws._assignment_load_run_record(root, ticket_id=ticket_id, run_id=run_id)
     first_audits = ws._assignment_load_audit_records(root, ticket_id=ticket_id, node_id=node_id, limit=32)
     first_actions = [str(item.get("action") or "").strip().lower() for item in list(first_audits or [])]
+    first_deliver_audit = next(
+        (
+            item
+            for item in list(first_audits or [])
+            if str(item.get("action") or "").strip().lower() == "deliver_artifact"
+        ),
+        {},
+    )
     now_dt = ws.now_local()
     day_key = now_dt.strftime("%Y-%m-%d")
     month_key = now_dt.strftime("%Y-%m")
     daily_path = agent_workspace / ".codex" / "memory" / month_key / f"{day_key}.md"
     first_daily_text = daily_path.read_text(encoding="utf-8")
     first_artifact_paths = list(first_node.get("artifact_paths") or [])
+    first_artifact_text = Path(first_artifact_paths[0]).read_text(encoding="utf-8")
+    delivery_info_path = ws._node_delivery_info_path(root, first_node)
+    delivery_info = json.loads(delivery_info_path.read_text(encoding="utf-8"))
+    delivery_inbox_paths = [str(item).strip() for item in list(delivery_info.get("delivery_inbox_paths") or []) if str(item).strip()]
+    assert delivery_info_path.exists(), delivery_info_path
+    assert first_deliver_audit, first_audits
+    cleanup_detail = dict(first_deliver_audit.get("detail") or {}).get("source_workspace_cleanup") or {}
+    cleaned_paths = [str(item).strip() for item in list(cleanup_detail.get("cleaned_paths") or []) if str(item).strip()]
+    cleanup_errors = [str(item).strip() for item in list(cleanup_detail.get("cleanup_errors") or []) if str(item).strip()]
 
     assert str(first_run.get("status") or "").strip().lower() == "succeeded", first_run
     assert str(first_node.get("status") or "").strip().lower() == "succeeded", first_node
@@ -198,6 +216,16 @@ def main() -> int:
     assert first_actions.count("execution_succeeded") == 1, first_actions
     assert first_actions.count("append_workspace_memory") == 1, first_actions
     assert first_daily_text.count("系统替我补记了这轮日记") == 1, first_daily_text
+    assert first_artifact_text == source_report_text, {
+        "artifact": first_artifact_text,
+        "source": source_report_text,
+    }
+    assert first_artifact_paths[0] in first_daily_text, first_daily_text
+    assert delivery_info.get("canonical_artifact_paths") == first_artifact_paths, delivery_info
+    assert len(delivery_inbox_paths) == 1, delivery_info
+    assert Path(delivery_inbox_paths[0]).read_text(encoding="utf-8") == source_report_text, delivery_inbox_paths
+    assert source_report.as_posix() in cleaned_paths, cleaned_paths
+    assert not cleanup_errors, cleanup_errors
     assert source_report.exists() is False, source_report
 
     ws._finalize_assignment_execution_run(
@@ -218,6 +246,7 @@ def main() -> int:
     second_actions = [str(item.get("action") or "").strip().lower() for item in list(second_audits or [])]
     second_daily_text = daily_path.read_text(encoding="utf-8")
     second_artifact_paths = list(second_node.get("artifact_paths") or [])
+    second_delivery_info = json.loads(delivery_info_path.read_text(encoding="utf-8"))
 
     assert str(second_run.get("status") or "").strip().lower() == "succeeded", second_run
     assert str(second_node.get("status") or "").strip().lower() == "succeeded", second_node
@@ -231,6 +260,10 @@ def main() -> int:
     assert second_daily_text == first_daily_text, {
         "first": first_daily_text,
         "second": second_daily_text,
+    }
+    assert second_delivery_info == delivery_info, {
+        "first": delivery_info,
+        "second": second_delivery_info,
     }
 
     print(
@@ -246,6 +279,9 @@ def main() -> int:
                     "execution_succeeded": second_actions.count("execution_succeeded"),
                     "append_workspace_memory": second_actions.count("append_workspace_memory"),
                 },
+                "delivery_info_path": delivery_info_path.as_posix(),
+                "delivery_inbox_paths": delivery_inbox_paths,
+                "cleaned_paths": cleaned_paths,
                 "daily_path": daily_path.as_posix(),
             },
             ensure_ascii=False,
