@@ -66,6 +66,29 @@ function Get-RunningProcessCommandLine {
     }
 }
 
+function Get-ListeningProcess {
+    param(
+        [Parameter(Mandatory = $true)]
+        [int]$Port
+    )
+
+    try {
+        $listener = Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction Stop | Select-Object -First 1
+    }
+    catch {
+        return $null
+    }
+    if (-not $listener) {
+        return $null
+    }
+    try {
+        return Get-Process -Id ([int]$listener.OwningProcess) -ErrorAction Stop
+    }
+    catch {
+        return $null
+    }
+}
+
 function Test-RunningProcessMatchesDescriptor {
     param(
         [Parameter(Mandatory = $true)]
@@ -244,14 +267,26 @@ $descriptor = Resolve-WorkflowEnvironmentDescriptor `
     -Port $Port
 Assert-WorkflowArtifactIsolation -Descriptor $descriptor
 
+$listeningProcess = Get-ListeningProcess -Port ([int]$descriptor.port)
 $runningProcess = Test-RunningProcess -PidFile ([string]$descriptor.pid_file)
 if ($runningProcess) {
     $runningState = Test-RunningProcessMatchesDescriptor -Descriptor $descriptor -Process $runningProcess
     if (-not [bool]$runningState.match) {
+        if ($listeningProcess) {
+            throw "环境 $Environment 当前端口 $($descriptor.port) 仍有监听进程（PID=$($listeningProcess.Id)），同时实例状态不一致：$($runningState.reason)。请先停止后再部署。"
+        }
         Write-Host "[workflow-deploy] clear stale $Environment instance state: $($runningState.reason) (PID=$($runningProcess.Id))"
         Clear-StaleEnvironmentInstanceState -Descriptor $descriptor
         $runningProcess = $null
     }
+    elseif (-not $listeningProcess) {
+        Write-Host "[workflow-deploy] clear stale $Environment instance state: expected_port_not_listening (PID=$($runningProcess.Id))"
+        Clear-StaleEnvironmentInstanceState -Descriptor $descriptor
+        $runningProcess = $null
+    }
+}
+if (-not $runningProcess -and $listeningProcess) {
+    throw "环境 $Environment 当前端口 $($descriptor.port) 已被占用（PID=$($listeningProcess.Id)），请先停止后再部署。"
 }
 if ($runningProcess) {
     throw "环境 $Environment 当前正在运行（PID=$($runningProcess.Id)），请先停止后再部署。"
