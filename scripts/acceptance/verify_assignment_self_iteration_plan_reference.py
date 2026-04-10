@@ -66,6 +66,44 @@ def main() -> int:
     assert "/api/runtime-upgrade/apply" in pm_wake_execution_checklist, pm_wake_payload
     assert "active 版本、泳道、生命周期阶段" in pm_wake_done_definition, pm_wake_payload
     assert "root_sync_state / ahead_count / dirty_tracked_count / untracked_count / push_block_reason / next_push_batch" in pm_wake_done_definition, pm_wake_payload
+    assert "异常治理现场" in execution_checklist, payload
+    assert "non-destructive `git fetch / pull --ff-only`" in execution_checklist, payload
+    assert "异常治理现场" in pm_wake_execution_checklist, pm_wake_payload
+
+    workflow_prompt = assignment_service._build_assignment_execution_prompt(
+        graph_row={"graph_name": "任务中心全局主图"},
+        node={
+            "ticket_id": "asg-test",
+            "node_id": "node-test-mainline",
+            "assigned_agent_id": "workflow",
+            "assigned_agent_name": "workflow",
+            "node_name": "[持续迭代] workflow / 2026-04-10 22:22:00",
+            "node_goal": "verify workflow pm governance exception",
+            "expected_artifact": "continuous-improvement-report.md",
+            "delivery_mode": "none",
+        },
+        upstream_nodes=[],
+        workspace_path=workspace_root,
+    )
+    testmate_prompt = assignment_service._build_assignment_execution_prompt(
+        graph_row={"graph_name": "任务中心全局主图"},
+        node={
+            "ticket_id": "asg-test",
+            "node_id": "node-test-helper",
+            "assigned_agent_id": "workflow_testmate",
+            "assigned_agent_name": "workflow_testmate",
+            "node_name": "生产 smoke 基线",
+            "node_goal": "verify helper stays in workspace scope",
+            "expected_artifact": "smoke-report",
+            "delivery_mode": "none",
+        },
+        upstream_nodes=[],
+        workspace_path=workspace_root,
+    )
+    assert "异常治理现场" in workflow_prompt, workflow_prompt
+    assert "../workflow_code" in workflow_prompt, workflow_prompt
+    assert "workspace_path 限制" in workflow_prompt, workflow_prompt
+    assert "异常治理现场" not in testmate_prompt, testmate_prompt
 
     print(
         json.dumps(
@@ -75,6 +113,7 @@ def main() -> int:
                 "pm_wake_schedule_name": pm_wake_payload.get("schedule_name"),
                 "priority": payload.get("priority"),
                 "launch_summary": launch_summary,
+                "workflow_prompt_preview": workflow_prompt.splitlines()[:8],
             },
             ensure_ascii=False,
             indent=2,

@@ -1,6 +1,6 @@
-
 from datetime import datetime, timedelta
 from pathlib import Path
+from typing import Any
 
 
 ASSIGNMENT_GLOBAL_GRAPH_NAME = "任务中心全局主图"
@@ -82,6 +82,14 @@ def _assignment_is_workflow_patrol_node(node: dict[str, Any]) -> bool:
         expected_artifact == _ASSIGNMENT_WORKFLOW_PATROL_ARTIFACT
         or node_name.startswith("pm持续唤醒 - workflow 主线巡检")
     )
+
+
+def _assignment_is_workflow_pm_governance_node(node: dict[str, Any]) -> bool:
+    row = dict(node or {})
+    agent_id = str(row.get("assigned_agent_id") or "").strip().lower()
+    if agent_id != "workflow":
+        return False
+    return _assignment_is_workflow_mainline_node(row) or _assignment_is_workflow_patrol_node(row)
 
 
 def _assignment_parse_iso_datetime(raw: Any) -> datetime | None:
@@ -1169,6 +1177,7 @@ def _build_assignment_execution_prompt(
         or "-"
     )
     uses_codex_memory = _assignment_workspace_uses_codex_memory(workspace_path)
+    allow_pm_governance_exception = _assignment_is_workflow_pm_governance_node(node)
     lines = [
         f"你现在以 `{assigned_agent_name}` 本人的身份执行这轮任务，不是通用 worker 占位壳。",
         "当前任务已经由调度器真实派发，必须在目标工作区内完成任务，并先遵守该工作区的 AGENTS.md / SOUL / USER / MEMORY 读链。",
@@ -1193,7 +1202,7 @@ def _build_assignment_execution_prompt(
         *upstream_lines,
         "",
         "执行要求：",
-        "1. 若需要修改或新增文件，只允许写入当前 workspace_path 内的内容。",
+        "1. 若需要修改或新增文件，默认只允许写入当前 workspace_path 内的内容。",
         "2. 完成后必须只输出一个 JSON 对象，不要输出 markdown fence、不要追加解释。",
         "3. 输出 JSON 结构固定为：",
         "{",
@@ -1206,8 +1215,14 @@ def _build_assignment_execution_prompt(
         "4. 如果最终产物是 workspace_path 内的真实文件，artifact_label 优先填写最终文件名，artifact_files 必须返回相对 workspace_path 的文件路径列表。",
         "5. artifact_markdown 必须给出可直接交付的完整正文；若同时写了工作区文件，artifact_markdown 应与最终文件内容保持一致。",
         "6. 系统在收集 artifact_files 后会自动清理这些源文件；若某个文件必须继续保留在 workspace_path，就不要把它放进 artifact_files。",
-        "7. 系统会在收集结果后把最终交付件投影到 delivery_inbox_path，并在同目录写入 DELIVERY_INFO.json 标记交付者与接收者；你自己仍然只能写 workspace_path。",
+        "7. 系统会在收集结果后把最终交付件投影到 delivery_inbox_path，并在同目录写入 DELIVERY_INFO.json 标记交付者与接收者；除非命中上面的 7x24 异常治理例外窗口，否则你自己仍然只能写 workspace_path。",
     ]
+    if allow_pm_governance_exception:
+        lines[lines.index("2. 完成后必须只输出一个 JSON 对象，不要输出 markdown fence、不要追加解释。"):lines.index("2. 完成后必须只输出一个 JSON 对象，不要输出 markdown fence、不要追加解释。")] = [
+            "1.1 但若这轮命中会破坏 7x24 连续性的异常治理现场，你现在作为 `workflow(pm)` 允许直接处理，不要只把它记成“受 workspace_path 限制”。",
+            "1.2 受支持的例外动作仅限：对 `../workflow_code` 执行 non-destructive `git fetch / pull --ff-only` 快进；调用受支持的 developer workspace bootstrap/refresh；通过受支持 API/脚本处理 helper `runtime_status=creating`、schedule/dispatch/supervisor/runtime-upgrade 这类恢复动作；以及补齐当前工作区下的治理与留痕。",
+            "1.3 仍然禁止直接手改 `../workflow_code` 工作树内容，禁止把 `.running/prod` / `.running/test` 当开发面，禁止 destructive git 或绕过验证的手工热修。",
+        ]
     if uses_codex_memory:
         lines.extend(
             [
