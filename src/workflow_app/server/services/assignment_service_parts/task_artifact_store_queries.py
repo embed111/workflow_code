@@ -611,9 +611,20 @@ def _assignment_reconcile_stale_task_state_internal(
                         node_id=node_id,
                         now_text=now_text,
                     )
+                    stale_failure_context = (
+                        {}
+                        if runtime_upgrade_recovery
+                        else _assignment_stale_recovery_failure_context(
+                            root,
+                            ticket_id=ticket_id,
+                            node_id=node_id,
+                            node_record=current,
+                        )
+                    )
                     failure_base_text = str(
-                        current.get("failure_reason")
-                        or runtime_upgrade_recovery.get("failure_reason")
+                        runtime_upgrade_recovery.get("failure_reason")
+                        or stale_failure_context.get("failure_reason")
+                        or current.get("failure_reason")
                         or "运行句柄缺失或 workflow 已重启，请手动重跑。"
                     ).strip()
                     preserved_result_ref = str(current.get("result_ref") or "").strip()
@@ -668,6 +679,7 @@ def _assignment_reconcile_stale_task_state_internal(
                         run["status"] = "cancelled"
                         run["latest_event"] = str(
                             runtime_upgrade_recovery.get("run_latest_event")
+                            or stale_failure_context.get("run_latest_event")
                             or "检测到运行句柄缺失，已自动结束当前批次。"
                         ).strip()
                         run["latest_event_at"] = now_text
@@ -728,6 +740,9 @@ def _assignment_reconcile_stale_task_state_internal(
                         runtime_upgrade_audit_detail = dict(runtime_upgrade_recovery.get("audit_detail") or {})
                         if runtime_upgrade_audit_detail:
                             audit_detail["runtime_upgrade"] = runtime_upgrade_audit_detail
+                        preserved_failure_context = dict(stale_failure_context.get("audit_detail") or {})
+                        if preserved_failure_context:
+                            audit_detail["preserved_failure_context"] = preserved_failure_context
                         _assignment_write_audit_entry(
                             root,
                             ticket_id=ticket_id,

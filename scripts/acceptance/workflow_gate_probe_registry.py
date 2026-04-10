@@ -130,6 +130,11 @@ SCRIPT_PROBE_DEFINITIONS: tuple[ScriptProbeDefinition, ...] = (
         failure_message="assignment stale run recovery probe failed",
     ),
     ScriptProbeDefinition(
+        key="assignment_stale_failure_context_preserved",
+        relative_path="scripts/acceptance/verify_assignment_stale_failure_context_preserved.py",
+        failure_message="assignment stale failure context preserved probe failed",
+    ),
+    ScriptProbeDefinition(
         key="assignment_stale_structured_result_preserved",
         relative_path="scripts/acceptance/verify_assignment_stale_structured_result_preserved.py",
         failure_message="assignment stale structured result preserved probe failed",
