@@ -12,7 +12,7 @@ def main() -> int:
     if src_root.as_posix() not in sys.path:
         sys.path.insert(0, src_root.as_posix())
 
-    from workflow_app.server.services import assignment_service
+    from workflow_app.server.services import assignment_service, schedule_service
 
     payload = assignment_service._assignment_self_iteration_schedule_payload(
         agent_id="workflow",
@@ -76,6 +76,19 @@ def main() -> int:
     assert "non-destructive `git fetch / pull --ff-only`" in execution_checklist, payload
     assert "异常治理现场" in pm_wake_execution_checklist, pm_wake_payload
 
+    schedule_goal = schedule_service._schedule_assignment_goal(
+        payload,
+        planned_trigger_at="2026-04-06T12:30:00+08:00",
+        trigger_rule_summary="定时 2026-04-06 12:30",
+    )
+    pm_wake_goal = schedule_service._schedule_assignment_goal(
+        pm_wake_payload,
+        planned_trigger_at="2026-04-06T13:00:00+08:00",
+        trigger_rule_summary="定时 2026-04-06 13:00",
+    )
+    assert len(schedule_goal) <= 4000, len(schedule_goal)
+    assert len(pm_wake_goal) <= 4000, len(pm_wake_goal)
+
     workflow_prompt = assignment_service._build_assignment_execution_prompt(
         graph_row={"graph_name": "任务中心全局主图"},
         node={
@@ -122,6 +135,8 @@ def main() -> int:
                 "pm_wake_schedule_name": pm_wake_payload.get("schedule_name"),
                 "priority": payload.get("priority"),
                 "launch_summary": launch_summary,
+                "schedule_goal_length": len(schedule_goal),
+                "pm_wake_goal_length": len(pm_wake_goal),
                 "workflow_prompt_preview": workflow_prompt.splitlines()[:8],
             },
             ensure_ascii=False,

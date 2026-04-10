@@ -8,7 +8,6 @@ from urllib import request as urllib_request
 from workflow_app.server.services.release_boundary_service import (
     RELEASE_BOUNDARY_REPORT_PATH,
     collect_release_boundary_snapshot,
-    format_release_boundary_prompt_lines,
 )
 
 ASSIGNMENT_SELF_ITERATION_AGENT_IDS = {"workflow"}
@@ -62,6 +61,28 @@ def _assignment_pm_wake_schedule_name(agent_id: str) -> str:
     return f"pm持续唤醒 - {str(agent_id or '').strip()} 主线巡检"
 
 
+def _assignment_release_boundary_compact_lines(*, root: Path | None = None) -> list[str]:
+    snapshot = collect_release_boundary_snapshot(runtime_root=root) if root is not None else {}
+    developer_id = str(snapshot.get("developer_id") or "").strip() or "pm-main"
+    workspace_head = str(snapshot.get("workspace_head") or "").strip() or "-"
+    code_root_head = str(snapshot.get("code_root_head") or "").strip() or "-"
+    return [
+        f"发布边界专项方案：{RELEASE_BOUNDARY_REPORT_PATH}",
+        (
+            "根仓同步快照："
+            f" root_sync_state={str(snapshot.get('root_sync_state') or '').strip() or 'diverged_or_unknown'}"
+            f" ; ahead_count={int(snapshot.get('ahead_count') or 0)}"
+            f" ; dirty_tracked_count={int(snapshot.get('dirty_tracked_count') or 0)}"
+            f" ; untracked_count={int(snapshot.get('untracked_count') or 0)}"
+        ),
+        f"当前开发工作区：{developer_id} ; workspace_head={workspace_head} ; code_root_head={code_root_head}",
+        (
+            f"next_push_batch: {str(snapshot.get('next_push_batch') or '').strip() or '待切批'}"
+            f" ; push_block_reason: {str(snapshot.get('push_block_reason') or '').strip() or '-'}"
+        ),
+    ]
+
+
 def _assignment_self_iteration_schedule_payload(
     *,
     root: Path | None = None,
@@ -75,8 +96,7 @@ def _assignment_self_iteration_schedule_payload(
     summary_text = _short_assignment_text(result_summary, 240) or "上一轮已完成，继续推进 workflow 工程质量提升。"
     version_plan_path = ASSIGNMENT_SELF_ITERATION_VERSION_PLAN_PATH
     wake_requirement_path = ASSIGNMENT_SELF_ITERATION_WAKE_REQUIREMENT_PATH
-    release_boundary = collect_release_boundary_snapshot(runtime_root=root) if root is not None else {}
-    release_boundary_lines = format_release_boundary_prompt_lines(release_boundary)
+    release_boundary_lines = _assignment_release_boundary_compact_lines(root=root)
     return {
         "schedule_name": _assignment_self_iteration_schedule_name(agent_id),
         "enabled": True,
@@ -85,8 +105,8 @@ def _assignment_self_iteration_schedule_payload(
             [
                 "上一轮任务已经结束，请继续作为 workflow 的长期负责人推进 7x24 连续迭代。",
                 "7x24 的业务目标是持续推进当前 active 版本，不是只维持存活或空转。",
-                f"先读版本计划：{version_plan_path}",
-                f"再对照持续唤醒需求：{wake_requirement_path}",
+                f"版本计划：{version_plan_path}",
+                f"持续唤醒需求：{wake_requirement_path}",
                 f"周期性工作泳道：{ASSIGNMENT_SELF_ITERATION_PERIODIC_LANES_TEXT}",
                 *release_boundary_lines,
                 f"上一轮 ticket: {ticket_id}",
@@ -96,28 +116,14 @@ def _assignment_self_iteration_schedule_payload(
         ).strip(),
         "execution_checklist": "\n".join(
             [
-                f"1. 先读取 `{version_plan_path}`，确认当前 active 版本和当前优先任务包。",
-                f"2. 同时对照 `{wake_requirement_path}`，先定位当前生命周期阶段：`{ASSIGNMENT_SELF_ITERATION_LIFECYCLE_TEXT}`。",
-                f"3. 从 `{ASSIGNMENT_SELF_ITERATION_PERIODIC_LANES_TEXT}` 中选出本轮最高价值泳道；若当前 active 版本没有可执行任务，就先补 baseline、变更控制或下一个任务包，不允许空转。",
-                "4. 先记录当前根仓同步快照里的 `root_sync_state / ahead_count / dirty_tracked_count / untracked_count / push_block_reason / next_push_batch`，不要只写“继续收 Git 边界”。",
-                f"4.1 若快照显示根仓未同步或本地工作区 dirty，就立即读取 `{RELEASE_BOUNDARY_REPORT_PATH}` 并进入发布边界收口模式：先冻结同工作区新增实现，按小批次验证并推回 `../workflow_code/main`。",
-                "4.2 在至少一个已验证小批次推回根仓，或明确写出阻塞原因前，不要继续扩当前同工作区功能面；除非 `prod` 主链断裂、升级止血或高优先事故。",
-                "4.3 若命中异常治理现场，例如 `../workflow_code` 本地 `main` 落后 `origin/main`、helper 长时间 `runtime_status=creating`、旧 supervisor / request_pending 与真实现场不一致，不要只记录“受 workspace_path 约束无法处理”；这轮作为 `workflow(pm)` 允许直接做治理收口。",
-                "4.4 受支持动作仅限：对 `../workflow_code` 执行 non-destructive `git fetch / pull --ff-only` 快进；调用 developer workspace bootstrap/refresh；通过受支持 API/脚本处理 helper stale `creating`、schedule/supervisor/runtime-upgrade 恢复。仍禁止直接手改 `../workflow_code` 工作树和 `.running/prod` 真身。",
-                "5. 再检查 healthz、dashboard、assignments、schedules、runs 的真实状态，不要只看前端表象。",
-                "5.1 当前 shell 是 PowerShell：不要使用 bash heredoc（如 `python - <<'PY'`），也不要把 `scripts/*.ps1` 这类通配路径直接交给 `rg`；优先用 here-string 管道、`rg --files` 或 `Get-ChildItem`。",
-                "5.2 当你要核对某条 live run 的 `run.json/events.log/stderr.txt` 时，不要手工猜测 run_id 或直接拼不存在的路径；优先使用 `status-detail`、`audit.jsonl`、当前 node/run 返回的 `*_ref` 字段，或先列目录再读取。",
-                "6. 检查 `/api/runtime-upgrade/status`；若 `can_upgrade=true` 且当前无运行中任务，直接调用 `/api/runtime-upgrade/apply` 完成无痛升级，并在重连后继续推进。",
-                f"6.1 {ASSIGNMENT_SELF_UPGRADE_HINT}",
-                "7. 在推进开发实现前，先明确本轮沿用的 baseline、需要变更控制的内容，以及基于哪条基线做后续测试与验收。",
-                "8. 优先推进当前 active 版本里最高优先级且未完成的任务包，不要跳版抢做新功能。",
-                "9. 若当前任务包已完成，先更新版本计划状态，再挑同版本下一个 queued 包；只有当前版本出口门槛满足后才切到下一版本。",
-                f"10. 定期评估并派发小伙伴：对开发/测试/质量/缺陷修复相关工作，给 {ASSIGNMENT_SELF_ITERATION_TEAMMATES_TEXT} 创建或续挂对应任务，不要长期让协作链闲置。",
-                "11. 在代码工作区完成最小必要改动，并跑命中改动面的验证、基于基线测试和必要验收。",
-                "12. 若本轮产生代码改动并完成对应验证，本轮结束前必须从当前工作区执行 `git add / commit / push` 推回 `../workflow_code/main`；不要把已验证 dirty 留给下一轮。",
-                "12.1 若本轮中途失败、退出或留下 dirty/ahead 历史包袱，下一轮第一优先级必须先处理这批历史问题，确认保留/切批/回滚/推根仓；在收口或明确阻塞原因前，不要基于它继续扩写。",
-                "13. 更新 `.codex/memory/...` 时，在 `next` 明确写出下一次主线/保底触发时间，同时写清本轮泳道与生命周期阶段。",
-                "14. 输出本轮结论、证据路径，并确保系统已经挂上下一轮可执行任务或唤醒计划。",
+                f"1. 先读取 `{version_plan_path}`，确认当前 active 版本、当前优先任务包与当前生命周期阶段：`{ASSIGNMENT_SELF_ITERATION_LIFECYCLE_TEXT}`。",
+                f"2. 从 `{ASSIGNMENT_SELF_ITERATION_PERIODIC_LANES_TEXT}` 中选出本轮最高价值泳道；若当前 active 版本没有可执行任务，就先补 baseline、变更控制或下一个任务包，不允许空转。",
+                "3. 先记录当前根仓同步快照里的 `root_sync_state / ahead_count / dirty_tracked_count / untracked_count / push_block_reason / next_push_batch`，不要只写“继续收 Git 边界”。",
+                f"4. 若快照显示根仓未同步、本地工作区 dirty，或命中异常治理现场，就立即读取 `{RELEASE_BOUNDARY_REPORT_PATH}` 并进入发布边界收口模式；这轮只做受支持动作：non-destructive `git fetch / pull --ff-only`、developer workspace bootstrap/refresh、helper stale `creating` / schedule / supervisor / runtime-upgrade 恢复。",
+                "5. 再检查 healthz、assignments、schedules、runs 与 `/api/runtime-upgrade/status`；当前 shell 是 PowerShell：不要使用 bash heredoc（如 `python - <<'PY'`），不要把 `scripts/*.ps1` 这类通配路径直接交给 `rg`，也不要手工猜测 run_id。",
+                f"6. 若 `can_upgrade=true` 且当前无运行中任务，直接调用 `/api/runtime-upgrade/apply` 完成无痛升级；{ASSIGNMENT_SELF_UPGRADE_HINT}",
+                "7. 在推进开发实现前，先明确本轮沿用的 baseline、需要变更控制的内容，以及基于哪条基线做后续测试与验收；优先推进当前版本里最高优先级且未完成的任务包，不要跳版抢做新功能。",
+                f"8. 视情况给 {ASSIGNMENT_SELF_ITERATION_TEAMMATES_TEXT} 创建或续挂任务；更新 `.codex/memory/...` 时，在 `next` 明确写出下一次主线/保底触发时间，同时写清本轮泳道与生命周期阶段，并确保系统已经挂上下一轮可执行任务或唤醒计划。",
             ]
         ).strip(),
         "done_definition": "\n".join(
@@ -125,12 +131,9 @@ def _assignment_self_iteration_schedule_payload(
                 f"1. 当前活跃版本对应任务包有可交付结果，且版本计划 `{version_plan_path}` 已同步最新状态。",
                 "2. 本轮明确记录了当前周期性泳道、生命周期阶段，以及是否发生 baseline/变更控制更新。",
                 "3. 本轮显式记录了 `root_sync_state / ahead_count / dirty_tracked_count / untracked_count / push_block_reason / next_push_batch`。",
-                "4. 若本轮存在已验证代码改动，本轮结束前已经完成当前工作区 `commit / push / 根仓同步`；不能把已验证 dirty 留给下一轮擦屁股。",
-                "5. 若 release boundary 未收口，本轮至少完成了一个已验证小批次推回根仓，或明确写清阻塞原因与下一批次，且没有在同一批历史 dirty 上继续扩面。",
-                "5.1 若本轮命中 7x24 异常治理现场，本轮已经执行受支持的治理收口动作，或明确写清为什么仍然 blocked，而不是只停在“workspace_path 不允许”。",
-                "6. 本轮附带验证证据，而不是只给方向性描述。",
-                "7. 如有需要，本轮已经给对应小伙伴挂好下一步任务或交接任务。",
-                "8. 若本轮没有新的 ready 任务，也必须保证下一次唤醒已经排上，7x24 连续推进不断链。",
+                "4. 若本轮存在已验证代码改动，本轮结束前已经完成当前工作区 `commit / push / 根仓同步`，或明确写清 release boundary 阻塞原因。",
+                "5. 若本轮命中 7x24 异常治理现场，本轮已经执行受支持的治理收口动作，或明确写清为什么仍然 blocked，而不是只停在“workspace_path 不允许”；并附带验证证据。",
+                "6. 如有需要，本轮已经给对应小伙伴挂好下一步任务或交接任务；若本轮没有新的 ready 任务，也必须保证下一次唤醒已经排上，7x24 连续推进不断链。",
             ]
         ),
         "priority": priority,
@@ -243,8 +246,7 @@ def _assignment_pm_wake_schedule_payload(
     summary_text = _short_assignment_text(result_summary, 240) or "检查 prod 当前是否仍保留未来可执行入口，并在断链时立即补链。"
     version_plan_path = ASSIGNMENT_SELF_ITERATION_VERSION_PLAN_PATH
     wake_requirement_path = ASSIGNMENT_SELF_ITERATION_WAKE_REQUIREMENT_PATH
-    release_boundary = collect_release_boundary_snapshot(runtime_root=root) if root is not None else {}
-    release_boundary_lines = format_release_boundary_prompt_lines(release_boundary)
+    release_boundary_lines = _assignment_release_boundary_compact_lines(root=root)
     return {
         "schedule_name": _assignment_pm_wake_schedule_name(agent_id),
         "enabled": True,
@@ -265,14 +267,8 @@ def _assignment_pm_wake_schedule_payload(
                 f"1. 读取 `{version_plan_path}` 与 `{wake_requirement_path}`，确认当前 active 版本、任务包，以及所处生命周期阶段：`{ASSIGNMENT_SELF_ITERATION_LIFECYCLE_TEXT}`。",
                 f"2. 从 `{ASSIGNMENT_SELF_ITERATION_PERIODIC_LANES_TEXT}` 中判断当前最该推进的泳道；若 active 版本没有可执行任务，立即补 baseline、变更控制或下一条当前版本任务。",
                 "3. 先记录当前根仓同步快照里的 `root_sync_state / ahead_count / dirty_tracked_count / untracked_count / push_block_reason / next_push_batch`。",
-                f"3.1 若快照显示根仓未同步或本地工作区 dirty，就立即读取 `{RELEASE_BOUNDARY_REPORT_PATH}` 并切到发布边界收口模式：先冻结同工作区新增实现，优先恢复小步推根仓节奏。",
-                "3.2 若看到这是上一轮遗留的 dirty/ahead 历史问题，本轮第一优先级先处理这批历史 release boundary；在收口或明确阻塞原因前，不要基于这批改动继续扩写。",
-                "3.3 若命中异常治理现场，例如 `../workflow_code` 本地 `main` 落后 `origin/main`、helper 长时间 `runtime_status=creating`、旧 supervisor / request_pending 与真实现场不一致，不要只记录“受 workspace_path 约束无法处理”；这轮作为 `workflow(pm)` 允许直接做治理收口。",
-                "3.4 受支持动作仅限：对 `../workflow_code` 执行 non-destructive `git fetch / pull --ff-only` 快进；调用 developer workspace bootstrap/refresh；通过受支持 API/脚本处理 helper stale `creating`、schedule/supervisor/runtime-upgrade 恢复。仍禁止直接手改 `../workflow_code` 工作树和 `.running/prod` 真身。",
-                "4. 检查 prod 当前 schedules、assignment graph、ready/running 节点、最近 runs 与 `/api/runtime-upgrade/status` 真相。",
-                "4.1 若看到 `workflow` 已到时的 ready 节点堆积、`running_task_count=0`，或 recent trigger/message 出现 `assigned agent already has running node` 但找不到真实 live workflow run.json/events.log，必须判定为断链/假健康，立即补链或重派发，不能按“还有 future 入口”算通过。",
-                "4.2 当前 shell 是 PowerShell：不要使用 bash heredoc（如 `python - <<'PY'`），也不要把 `scripts/*.ps1` 这类通配路径直接交给 `rg`；优先用 here-string 管道、`rg --files` 或 `Get-ChildItem`。",
-                "4.3 当你要核对某条 live run 的 `run.json/events.log/stderr.txt` 时，不要手工猜测 run_id 或直接拼不存在的路径；优先使用 `status-detail`、`audit.jsonl`、当前 node/run 返回的 `*_ref` 字段，或先列目录再读取。",
+                f"3.1 若快照显示根仓未同步、本地工作区 dirty，或命中异常治理现场，就立即读取 `{RELEASE_BOUNDARY_REPORT_PATH}` 并切到发布边界收口模式；只做受支持动作：non-destructive `git fetch / pull --ff-only`、developer workspace bootstrap/refresh、helper stale `creating` / schedule / supervisor / runtime-upgrade 恢复。",
+                "4. 检查 prod 当前 schedules、assignment graph、ready/running 节点、最近 runs 与 `/api/runtime-upgrade/status` 真相；当前 shell 是 PowerShell：不要使用 bash heredoc（如 `python - <<'PY'`），不要把 `scripts/*.ps1` 这类通配路径直接交给 `rg`，也不要手工猜测 run_id。",
                 "5. 若 `can_upgrade=true` 且当前无运行中任务，直接调用 `/api/runtime-upgrade/apply` 完成无痛升级，再继续巡检。",
                 f"5.1 {ASSIGNMENT_SELF_UPGRADE_HINT}",
                 "6. 若 [持续迭代] workflow 没有未来入口，立即补一条未来可执行入口或当前版本任务。",
