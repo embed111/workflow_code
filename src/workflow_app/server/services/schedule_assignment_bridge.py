@@ -96,6 +96,45 @@ def _scan_ticket_nodes(
     return {}
 
 
+def _scan_ticket_schedule_nodes(
+    nodes_dir: Path,
+    *,
+    schedule_key: str,
+    ticket_id: str,
+) -> list[dict[str, str]]:
+    items: list[dict[str, str]] = []
+    if not nodes_dir.exists() or not nodes_dir.is_dir():
+        return items
+    for path in sorted(
+        nodes_dir.glob("*.json"),
+        key=lambda item: item.stat().st_mtime if item.exists() else 0,
+        reverse=True,
+    ):
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        if not isinstance(payload, dict):
+            continue
+        if str(payload.get("source_schedule_id") or "").strip() != schedule_key:
+            continue
+        if str(payload.get("record_state") or "active").strip().lower() == "deleted":
+            continue
+        node_id = str(payload.get("node_id") or "").strip()
+        if not node_id:
+            continue
+        items.append(
+            {
+                "assignment_ticket_id": ticket_id,
+                "assignment_node_id": node_id,
+                "trigger_instance_id": str(payload.get("trigger_instance_id") or "").strip(),
+                "assignment_status": str(payload.get("status") or "").strip().lower(),
+                "planned_trigger_at": str(payload.get("planned_trigger_at") or "").strip(),
+            }
+        )
+    return items
+
+
 def find_schedule_assignment_ref(
     root: Path,
     *,
@@ -134,6 +173,117 @@ def find_schedule_assignment_ref(
         if recovered:
             return recovered
     return {}
+
+
+def find_schedule_nodes_for_triggers(
+    root: Path,
+    *,
+    schedule_id: str,
+    trigger_instance_ids: list[str] | tuple[str, ...] | set[str],
+    ticket_id: str = "",
+) -> list[dict[str, str]]:
+    schedule_key = _safe_schedule_token(schedule_id)
+    trigger_keys = {
+        _safe_schedule_token(item)
+        for item in list(trigger_instance_ids or [])
+        if _safe_schedule_token(item)
+    }
+    if not schedule_key or not trigger_keys:
+        return []
+    tasks_root = _resolve_tasks_root(root)
+    if not tasks_root.exists() or not tasks_root.is_dir():
+        return []
+    refs: list[dict[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+
+    def _append_refs(nodes_dir: Path, current_ticket_id: str) -> None:
+        for item in _scan_ticket_schedule_nodes(
+            nodes_dir,
+            schedule_key=schedule_key,
+            ticket_id=current_ticket_id,
+        ):
+            trigger_id = str(item.get("trigger_instance_id") or "").strip()
+            if trigger_id not in trigger_keys:
+                continue
+            node_key = (
+                str(item.get("assignment_ticket_id") or "").strip(),
+                str(item.get("assignment_node_id") or "").strip(),
+            )
+            if not all(node_key) or node_key in seen:
+                continue
+            seen.add(node_key)
+            refs.append(item)
+
+    ticket_key = _safe_schedule_token(ticket_id)
+    if ticket_key:
+        _append_refs(tasks_root / ticket_key / "nodes", ticket_key)
+    for task_dir in sorted(
+        (item for item in tasks_root.iterdir() if item.is_dir()),
+        key=lambda item: item.stat().st_mtime if item.exists() else 0,
+        reverse=True,
+    ):
+        current_ticket_id = str(task_dir.name or "").strip()
+        if ticket_key and current_ticket_id == ticket_key:
+            continue
+        _append_refs(task_dir / "nodes", current_ticket_id)
+    return refs
+
+
+def replace_pending_schedule_nodes(
+    root: Path,
+    *,
+    schedule_id: str,
+    trigger_instance_ids: list[str] | tuple[str, ...] | set[str],
+    ticket_id: str = "",
+    operator: str = "schedule-worker",
+) -> dict[str, Any]:
+    refs = find_schedule_nodes_for_triggers(
+        root,
+        schedule_id=schedule_id,
+        trigger_instance_ids=trigger_instance_ids,
+        ticket_id=ticket_id,
+    )
+    deleted: list[dict[str, str]] = []
+    skipped: list[dict[str, str]] = []
+    for item in refs:
+        assignment_status = str(item.get("assignment_status") or "").strip().lower()
+        if assignment_status in {"running", "succeeded", "failed"}:
+            skipped.append(
+                {
+                    **item,
+                    "code": "schedule_node_not_replaceable",
+                    "reason": f"node status is {assignment_status or 'unknown'}",
+                }
+            )
+            continue
+        try:
+            result = assignment_service.delete_assignment_node(
+                root,
+                ticket_id_text=str(item.get("assignment_ticket_id") or "").strip(),
+                node_id_text=str(item.get("assignment_node_id") or "").strip(),
+                operator=operator,
+                reason="superseded by newer schedule trigger",
+                include_test_data=True,
+            )
+            deleted.append(
+                {
+                    **item,
+                    "audit_id": str(result.get("audit_id") or "").strip(),
+                }
+            )
+        except Exception as exc:
+            skipped.append(
+                {
+                    **item,
+                    "code": str(getattr(exc, "code", "") or "").strip() or "delete_assignment_node_failed",
+                    "reason": str(exc),
+                }
+            )
+    return {
+        "matched": refs,
+        "deleted": deleted,
+        "skipped": skipped,
+    }
 
 
 def ensure_global_assignment_graph(cfg: Any) -> str:

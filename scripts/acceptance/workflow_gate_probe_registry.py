@@ -70,6 +70,11 @@ SCRIPT_PROBE_DEFINITIONS: tuple[ScriptProbeDefinition, ...] = (
         failure_message="schedule exhausted once plan repair probe failed",
     ),
     ScriptProbeDefinition(
+        key="schedule_pending_trigger_replaced_by_newer",
+        relative_path="scripts/acceptance/verify_schedule_pending_trigger_replaced_by_newer.py",
+        failure_message="schedule pending trigger replacement probe failed",
+    ),
+    ScriptProbeDefinition(
         key="assignment_transient_retry",
         relative_path="scripts/acceptance/verify_assignment_transient_startup_retry.py",
         failure_message="assignment transient retry probe failed",

@@ -80,8 +80,9 @@ SCHEDULE_RESULT_TEXT = {
     "running": "运行中",
     "succeeded": "已成功",
     "failed": "已失败",
+    "superseded": "已被新触发覆盖",
 }
-SCHEDULE_TERMINAL_RESULT_STATUSES = frozenset({"succeeded", "failed"})
+SCHEDULE_TERMINAL_RESULT_STATUSES = frozenset({"succeeded", "failed", "superseded"})
 SCHEDULE_FAILED_TRIGGER_STATUSES = frozenset({"failed", "dispatch_failed", "create_failed"})
 SCHEDULE_PLACEHOLDER_TRIGGER_MESSAGES = frozenset({"", "dispatch_requested"})
 SCHEDULE_EVENT_LOG = Path("logs") / "events" / "schedules.jsonl"
@@ -97,6 +98,8 @@ _SCHEDULE_WORKER_THREADS: dict[str, threading.Thread] = {}
 _SCHEDULE_WORKER_LOCK = threading.Lock()
 _SCHEDULE_TRIGGER_THREADS: dict[str, threading.Thread] = {}
 _SCHEDULE_TRIGGER_LOCK = threading.Lock()
+_SCHEDULE_PROCESSING_LOCKS: dict[str, threading.Lock] = {}
+_SCHEDULE_PROCESSING_LOCK = threading.Lock()
 SCHEDULE_SELF_ITER_GUARD_FILE = Path("state") / "schedule_self_iter_guard.json"
 SCHEDULE_SMOKE_BASELINE_FILE = Path(".test") / "schedule_smoke_baseline.latest.json"
 SCHEDULE_PM_VERSION_PLAN_PATH = "docs/workflow/governance/PM版本推进计划.md"
@@ -377,6 +380,16 @@ def _schedule_trigger_thread_key(root: Path, trigger_instance_id: str) -> str:
     return f"{Path(root).resolve(strict=False).as_posix()}::{str(trigger_instance_id or '').strip()}"
 
 
+def _schedule_processing_lock(root: Path, schedule_id: str) -> threading.Lock:
+    key = f"{Path(root).resolve(strict=False).as_posix()}::schedule::{str(schedule_id or '').strip()}"
+    with _SCHEDULE_PROCESSING_LOCK:
+        lock = _SCHEDULE_PROCESSING_LOCKS.get(key)
+        if lock is None:
+            lock = threading.Lock()
+            _SCHEDULE_PROCESSING_LOCKS[key] = lock
+        return lock
+
+
 def _find_schedule_assignment_ref(
     root: Path,
     *,
@@ -484,6 +497,212 @@ def _record_schedule_trigger_progress(
     return audit_id
 
 
+def _list_supersedable_older_schedule_triggers(
+    root: Path,
+    *,
+    schedule_id: str,
+    planned_trigger_at: str,
+) -> list[dict[str, str]]:
+    schedule_key = str(schedule_id or "").strip()
+    planned_text = str(planned_trigger_at or "").strip()
+    if not schedule_key or not planned_text:
+        return []
+    conn = connect_db(root)
+    try:
+        rows = conn.execute(
+            """
+            SELECT trigger_instance_id,planned_trigger_at,trigger_status,trigger_message,assignment_ticket_id,assignment_node_id
+            FROM schedule_trigger_instances
+            WHERE schedule_id=?
+              AND planned_trigger_at<?
+              AND trigger_status IN ('trigger_hit','queued','running','dispatch_failed')
+            ORDER BY planned_trigger_at DESC, updated_at DESC, created_at DESC
+            """,
+            (schedule_key, planned_text),
+        ).fetchall()
+    finally:
+        conn.close()
+    items: list[dict[str, str]] = []
+    for row in rows:
+        ticket_id = str(row["assignment_ticket_id"] or "").strip()
+        node_id = str(row["assignment_node_id"] or "").strip()
+        result_status = "queued"
+        if ticket_id and node_id:
+            runtime_status = _assignment_runtime_status(
+                root,
+                ticket_id=ticket_id,
+                node_id=node_id,
+                persist_repair=True,
+            )
+            result_status = str(runtime_status.get("result_status") or "queued").strip().lower() or "queued"
+        if result_status in {"running", "succeeded", "failed"}:
+            continue
+        items.append(
+            {
+                "trigger_instance_id": str(row["trigger_instance_id"] or "").strip(),
+                "planned_trigger_at": str(row["planned_trigger_at"] or "").strip(),
+                "trigger_status": str(row["trigger_status"] or "").strip().lower(),
+                "trigger_message": str(row["trigger_message"] or "").strip(),
+                "assignment_ticket_id": ticket_id,
+                "assignment_node_id": node_id,
+                "result_status": result_status,
+            }
+        )
+    return items
+
+
+def _mark_schedule_triggers_superseded(
+    root: Path,
+    *,
+    schedule_id: str,
+    trigger_instance_ids: list[str] | tuple[str, ...] | set[str],
+    operator: str,
+    superseded_by_trigger_instance_id: str,
+    superseded_by_planned_trigger_at: str,
+) -> list[dict[str, str]]:
+    ids = [str(item or "").strip() for item in list(trigger_instance_ids or []) if str(item or "").strip()]
+    schedule_key = str(schedule_id or "").strip()
+    if not schedule_key or not ids:
+        return []
+    now_text = _now_text()
+    supersede_target = str(superseded_by_planned_trigger_at or superseded_by_trigger_instance_id or "").strip()
+    message = f"被更晚的触发覆盖：{supersede_target}" if supersede_target else "被更晚的触发覆盖"
+    conn = connect_db(root)
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        updated_rows = conn.execute(
+            f"""
+            SELECT trigger_instance_id,planned_trigger_at,assignment_ticket_id,assignment_node_id
+            FROM schedule_trigger_instances
+            WHERE schedule_id=? AND trigger_instance_id IN ({",".join("?" for _ in ids)})
+            """,
+            (schedule_key, *ids),
+        ).fetchall()
+        items: list[dict[str, str]] = []
+        for row in updated_rows:
+            trigger_id = str(row["trigger_instance_id"] or "").strip()
+            conn.execute(
+                """
+                UPDATE schedule_trigger_instances
+                SET trigger_status='superseded',trigger_message=?,updated_at=?
+                WHERE trigger_instance_id=?
+                """,
+                (message, now_text, trigger_id),
+            )
+            audit_id = _append_schedule_audit(
+                conn,
+                schedule_id=schedule_key,
+                trigger_instance_id=trigger_id,
+                action="superseded_by_newer_trigger",
+                operator=operator,
+                detail={
+                    "superseded_by_trigger_instance_id": str(superseded_by_trigger_instance_id or "").strip(),
+                    "superseded_by_planned_trigger_at": str(superseded_by_planned_trigger_at or "").strip(),
+                },
+                created_at=now_text,
+            )
+            items.append(
+                {
+                    "trigger_instance_id": trigger_id,
+                    "planned_trigger_at": str(row["planned_trigger_at"] or "").strip(),
+                    "assignment_ticket_id": str(row["assignment_ticket_id"] or "").strip(),
+                    "assignment_node_id": str(row["assignment_node_id"] or "").strip(),
+                    "audit_id": audit_id,
+                }
+            )
+        conn.commit()
+    finally:
+        conn.close()
+    for item in items:
+        _append_schedule_event(
+            root,
+            {
+                "created_at": now_text,
+                "action": "trigger_superseded",
+                "schedule_id": schedule_key,
+                "trigger_instance_id": str(item.get("trigger_instance_id") or "").strip(),
+                "assignment_ticket_id": str(item.get("assignment_ticket_id") or "").strip(),
+                "assignment_node_id": str(item.get("assignment_node_id") or "").strip(),
+                "detail": {
+                    "superseded_by_trigger_instance_id": str(superseded_by_trigger_instance_id or "").strip(),
+                    "superseded_by_planned_trigger_at": str(superseded_by_planned_trigger_at or "").strip(),
+                },
+                "audit_id": str(item.get("audit_id") or "").strip(),
+            },
+        )
+    return items
+
+
+def _supersede_older_schedule_triggers(
+    cfg: Any,
+    *,
+    schedule: dict[str, Any],
+    planned_trigger_at: str,
+    schedule_ticket_id: str,
+    trigger_instance_id: str,
+    operator: str,
+) -> dict[str, Any]:
+    schedule_id = str(schedule.get("schedule_id") or "").strip()
+    older_triggers = _list_supersedable_older_schedule_triggers(
+        cfg.root,
+        schedule_id=schedule_id,
+        planned_trigger_at=planned_trigger_at,
+    )
+    if not older_triggers:
+        return {
+            "replaced_count": 0,
+            "replaced_trigger_ids": [],
+            "deleted_nodes": [],
+            "skipped_nodes": [],
+        }
+    trigger_ids_with_nodes = [
+        str(item.get("trigger_instance_id") or "").strip()
+        for item in older_triggers
+        if str(item.get("assignment_ticket_id") or "").strip() and str(item.get("assignment_node_id") or "").strip()
+    ]
+    replacement = _replace_pending_schedule_nodes(
+        cfg.root,
+        schedule_id=schedule_id,
+        trigger_instance_ids=trigger_ids_with_nodes,
+        ticket_id=schedule_ticket_id,
+        operator=operator,
+    )
+    deleted_trigger_ids = {
+        str(item.get("trigger_instance_id") or "").strip()
+        for item in list(replacement.get("deleted") or [])
+        if str(item.get("trigger_instance_id") or "").strip()
+    }
+    matched_trigger_ids = {
+        str(item.get("trigger_instance_id") or "").strip()
+        for item in list(replacement.get("matched") or [])
+        if str(item.get("trigger_instance_id") or "").strip()
+    }
+    replaced_trigger_ids: list[str] = []
+    for item in older_triggers:
+        trigger_id = str(item.get("trigger_instance_id") or "").strip()
+        if not trigger_id:
+            continue
+        if not str(item.get("assignment_ticket_id") or "").strip() or not str(item.get("assignment_node_id") or "").strip():
+            replaced_trigger_ids.append(trigger_id)
+            continue
+        if trigger_id in deleted_trigger_ids or trigger_id not in matched_trigger_ids:
+            replaced_trigger_ids.append(trigger_id)
+    _mark_schedule_triggers_superseded(
+        cfg.root,
+        schedule_id=schedule_id,
+        trigger_instance_ids=replaced_trigger_ids,
+        operator=operator,
+        superseded_by_trigger_instance_id=trigger_instance_id,
+        superseded_by_planned_trigger_at=planned_trigger_at,
+    )
+    return {
+        "replaced_count": len(replaced_trigger_ids),
+        "replaced_trigger_ids": replaced_trigger_ids,
+        "deleted_nodes": list(replacement.get("deleted") or []),
+        "skipped_nodes": list(replacement.get("skipped") or []),
+    }
+
+
 def _process_schedule_trigger_async(
     cfg: Any,
     *,
@@ -495,116 +714,101 @@ def _process_schedule_trigger_async(
     thread_key: str,
 ) -> None:
     created: dict[str, Any] = {}
+    schedule_id = str(schedule.get("schedule_id") or "").strip()
+    processing_lock = _schedule_processing_lock(cfg.root, schedule_id)
     try:
-        gate = _check_self_iter_gate(cfg, schedule)
-        if not bool(gate.get("allow")):
-            block_message = str(gate.get("message") or "self-iteration blocked by smoke guard").strip()
-            _record_schedule_trigger_progress(
-                cfg.root,
-                schedule=schedule,
-                trigger_instance_id=trigger_instance_id,
-                planned_trigger_at=planned_trigger_at,
-                assignment_ticket_id="",
-                assignment_node_id="",
-                trigger_status="dispatch_failed",
-                trigger_message=block_message,
-                operator=operator,
-                action="blocked_by_smoke_guard",
-                detail={
-                    "guard_state": str(gate.get("guard_state") or "").strip(),
-                    "message": block_message,
-                },
-                last_result_status="failed",
-            )
-            _ensure_self_iter_backup_schedule(
-                cfg,
-                schedule=schedule,
-                reason=block_message,
-                planned_trigger_at=planned_trigger_at,
-            )
-            return
-        guard_state = str(gate.get("guard_state") or "").strip()
-        if guard_state.startswith("degraded_"):
-            _append_schedule_event(
-                cfg.root,
-                {
-                    "created_at": _now_text(),
-                    "action": "self_iter_guard_degraded",
-                    "schedule_id": str(schedule.get("schedule_id") or "").strip(),
-                    "trigger_instance_id": str(trigger_instance_id or "").strip(),
-                    "detail": {
-                        "guard_state": guard_state,
-                        "message": str(gate.get("message") or "").strip(),
+        with processing_lock:
+            gate = _check_self_iter_gate(cfg, schedule)
+            if not bool(gate.get("allow")):
+                block_message = str(gate.get("message") or "self-iteration blocked by smoke guard").strip()
+                _record_schedule_trigger_progress(
+                    cfg.root,
+                    schedule=schedule,
+                    trigger_instance_id=trigger_instance_id,
+                    planned_trigger_at=planned_trigger_at,
+                    assignment_ticket_id="",
+                    assignment_node_id="",
+                    trigger_status="dispatch_failed",
+                    trigger_message=block_message,
+                    operator=operator,
+                    action="blocked_by_smoke_guard",
+                    detail={
+                        "guard_state": str(gate.get("guard_state") or "").strip(),
+                        "message": block_message,
                     },
-                },
-            )
-        schedule_ticket_id = ""
-        try:
-            schedule_ticket_id = _ensure_global_assignment_graph(cfg)
-        except Exception:
+                    last_result_status="failed",
+                )
+                _ensure_self_iter_backup_schedule(
+                    cfg,
+                    schedule=schedule,
+                    reason=block_message,
+                    planned_trigger_at=planned_trigger_at,
+                )
+                return
+            guard_state = str(gate.get("guard_state") or "").strip()
+            if guard_state.startswith("degraded_"):
+                _append_schedule_event(
+                    cfg.root,
+                    {
+                        "created_at": _now_text(),
+                        "action": "self_iter_guard_degraded",
+                        "schedule_id": schedule_id,
+                        "trigger_instance_id": str(trigger_instance_id or "").strip(),
+                        "detail": {
+                            "guard_state": guard_state,
+                            "message": str(gate.get("message") or "").strip(),
+                        },
+                    },
+                )
             schedule_ticket_id = ""
-        recovered = _find_schedule_assignment_ref(
-            cfg.root,
-            schedule_id=str(schedule.get("schedule_id") or "").strip(),
-            trigger_instance_id=trigger_instance_id,
-            ticket_id=schedule_ticket_id,
-        )
-        if recovered:
-            created = {
-                "ticket_id": str(recovered.get("assignment_ticket_id") or "").strip(),
-                "node_id": str(recovered.get("assignment_node_id") or "").strip(),
-            }
-        else:
-            created = _create_schedule_node(
-                cfg,
-                schedule,
-                trigger_instance_id=trigger_instance_id,
-                planned_trigger_at=planned_trigger_at,
-                trigger_rule_summary=trigger_rule_summary,
-            )
-        ticket_id = str(created.get("ticket_id") or "").strip()
-        node_id = str(created.get("node_id") or "").strip()
-        result_status = _assignment_runtime_status(
-            cfg.root,
-            ticket_id=ticket_id,
-            node_id=node_id,
-            persist_repair=True,
-        )
-        _record_schedule_trigger_progress(
-            cfg.root,
-            schedule=schedule,
-            trigger_instance_id=trigger_instance_id,
-            planned_trigger_at=planned_trigger_at,
-            assignment_ticket_id=ticket_id,
-            assignment_node_id=node_id,
-            trigger_status=str(result_status.get("result_status") or "queued"),
-            trigger_message=str(result_status.get("assignment_status_text") or result_status.get("result_status_text") or "").strip(),
-            operator=operator,
-            action="recover_assignment_node" if recovered else "create_assignment_node",
-            detail={
-                "assignment_ticket_id": ticket_id,
-                "assignment_node_id": node_id,
-                "trigger_rule_summary": trigger_rule_summary,
-            },
-            last_result_status=str(result_status.get("result_status") or "queued"),
-        )
-        assignment_status = str(result_status.get("assignment_status") or "").strip().lower()
-        if assignment_status not in {"running", "succeeded", "failed"}:
-            dispatch_status = "requested"
-            dispatch_message = ""
             try:
-                dispatch_result = _request_assignment_dispatch(cfg.root, ticket_id)
-                dispatch_status = str(dispatch_result.get("dispatch_status") or "requested")
-                dispatch_message = str(dispatch_result.get("dispatch_message") or "").strip()
-            except Exception as dispatch_exc:
-                dispatch_status = "dispatch_failed"
-                dispatch_message = str(dispatch_exc)
+                schedule_ticket_id = _ensure_global_assignment_graph(cfg)
+            except Exception:
+                schedule_ticket_id = ""
+            superseded = _supersede_older_schedule_triggers(
+                cfg,
+                schedule=schedule,
+                planned_trigger_at=planned_trigger_at,
+                schedule_ticket_id=schedule_ticket_id,
+                trigger_instance_id=trigger_instance_id,
+                operator=operator,
+            )
+            recovered = _find_schedule_assignment_ref(
+                cfg.root,
+                schedule_id=schedule_id,
+                trigger_instance_id=trigger_instance_id,
+                ticket_id=schedule_ticket_id,
+            )
+            if recovered:
+                created = {
+                    "ticket_id": str(recovered.get("assignment_ticket_id") or "").strip(),
+                    "node_id": str(recovered.get("assignment_node_id") or "").strip(),
+                }
+            else:
+                created = _create_schedule_node(
+                    cfg,
+                    schedule,
+                    trigger_instance_id=trigger_instance_id,
+                    planned_trigger_at=planned_trigger_at,
+                    trigger_rule_summary=trigger_rule_summary,
+                )
+            ticket_id = str(created.get("ticket_id") or "").strip()
+            node_id = str(created.get("node_id") or "").strip()
             result_status = _assignment_runtime_status(
                 cfg.root,
                 ticket_id=ticket_id,
                 node_id=node_id,
                 persist_repair=True,
             )
+            trigger_detail = {
+                "assignment_ticket_id": ticket_id,
+                "assignment_node_id": node_id,
+                "trigger_rule_summary": trigger_rule_summary,
+            }
+            if superseded.get("replaced_count"):
+                trigger_detail["superseded_trigger_ids"] = list(superseded.get("replaced_trigger_ids") or [])
+            if superseded.get("skipped_nodes"):
+                trigger_detail["supersede_skipped_nodes"] = list(superseded.get("skipped_nodes") or [])
             _record_schedule_trigger_progress(
                 cfg.root,
                 schedule=schedule,
@@ -612,25 +816,59 @@ def _process_schedule_trigger_async(
                 planned_trigger_at=planned_trigger_at,
                 assignment_ticket_id=ticket_id,
                 assignment_node_id=node_id,
-                trigger_status=dispatch_status if dispatch_status == "dispatch_failed" else str(result_status.get("result_status") or "queued"),
-                trigger_message=dispatch_message or str(result_status.get("assignment_status_text") or result_status.get("result_status_text") or "").strip(),
+                trigger_status=str(result_status.get("result_status") or "queued"),
+                trigger_message=str(result_status.get("assignment_status_text") or result_status.get("result_status_text") or "").strip(),
                 operator=operator,
-                action="dispatch_failed" if dispatch_status == "dispatch_failed" else "dispatch_requested",
-                detail={
+                action="recover_assignment_node" if recovered else "create_assignment_node",
+                detail=trigger_detail,
+                last_result_status=str(result_status.get("result_status") or "queued"),
+            )
+            assignment_status = str(result_status.get("assignment_status") or "").strip().lower()
+            if assignment_status not in {"running", "succeeded", "failed"}:
+                dispatch_status = "requested"
+                dispatch_message = ""
+                try:
+                    dispatch_result = _request_assignment_dispatch(cfg.root, ticket_id)
+                    dispatch_status = str(dispatch_result.get("dispatch_status") or "requested")
+                    dispatch_message = str(dispatch_result.get("dispatch_message") or "").strip()
+                except Exception as dispatch_exc:
+                    dispatch_status = "dispatch_failed"
+                    dispatch_message = str(dispatch_exc)
+                result_status = _assignment_runtime_status(
+                    cfg.root,
+                    ticket_id=ticket_id,
+                    node_id=node_id,
+                    persist_repair=True,
+                )
+                dispatch_detail = {
                     "assignment_ticket_id": ticket_id,
                     "assignment_node_id": node_id,
                     "dispatch_status": dispatch_status,
                     "dispatch_message": dispatch_message,
-                },
-                last_result_status="failed" if dispatch_status == "dispatch_failed" else str(result_status.get("result_status") or "queued"),
-            )
-            if dispatch_status == "dispatch_failed":
-                _ensure_self_iter_backup_schedule(
-                    cfg,
+                }
+                if superseded.get("replaced_count"):
+                    dispatch_detail["superseded_trigger_ids"] = list(superseded.get("replaced_trigger_ids") or [])
+                _record_schedule_trigger_progress(
+                    cfg.root,
                     schedule=schedule,
-                    reason=dispatch_message or "schedule dispatch failed",
+                    trigger_instance_id=trigger_instance_id,
                     planned_trigger_at=planned_trigger_at,
+                    assignment_ticket_id=ticket_id,
+                    assignment_node_id=node_id,
+                    trigger_status=dispatch_status if dispatch_status == "dispatch_failed" else str(result_status.get("result_status") or "queued"),
+                    trigger_message=dispatch_message or str(result_status.get("assignment_status_text") or result_status.get("result_status_text") or "").strip(),
+                    operator=operator,
+                    action="dispatch_failed" if dispatch_status == "dispatch_failed" else "dispatch_requested",
+                    detail=dispatch_detail,
+                    last_result_status="failed" if dispatch_status == "dispatch_failed" else str(result_status.get("result_status") or "queued"),
                 )
+                if dispatch_status == "dispatch_failed":
+                    _ensure_self_iter_backup_schedule(
+                        cfg,
+                        schedule=schedule,
+                        reason=dispatch_message or "schedule dispatch failed",
+                        planned_trigger_at=planned_trigger_at,
+                    )
     except Exception as exc:
         _record_schedule_trigger_progress(
             cfg.root,
@@ -1943,6 +2181,9 @@ def _enrich_trigger(
         snapshot_cache=snapshot_cache,
     )
     payload.update(_assignment_runtime_status(root, ticket_id=payload["assignment_ticket_id"], node_id=payload["assignment_node_id"]))
+    if payload["trigger_status"] == "superseded":
+        payload["result_status"] = "superseded"
+        payload["result_status_text"] = SCHEDULE_RESULT_TEXT["superseded"]
     if payload["trigger_status"] in {"create_failed", "dispatch_failed"} and payload.get("result_status") == "pending":
         payload["result_status"] = "failed"
         payload["result_status_text"] = SCHEDULE_RESULT_TEXT["failed"]
@@ -1959,6 +2200,10 @@ def _enrich_trigger(
             status_changed = trigger_status != "succeeded"
             if status_changed:
                 payload["trigger_status"] = "succeeded"
+        elif result_status == "superseded":
+            status_changed = trigger_status != "superseded"
+            if status_changed:
+                payload["trigger_status"] = "superseded"
         elif trigger_status not in SCHEDULE_FAILED_TRIGGER_STATUSES:
             status_changed = trigger_status != "failed"
             if status_changed:
@@ -2401,6 +2646,23 @@ def _create_schedule_node(
 
 def _request_assignment_dispatch(root: Path, ticket_id: str) -> dict[str, str]:
     return _schedule_assignment_bridge.request_assignment_dispatch(root, ticket_id)
+
+
+def _replace_pending_schedule_nodes(
+    root: Path,
+    *,
+    schedule_id: str,
+    trigger_instance_ids: list[str] | tuple[str, ...] | set[str],
+    ticket_id: str = "",
+    operator: str = "schedule-worker",
+) -> dict[str, Any]:
+    return _schedule_assignment_bridge.replace_pending_schedule_nodes(
+        root,
+        schedule_id=schedule_id,
+        trigger_instance_ids=trigger_instance_ids,
+        ticket_id=ticket_id,
+        operator=operator,
+    )
 
 
 def _schedule_payload_from_body(cfg: Any, body: dict[str, Any], *, existing: dict[str, Any] | None = None) -> dict[str, Any]:
