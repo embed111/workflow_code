@@ -43,6 +43,87 @@ def _assignment_has_stale_recovery_audit(root: Path, *, ticket_id: str, node_id:
     )
 
 
+def _assignment_parse_iso_timestamp(value: Any) -> Any:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    from datetime import datetime
+
+    normalized = text.replace("Z", "+00:00")
+    try:
+        return datetime.fromisoformat(normalized)
+    except Exception:
+        return None
+
+
+def _assignment_recent_runtime_upgrade_recovery_detail(
+    root: Path,
+    *,
+    ticket_id: str,
+    node_id: str,
+    now_text: str,
+) -> dict[str, Any]:
+    now_dt = _assignment_parse_iso_timestamp(now_text)
+    if now_dt is None:
+        return {}
+    try:
+        from workflow_app.server.services import runtime_upgrade_service
+    except Exception:
+        return {}
+    last_action = dict(runtime_upgrade_service.read_prod_last_action() or {})
+    if str(last_action.get("action") or "").strip().lower() != "upgrade":
+        return {}
+    status = str(last_action.get("status") or "").strip().lower()
+    if status != "success":
+        return {}
+    finished_at_text = str(last_action.get("finished_at") or "").strip()
+    finished_at_dt = _assignment_parse_iso_timestamp(finished_at_text)
+    if finished_at_dt is None:
+        return {}
+    if abs((now_dt - finished_at_dt).total_seconds()) > 180:
+        return {}
+    matched_run: dict[str, Any] = {}
+    for run in _assignment_load_run_records(root, ticket_id=ticket_id, node_id=node_id):
+        run_status = str(run.get("status") or "").strip().lower()
+        if run_status not in {"starting", "running"}:
+            continue
+        started_at_dt = _assignment_parse_iso_timestamp(
+            run.get("started_at") or run.get("created_at") or run.get("updated_at")
+        )
+        if started_at_dt is not None and finished_at_dt < started_at_dt:
+            continue
+        matched_run = dict(run)
+        break
+    if not matched_run:
+        return {}
+    previous_version = str(last_action.get("previous_version") or "").strip()
+    current_version = str(last_action.get("current_version") or last_action.get("candidate_version") or "").strip()
+    if previous_version and current_version and previous_version != current_version:
+        failure_reason = (
+            f"正式环境已从 {previous_version} 升级到 {current_version}，当前批次在升级切换中中断，请在新版本继续。"
+        )
+    elif current_version:
+        failure_reason = f"正式环境已切换到 {current_version}，当前批次在升级切换中中断，请在新版本继续。"
+    else:
+        failure_reason = "检测到正式环境升级切换，当前批次在升级切换中中断，请在新版本继续。"
+    return {
+        "run_id": str(matched_run.get("run_id") or "").strip(),
+        "run_latest_event": "检测到正式环境已完成升级切换，已自动结束当前批次。",
+        "failure_reason": failure_reason,
+        "audit_reason": "recover stale running node after runtime upgrade switch",
+        "audit_detail": {
+            "action": "upgrade",
+            "status": status,
+            "finished_at": finished_at_text,
+            "previous_version": previous_version,
+            "current_version": current_version,
+            "candidate_version": str(last_action.get("candidate_version") or "").strip(),
+            "evidence_path": str(last_action.get("evidence_path") or "").strip(),
+            "run_id": str(matched_run.get("run_id") or "").strip(),
+        },
+    }
+
+
 def _assignment_task_visible(task_record: dict[str, Any], *, include_test_data: bool) -> bool:
     if str(task_record.get("record_state") or "active").strip().lower() == "deleted":
         return False
@@ -524,8 +605,16 @@ def _assignment_reconcile_stale_task_state_internal(
                         changed = True
                         updated_nodes.append(current)
                         continue
+                    runtime_upgrade_recovery = _assignment_recent_runtime_upgrade_recovery_detail(
+                        root,
+                        ticket_id=ticket_id,
+                        node_id=node_id,
+                        now_text=now_text,
+                    )
                     failure_base_text = str(
-                        current.get("failure_reason") or "运行句柄缺失或 workflow 已重启，请手动重跑。"
+                        current.get("failure_reason")
+                        or runtime_upgrade_recovery.get("failure_reason")
+                        or "运行句柄缺失或 workflow 已重启，请手动重跑。"
                     ).strip()
                     preserved_result_ref = str(current.get("result_ref") or "").strip()
                     preserved_result_payload: dict[str, Any] = {}
@@ -577,7 +666,10 @@ def _assignment_reconcile_stale_task_state_internal(
                             preserved_result_ref = run_result_ref
                             preserved_result_payload = run_result_payload
                         run["status"] = "cancelled"
-                        run["latest_event"] = "检测到运行句柄缺失，已自动结束当前批次。"
+                        run["latest_event"] = str(
+                            runtime_upgrade_recovery.get("run_latest_event")
+                            or "检测到运行句柄缺失，已自动结束当前批次。"
+                        ).strip()
                         run["latest_event_at"] = now_text
                         run["finished_at"] = now_text
                         run["updated_at"] = now_text
@@ -632,15 +724,22 @@ def _assignment_reconcile_stale_task_state_internal(
                         now_text=now_text,
                     )
                     if not _assignment_has_stale_recovery_audit(root, ticket_id=ticket_id, node_id=node_id):
+                        audit_detail = {"result_ref": preserved_result_ref}
+                        runtime_upgrade_audit_detail = dict(runtime_upgrade_recovery.get("audit_detail") or {})
+                        if runtime_upgrade_audit_detail:
+                            audit_detail["runtime_upgrade"] = runtime_upgrade_audit_detail
                         _assignment_write_audit_entry(
                             root,
                             ticket_id=ticket_id,
                             node_id=node_id,
                             action="recover_stale_running",
                             operator="assignment-system",
-                            reason="recover stale running node without live execution",
+                            reason=str(
+                                runtime_upgrade_recovery.get("audit_reason")
+                                or "recover stale running node without live execution"
+                            ).strip(),
                             target_status="failed",
-                            detail={"result_ref": preserved_result_ref},
+                            detail=audit_detail,
                             created_at=now_text,
                         )
                         try:

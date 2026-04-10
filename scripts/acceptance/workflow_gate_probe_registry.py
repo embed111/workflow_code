@@ -110,6 +110,11 @@ SCRIPT_PROBE_DEFINITIONS: tuple[ScriptProbeDefinition, ...] = (
         failure_message="assignment stale recovery cleanup and memory probe failed",
     ),
     ScriptProbeDefinition(
+        key="assignment_stale_runtime_upgrade_recovery",
+        relative_path="scripts/acceptance/verify_assignment_stale_runtime_upgrade_recovery.py",
+        failure_message="assignment stale runtime upgrade recovery probe failed",
+    ),
+    ScriptProbeDefinition(
         key="assignment_execution_activity_timeout",
         relative_path="scripts/acceptance/verify_assignment_execution_activity_timeout.py",
         failure_message="assignment execution activity timeout probe failed",
