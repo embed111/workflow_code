@@ -1056,6 +1056,7 @@ def _ensure_self_iter_backup_schedule(
                     f"2. 从 `{SCHEDULE_PM_PERIODIC_LANES_TEXT}` 中判断当前最该推进的泳道；若 active 版本没有可执行任务，立即补 baseline、变更控制或下一条当前版本任务。",
                     "3. 先记录当前根仓同步快照里的 `root_sync_state / ahead_count / dirty_tracked_count / untracked_count / push_block_reason / next_push_batch`。",
                     f"3.1 若快照显示根仓未同步或本地工作区 dirty，就立即读取 `{RELEASE_BOUNDARY_REPORT_PATH}` 并切到发布边界收口模式：先冻结同工作区新增实现，优先恢复小步推根仓节奏。",
+                    "3.2 若看到这是上一轮遗留的 dirty/ahead 历史问题，本轮第一优先级先处理这批历史 release boundary；在收口或明确阻塞原因前，不要基于这批改动继续扩写。",
                     "4. 检查 prod 的 schedules、assignment graph、ready/running 节点、最近 runs 与 `/api/runtime-upgrade/status`。",
                     "5. 若 `can_upgrade=true` 且当前无运行中任务，直接调用 `/api/runtime-upgrade/apply` 完成无痛升级，再继续巡检。",
                     "6. 若主链断开，补一条未来可执行入口或当前版本任务。",
@@ -1069,7 +1070,8 @@ def _ensure_self_iter_backup_schedule(
                     "1. 保底巡检完成后，prod 至少保留一条未来可执行的 workflow 主线入口。",
                     "2. 本次巡检结论明确写出 active 版本、泳道、生命周期阶段与证据。",
                     "3. 本次巡检显式记录了 `root_sync_state / ahead_count / dirty_tracked_count / untracked_count / push_block_reason / next_push_batch`。",
-                    "4. 若主链已断，本轮已经完成补链而不是只留口头说明。",
+                    "4. 若发现这是上一轮遗留的 dirty/ahead 历史问题，本轮已经优先处理这批历史 release boundary，或明确写清阻塞原因。",
+                    "5. 若主链已断，本轮已经完成补链而不是只留口头说明。",
                 ]
             ).strip(),
             "priority": "P1",

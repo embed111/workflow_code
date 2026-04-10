@@ -84,6 +84,7 @@ def _schedule_template_texts(*, expected_artifact: Any, assigned_agent_id: Any) 
                     "2. 检查 prod 当前 schedules、assignment graph、ready/running 节点、最近 runs 与 `/api/runtime-upgrade/status` 真相。",
                     "3. 若 `can_upgrade=true` 且当前无运行中任务，直接调用 `/api/runtime-upgrade/apply` 完成无痛升级，再继续巡检。",
                     f"3.1 {SCHEDULE_SELF_UPGRADE_HINT}",
+                    "3.2 若这是上一轮遗留的 dirty/ahead 历史问题，本轮第一优先级先处理这批历史 release boundary；未收口前不要继续扩同工作区改动面。",
                     "4. 若 [持续迭代] workflow 没有未来入口，立即补一条未来可执行入口或当前版本任务。",
                     "5. 更新 `.codex/memory/...` 时，在 `next` 明确写出下一次主线/保底触发时间。",
                     "6. 输出本次保底巡检结论、证据路径和下一次建议唤醒时间。",
@@ -93,7 +94,8 @@ def _schedule_template_texts(*, expected_artifact: Any, assigned_agent_id: Any) 
                 [
                     "1. prod 至少保留一条未来可执行的 workflow 主线入口。",
                     "2. 本次巡检结论和证据可追溯。",
-                    "3. 若主链已断，本轮已经完成补链而不是只留口头说明。",
+                    "3. 若发现这是上一轮遗留的 dirty/ahead 历史问题，本轮已经优先处理这批历史 release boundary，或明确写清阻塞原因。",
+                    "4. 若主链已断，本轮已经完成补链而不是只留口头说明。",
                 ]
             ).strip(),
         }
@@ -115,20 +117,23 @@ def _schedule_template_texts(*, expected_artifact: Any, assigned_agent_id: Any) 
                     "3. 再检查 healthz、dashboard、assignments、schedules、runs 的真实状态，不要只看前端表象。",
                     "4. 检查 `/api/runtime-upgrade/status`；若 `can_upgrade=true` 且当前无运行中任务，直接调用 `/api/runtime-upgrade/apply` 完成无痛升级，并在重连后继续推进。",
                     f"4.1 {SCHEDULE_SELF_UPGRADE_HINT}",
+                    "4.2 若这是上一轮遗留的 dirty/ahead 历史问题，本轮第一优先级先处理这批历史 release boundary；在收口或明确阻塞原因前，不要基于它继续扩写。",
                     "5. 优先推进当前 active 版本里最高优先级且未完成的工程质量/稳定性任务，不要跳版抢做新功能。",
                     "6. 若当前任务包已完成，先更新版本计划状态，再挑同版本下一个 queued 包；只有当前版本出口门槛满足后才切到下一版本。",
                     "7. 如需多人协作，给 workflow_devmate / workflow_testmate / workflow_qualitymate / workflow_bugmate 创建或续挂对应任务。",
                     "8. 在代码工作区完成最小必要改动并跑命中改动面的验证。",
-                    "9. 更新 `.codex/memory/...` 时，在 `next` 明确写出下一次主线/保底触发时间。",
-                    "10. 输出本轮结论、证据路径，并确保系统已经挂上下一轮可执行任务或唤醒计划。",
+                    "9. 若本轮产生代码改动并完成对应验证，本轮结束前必须从当前工作区执行 `git add / commit / push` 推回 `../workflow_code/main`；不要把已验证 dirty 留给下一轮。",
+                    "10. 更新 `.codex/memory/...` 时，在 `next` 明确写出下一次主线/保底触发时间。",
+                    "11. 输出本轮结论、证据路径，并确保系统已经挂上下一轮可执行任务或唤醒计划。",
                 ]
             ).strip(),
             "done_definition": "\n".join(
                 [
                     f"1. 当前活跃版本对应任务包有可交付结果，且版本计划 `{SCHEDULE_VERSION_PLAN_PATH}` 已同步最新状态。",
                     "2. 本轮附带验证证据，而不是只给方向性描述。",
-                    "3. 如有需要，本轮已经给对应小伙伴挂好下一步任务或交接任务。",
-                    "4. 若本轮没有新的 ready 任务，也必须保证下一次唤醒已经排上，7x24 连续推进不断链。",
+                    "3. 若本轮存在已验证代码改动，本轮结束前已经完成当前工作区 `commit / push / 根仓同步`。",
+                    "4. 如有需要，本轮已经给对应小伙伴挂好下一步任务或交接任务。",
+                    "5. 若本轮没有新的 ready 任务，也必须保证下一次唤醒已经排上，7x24 连续推进不断链。",
                 ]
             ).strip(),
         }

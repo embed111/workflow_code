@@ -252,11 +252,12 @@ def format_release_boundary_prompt_lines(snapshot: dict[str, Any]) -> list[str]:
     changed_preview = str(payload.get("changed_paths_preview") or "").strip()
     batches = list(payload.get("suggested_push_batches") or [])
     batch_text = " | ".join(str(item or "").strip() for item in batches if str(item or "").strip())
+    root_sync_state = str(payload.get("root_sync_state") or "").strip() or "diverged_or_unknown"
     lines = [
         f"发布边界专项方案：{RELEASE_BOUNDARY_REPORT_PATH}",
         (
             "根仓同步快照："
-            f" root_sync_state={str(payload.get('root_sync_state') or '').strip() or 'diverged_or_unknown'}"
+            f" root_sync_state={root_sync_state}"
             f" ; ahead_count={int(payload.get('ahead_count') or 0)}"
             f" ; dirty_tracked_count={int(payload.get('dirty_tracked_count') or 0)}"
             f" ; untracked_count={int(payload.get('untracked_count') or 0)}"
@@ -272,6 +273,14 @@ def format_release_boundary_prompt_lines(snapshot: dict[str, Any]) -> list[str]:
             f" ; push_block_reason: {str(payload.get('push_block_reason') or '').strip() or '-'}"
         ),
     ]
+    if root_sync_state == "clean_synced":
+        lines.append(
+            "发布边界动作: 当前已 clean_synced；若本轮产生代码改动并完成验证，收尾前必须从当前工作区 commit/push 到 `../workflow_code/main`。"
+        )
+    else:
+        lines.append(
+            "发布边界动作: 当前未 clean_synced；若这是上轮留下的 dirty/ahead，本轮第一优先级先处理历史批次，未收口前不要继续扩同工作区改动面。"
+        )
     if batch_text:
         lines.append(f"suggested_push_batches: {batch_text}")
     if changed_preview:
