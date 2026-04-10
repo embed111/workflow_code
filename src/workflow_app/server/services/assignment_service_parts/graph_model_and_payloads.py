@@ -1,4 +1,7 @@
 
+from datetime import datetime, timedelta
+from pathlib import Path
+
 
 ASSIGNMENT_GLOBAL_GRAPH_NAME = "任务中心全局主图"
 ASSIGNMENT_GLOBAL_GRAPH_SOURCE_WORKFLOW = "workflow-ui"
@@ -8,6 +11,7 @@ _ASSIGNMENT_DISPLAY_RE = __import__("re")
 _ASSIGNMENT_DISPLAY_MOJIBAKE_RE = _ASSIGNMENT_DISPLAY_RE.compile(r"(?:Ã.|Â.|å.|ä.|ç.|é.|è.|ê.|î.|ï.|ô.|û.)")
 _ASSIGNMENT_WORKFLOW_MAINLINE_ARTIFACT = "continuous-improvement-report.md"
 _ASSIGNMENT_WORKFLOW_PATROL_ARTIFACT = "workflow-pm-wake-summary"
+_ASSIGNMENT_STALE_ROLE_CREATION_LOCK_MINUTES = 180
 
 
 def _assignment_display_text(raw: Any) -> str:
@@ -78,6 +82,167 @@ def _assignment_is_workflow_patrol_node(node: dict[str, Any]) -> bool:
         expected_artifact == _ASSIGNMENT_WORKFLOW_PATROL_ARTIFACT
         or node_name.startswith("pm持续唤醒 - workflow 主线巡检")
     )
+
+
+def _assignment_parse_iso_datetime(raw: Any) -> datetime | None:
+    text = str(raw or "").strip()
+    if not text:
+        return None
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    try:
+        return datetime.fromisoformat(text)
+    except Exception:
+        return None
+
+
+def _assignment_try_repair_stale_role_creation_lock(
+    conn: sqlite3.Connection,
+    *,
+    agent_id: str,
+    workspace_path: str,
+) -> dict[str, Any]:
+    agent_key = str(agent_id or "").strip()
+    if not agent_key:
+        return {"repaired": False, "reason": "agent_id_missing"}
+    try:
+        row = conn.execute(
+            """
+            SELECT
+                session_id,status,message_processing_status,assignment_ticket_id,
+                created_agent_workspace_path,created_at,updated_at
+            FROM role_creation_sessions
+            WHERE created_agent_id=?
+            ORDER BY updated_at DESC,created_at DESC,session_id DESC
+            LIMIT 1
+            """,
+            (agent_key,),
+        ).fetchone()
+    except Exception:
+        return {"repaired": False, "reason": "role_creation_session_query_failed"}
+    if row is None:
+        return {"repaired": False, "reason": "role_creation_session_missing"}
+
+    session_id = str(row["session_id"] or "").strip()
+    session_status = str(row["status"] or "").strip().lower()
+    processing_status = str(row["message_processing_status"] or "idle").strip().lower() or "idle"
+    if session_status != "creating":
+        return {
+            "repaired": False,
+            "reason": "session_not_creating",
+            "session_id": session_id,
+            "session_status": session_status,
+        }
+    if processing_status in {"pending", "running"}:
+        return {
+            "repaired": False,
+            "reason": "message_processing_active",
+            "session_id": session_id,
+            "message_processing_status": processing_status,
+        }
+
+    stale_from = _assignment_parse_iso_datetime(row["updated_at"] or row["created_at"])
+    now_dt = now_local()
+    if stale_from is None:
+        return {"repaired": False, "reason": "stale_timestamp_missing", "session_id": session_id}
+    if stale_from.tzinfo is None and getattr(now_dt, "tzinfo", None) is not None:
+        stale_from = stale_from.replace(tzinfo=now_dt.tzinfo)
+    elif stale_from.tzinfo is not None and getattr(now_dt, "tzinfo", None) is None:
+        now_dt = now_dt.replace(tzinfo=stale_from.tzinfo)
+    stale_age = now_dt - stale_from
+    stale_minutes = int(stale_age.total_seconds() // 60)
+    if stale_age < timedelta(minutes=_ASSIGNMENT_STALE_ROLE_CREATION_LOCK_MINUTES):
+        return {
+            "repaired": False,
+            "reason": "session_not_stale_enough",
+            "session_id": session_id,
+            "stale_minutes": stale_minutes,
+        }
+
+    try:
+        active_task_count = int(
+            (
+                conn.execute(
+                    """
+                    SELECT COUNT(1) AS cnt
+                    FROM role_creation_task_refs r
+                    INNER JOIN assignment_nodes n
+                      ON n.ticket_id=r.ticket_id AND n.node_id=r.node_id
+                    WHERE r.session_id=?
+                      AND COALESCE(r.relation_state,'active')<>'archived'
+                      AND LOWER(COALESCE(n.status,'pending'))='running'
+                    """,
+                    (session_id,),
+                ).fetchone()
+                or {"cnt": 0}
+            )["cnt"]
+        )
+        unresolved_task_count = int(
+            (
+                conn.execute(
+                    """
+                    SELECT COUNT(1) AS cnt
+                    FROM role_creation_task_refs r
+                    LEFT JOIN assignment_nodes n
+                      ON n.ticket_id=r.ticket_id AND n.node_id=r.node_id
+                    WHERE r.session_id=?
+                      AND COALESCE(r.relation_state,'active')<>'archived'
+                      AND LOWER(COALESCE(n.status,'pending'))<>'succeeded'
+                    """,
+                    (session_id,),
+                ).fetchone()
+                or {"cnt": 0}
+            )["cnt"]
+        )
+    except Exception:
+        return {
+            "repaired": False,
+            "reason": "role_creation_task_state_query_failed",
+            "session_id": session_id,
+        }
+    if active_task_count > 0:
+        return {
+            "repaired": False,
+            "reason": "role_creation_tasks_running",
+            "session_id": session_id,
+            "assignment_running_node_count": active_task_count,
+        }
+
+    workspace_candidates = [
+        str(row["created_agent_workspace_path"] or "").strip(),
+        str(workspace_path or "").strip(),
+    ]
+    workspace_ready = False
+    resolved_workspace = ""
+    for candidate in workspace_candidates:
+        if not candidate:
+            continue
+        try:
+            workspace_dir = Path(candidate).resolve(strict=False)
+        except Exception:
+            continue
+        if workspace_dir.exists() and workspace_dir.is_dir():
+            workspace_ready = True
+            resolved_workspace = workspace_dir.as_posix()
+            break
+    if not workspace_ready:
+        return {"repaired": False, "reason": "workspace_missing", "session_id": session_id}
+
+    now_text = iso_ts(now_dt)
+    conn.execute(
+        "UPDATE agent_registry SET runtime_status='idle',updated_at=? WHERE agent_id=?",
+        (now_text, agent_key),
+    )
+    return {
+        "repaired": True,
+        "session_id": session_id,
+        "session_status": session_status,
+        "message_processing_status": processing_status,
+        "stale_minutes": stale_minutes,
+        "assignment_running_node_count": active_task_count,
+        "unresolved_task_count": unresolved_task_count,
+        "workspace_path": resolved_workspace,
+    }
 
 
 def _node_blocking_reasons(
@@ -360,7 +525,7 @@ def _resolve_assignment_agent(
     source_text = str(source_workflow or "").strip().lower()
     row = conn.execute(
         """
-        SELECT agent_id,agent_name,runtime_status
+        SELECT agent_id,agent_name,runtime_status,workspace_path
         FROM agent_registry
         WHERE agent_id=? OR agent_name=? COLLATE NOCASE
         LIMIT 1
@@ -370,18 +535,27 @@ def _resolve_assignment_agent(
     if row is not None:
         runtime_status = str(row["runtime_status"] or "idle").strip().lower() or "idle"
         if runtime_status == "creating" and source_text != "training-role-creation" and not allow_creating_agent:
-            raise AssignmentCenterError(
-                409,
-                "assigned agent is creating and only available to role creation workflow",
-                "assigned_agent_creating_locked",
-                {
-                    "assigned_agent_id": str(row["agent_id"] or "").strip(),
-                    "assigned_agent_name": str(row["agent_name"] or "").strip(),
-                    "runtime_status": runtime_status,
-                    "allowed_source_workflow": "training-role-creation",
-                    "source_workflow": source_text,
-                },
+            repair_payload = _assignment_try_repair_stale_role_creation_lock(
+                conn,
+                agent_id=str(row["agent_id"] or "").strip(),
+                workspace_path=str(row["workspace_path"] or "").strip(),
             )
+            if bool(repair_payload.get("repaired")):
+                runtime_status = "idle"
+            else:
+                raise AssignmentCenterError(
+                    409,
+                    "assigned agent is creating and only available to role creation workflow",
+                    "assigned_agent_creating_locked",
+                    {
+                        "assigned_agent_id": str(row["agent_id"] or "").strip(),
+                        "assigned_agent_name": str(row["agent_name"] or "").strip(),
+                        "runtime_status": runtime_status,
+                        "allowed_source_workflow": "training-role-creation",
+                        "source_workflow": source_text,
+                        "role_creation_runtime_lock": repair_payload,
+                    },
+                )
         return {
             "agent_id": str(row["agent_id"] or "").strip(),
             "agent_name": str(row["agent_name"] or "").strip(),

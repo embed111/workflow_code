@@ -90,6 +90,11 @@ SCRIPT_PROBE_DEFINITIONS: tuple[ScriptProbeDefinition, ...] = (
         failure_message="assignment workspace memory writeback probe failed",
     ),
     ScriptProbeDefinition(
+        key="assignment_stale_role_creation_lock_repair",
+        relative_path="scripts/acceptance/verify_assignment_stale_role_creation_lock_repair.py",
+        failure_message="assignment stale role creation lock repair probe failed",
+    ),
+    ScriptProbeDefinition(
         key="assignment_normalized_ticket_fast_path",
         relative_path="scripts/acceptance/verify_assignment_normalized_ticket_fast_path.py",
         failure_message="assignment normalized ticket fast path probe failed",
