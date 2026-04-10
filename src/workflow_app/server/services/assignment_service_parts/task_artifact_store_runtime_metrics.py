@@ -1,3 +1,31 @@
+from __future__ import annotations
+
+from datetime import datetime
+from pathlib import Path
+from typing import Any
+
+
+_STANDALONE_SHIM = __name__ != "workflow_app.server.services.assignment_service"
+_RUNTIME_METRIC_SUPPORT_NAMES = (
+    "DEFAULT_ASSIGNMENT_STALE_RUN_GRACE_SECONDS",
+    "_active_assignment_run_ids",
+    "_get_assignment_runtime_metrics_from_files",
+    "_get_assignment_runtime_metrics_from_node_files",
+)
+
+
+def now_local() -> datetime:
+    return datetime.now().astimezone()
+
+
+if _STANDALONE_SHIM:
+    from workflow_app.server.services import assignment_service as _assignment_service_module
+
+    for _name in _RUNTIME_METRIC_SUPPORT_NAMES:
+        if hasattr(_assignment_service_module, _name):
+            globals()[_name] = getattr(_assignment_service_module, _name)
+
+
 def read_assignment_artifact_preview(
     root: Path,
     *,
@@ -6,6 +34,14 @@ def read_assignment_artifact_preview(
     path_index: int = 0,
     include_test_data: bool = True,
 ) -> dict[str, Any]:
+    if _STANDALONE_SHIM:
+        return _assignment_service_module.read_assignment_artifact_preview(
+            root,
+            ticket_id_text=ticket_id_text,
+            node_id_text=node_id_text,
+            path_index=path_index,
+            include_test_data=include_test_data,
+        )
     ticket_id = safe_token(str(ticket_id_text or ""), "", 160)
     node_id = safe_token(str(node_id_text or ""), "", 160)
     if not ticket_id or not node_id:
@@ -72,7 +108,6 @@ def _get_assignment_runtime_metrics_from_node_files(
     running_node_count = 0
     running_agents: set[str] = set()
     canonical_workflow_ui_ticket = _assignment_ensure_workflow_ui_global_graph_ticket(root)
-    ticket_ids = []
     if canonical_workflow_ui_ticket:
         ticket_ids = [canonical_workflow_ui_ticket]
     else:
@@ -126,7 +161,6 @@ def _get_assignment_runtime_metrics_from_files(
     running_node_count = 0
     running_agents: set[str] = set()
     canonical_workflow_ui_ticket = _assignment_ensure_workflow_ui_global_graph_ticket(root)
-    ticket_ids = []
     if canonical_workflow_ui_ticket:
         ticket_ids = [canonical_workflow_ui_ticket]
     else:

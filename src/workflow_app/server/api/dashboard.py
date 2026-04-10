@@ -59,6 +59,26 @@ def _json_load(path: Path) -> dict:
     return payload if isinstance(payload, dict) else {}
 
 
+def _workboard_pending_blocking_reasons(
+    node: dict,
+    *,
+    node_map_by_id: dict[str, dict],
+    upstream_map: dict[str, list[str]],
+) -> list[dict]:
+    node_id = str((node or {}).get("node_id") or "").strip()
+    status = str((node or {}).get("status") or "").strip().lower()
+    if not node_id or status != "pending":
+        return []
+    return list(
+        ws._node_blocking_reasons(
+            node_id,
+            node_map_by_id=node_map_by_id,
+            upstream_map=upstream_map,
+        )
+        or []
+    )
+
+
 def _running_agent_count_from_workboard(workboard: dict) -> int:
     return sum(
         1
@@ -378,11 +398,28 @@ def _workboard_payload(cfg, *, include_test_data: bool) -> dict:
                 if str(node.get("record_state") or "active").strip().lower() == "deleted":
                     continue
                 raw_nodes.append(node)
-            for node in ws._assignment_project_live_run_status_for_nodes(
-                cfg.root,
-                ticket_id=str(target_task_dir.name or "").strip(),
-                node_records=raw_nodes,
-            ):
+            projected_nodes = list(
+                ws._assignment_project_live_run_status_for_nodes(
+                    cfg.root,
+                    ticket_id=str(target_task_dir.name or "").strip(),
+                    node_records=raw_nodes,
+                )
+            )
+            node_map_by_id = {
+                str(item.get("node_id") or "").strip(): item
+                for item in projected_nodes
+                if str(item.get("node_id") or "").strip()
+            }
+            upstream_map = {
+                str(item.get("node_id") or "").strip(): [
+                    str(upstream_id or "").strip()
+                    for upstream_id in list(item.get("upstream_node_ids") or [])
+                    if str(upstream_id or "").strip()
+                ]
+                for item in projected_nodes
+                if str(item.get("node_id") or "").strip()
+            }
+            for node in projected_nodes:
                 status = str(node.get("status") or "").strip().lower()
                 if status not in {"running", "ready", "pending", "failed", "blocked"}:
                     continue
@@ -410,6 +447,12 @@ def _workboard_payload(cfg, *, include_test_data: bool) -> dict:
                             node_id=node_id,
                         )
                         run_snapshot_cache[cache_key] = run_snapshot
+                pending_blocking_reasons = _workboard_pending_blocking_reasons(
+                    node,
+                    node_map_by_id=node_map_by_id,
+                    upstream_map=upstream_map,
+                )
+                waiting_upstream = bool(pending_blocking_reasons)
                 item = {
                     "node_id": node_id,
                     "node_name": ws._assignment_display_node_name(
@@ -417,20 +460,22 @@ def _workboard_payload(cfg, *, include_test_data: bool) -> dict:
                         fallback=node_id,
                     ),
                     "status": status,
-                    "status_text": str(node.get("status_text") or "").strip(),
+                    "status_text": "等待上游" if waiting_upstream else str(node.get("status_text") or "").strip(),
                     "priority_label": str(node.get("priority_label") or node.get("priority") or "").strip(),
                     "planned_trigger_at": str(node.get("planned_trigger_at") or "").strip(),
                     "created_at": str(node.get("created_at") or "").strip(),
                     "updated_at": str(node.get("updated_at") or "").strip(),
                     "is_workflow_mainline": bool(ws._assignment_is_workflow_mainline_node(node)),
                     "is_workflow_patrol": bool(ws._assignment_is_workflow_patrol_node(node)),
+                    "waiting_upstream": waiting_upstream,
+                    "blocking_reasons": pending_blocking_reasons,
                     **run_snapshot,
                 }
                 if status == "running":
                     groups[key]["running"].append(item)
                 elif status == "failed":
                     groups[key]["failed"].append(item)
-                elif status == "blocked":
+                elif status == "blocked" or waiting_upstream:
                     groups[key]["blocked"].append(item)
                 else:
                     groups[key]["queued"].append(item)
