@@ -2,7 +2,13 @@
 
 # NOTE: legacy full-route implementation extracted from workflow_web_server.py
 # Keep behavior-compatible while routing is being modularized.
+from pathlib import Path
+
 from ..bootstrap.web_server_runtime import *  # noqa: F401,F403
+from ..services.pm_version_status_service import (
+    build_pm_version_truth_payload,
+    load_pm_version_status,
+)
 
 
 def handle_get_legacy(self, cfg, state) -> None:
@@ -123,14 +129,26 @@ def handle_get_legacy(self, cfg, state) -> None:
             ab = ab_status(cfg)
         else:
             ab = {"active_version": "disabled", "active_slot": "disabled"}
+        pm_version_status = load_pm_version_status(Path(cfg.root))
+        truth_payload = build_pm_version_truth_payload(
+            reported_active_version=ab.get("active_version"),
+            reported_active_slot=ab.get("active_slot"),
+            plan_status=pm_version_status,
+        )
         self.send_json(
             200,
             {
                 "ok": True,
                 "pending_analysis": pa,
                 "pending_training": pt,
-                "active_version": ab["active_version"],
-                "active_slot": ab["active_slot"],
+                "active_version": truth_payload["active_version"],
+                "active_slot": truth_payload["active_slot"],
+                "active_version_source": truth_payload["active_version_source"],
+                "runtime_active_version": truth_payload["runtime_active_version"],
+                "runtime_active_slot": truth_payload["runtime_active_slot"],
+                "truth_mismatch_count": truth_payload["truth_mismatch_count"],
+                "truth_mismatch_items": truth_payload["truth_mismatch_items"],
+                "pm_version_status": truth_payload["pm_version_status"],
                 "available_agents": len(list_available_agents(cfg)) if root_ready else 0,
                 "show_test_data": bool(include_test_data),
                 "agent_search_root": root_text,

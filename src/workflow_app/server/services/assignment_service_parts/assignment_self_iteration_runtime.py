@@ -4,6 +4,10 @@ from workflow_app.server.services.release_boundary_service import (
     RELEASE_BOUNDARY_REPORT_PATH,
     collect_release_boundary_snapshot,
 )
+from workflow_app.server.services.pm_version_status_service import (
+    format_pm_version_prompt_lines,
+    load_pm_version_status,
+)
 
 ASSIGNMENT_SELF_ITERATION_AGENT_IDS = {"workflow"}
 ASSIGNMENT_SELF_ITERATION_SCHEDULE_PREFIX = "[持续迭代]"
@@ -78,6 +82,12 @@ def _assignment_release_boundary_compact_lines(*, root: Path | None = None) -> l
     ]
 
 
+def _assignment_pm_version_compact_lines(*, root: Path | None = None) -> list[str]:
+    if root is None:
+        return []
+    return format_pm_version_prompt_lines(load_pm_version_status(root))
+
+
 def _assignment_self_iteration_schedule_payload(
     *,
     root: Path | None = None,
@@ -92,6 +102,7 @@ def _assignment_self_iteration_schedule_payload(
     version_plan_path = ASSIGNMENT_SELF_ITERATION_VERSION_PLAN_PATH
     wake_requirement_path = ASSIGNMENT_SELF_ITERATION_WAKE_REQUIREMENT_PATH
     release_boundary_lines = _assignment_release_boundary_compact_lines(root=root)
+    pm_version_lines = _assignment_pm_version_compact_lines(root=root)
     return {
         "schedule_name": _assignment_self_iteration_schedule_name(agent_id),
         "enabled": True,
@@ -103,6 +114,7 @@ def _assignment_self_iteration_schedule_payload(
                 f"版本计划：{version_plan_path}",
                 f"持续唤醒需求：{wake_requirement_path}",
                 f"周期性工作泳道：{ASSIGNMENT_SELF_ITERATION_PERIODIC_LANES_TEXT}",
+                *pm_version_lines,
                 *release_boundary_lines,
                 f"上一轮 ticket: {ticket_id}",
                 f"上一轮 node: {node_id}",
@@ -244,6 +256,7 @@ def _assignment_pm_wake_schedule_payload(
     version_plan_path = ASSIGNMENT_SELF_ITERATION_VERSION_PLAN_PATH
     wake_requirement_path = ASSIGNMENT_SELF_ITERATION_WAKE_REQUIREMENT_PATH
     release_boundary_lines = _assignment_release_boundary_compact_lines(root=root)
+    pm_version_lines = _assignment_pm_version_compact_lines(root=root)
     return {
         "schedule_name": _assignment_pm_wake_schedule_name(agent_id),
         "enabled": True,
@@ -255,6 +268,7 @@ def _assignment_pm_wake_schedule_payload(
                 f"先读版本计划：{version_plan_path}",
                 f"再对照持续唤醒需求：{wake_requirement_path}",
                 f"周期性工作泳道：{ASSIGNMENT_SELF_ITERATION_PERIODIC_LANES_TEXT}",
+                *pm_version_lines,
                 *release_boundary_lines,
                 f"最近上下文: {summary_text}",
             ]

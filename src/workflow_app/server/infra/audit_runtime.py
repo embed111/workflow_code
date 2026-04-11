@@ -17,6 +17,10 @@ from ..services.work_record_store import (
     record_ingress_request,
     sync_analysis_records_from_sessions,
 )
+from ..services.pm_version_status_service import (
+    build_pm_version_truth_payload,
+    load_pm_version_status,
+)
 
 def bind_runtime_symbols(symbols: dict[str, object]) -> None:
     globals().update(symbols)
@@ -669,6 +673,12 @@ def dashboard(cfg: AppConfig, *, include_test_data: bool = True) -> dict[str, An
             "active_version": "disabled",
             "standby_version": "disabled",
         }
+    pm_version_status = load_pm_version_status(Path(cfg.root))
+    truth_payload = build_pm_version_truth_payload(
+        reported_active_version=ab.get("active_version"),
+        reported_active_slot=ab.get("active_slot"),
+        plan_status=pm_version_status,
+    )
     agents = list_available_agents(cfg) if root_ready else []
     closure_stats = policy_closure_stats(cfg.root)
     return {
@@ -678,9 +688,15 @@ def dashboard(cfg: AppConfig, *, include_test_data: bool = True) -> dict[str, An
         "pending_training": pt,
         "latest_decision": ld,
         "latest_training": lt,
-        "active_slot": ab["active_slot"],
+        "active_slot": truth_payload["active_slot"],
         "standby_slot": ab["standby_slot"],
-        "active_version": ab["active_version"],
+        "active_version": truth_payload["active_version"],
+        "active_version_source": truth_payload["active_version_source"],
+        "runtime_active_version": truth_payload["runtime_active_version"],
+        "runtime_active_slot": truth_payload["runtime_active_slot"],
+        "truth_mismatch_count": truth_payload["truth_mismatch_count"],
+        "truth_mismatch_items": truth_payload["truth_mismatch_items"],
+        "pm_version_status": truth_payload["pm_version_status"],
         "standby_version": ab["standby_version"],
         "available_agents": len(agents),
         "ab_enabled": AB_FEATURE_ENABLED,

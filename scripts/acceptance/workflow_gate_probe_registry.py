@@ -197,6 +197,11 @@ SCRIPT_PROBE_DEFINITIONS: tuple[ScriptProbeDefinition, ...] = (
         failure_message="dashboard active agent count probe failed",
     ),
     ScriptProbeDefinition(
+        key="pm_version_truth_source",
+        relative_path="scripts/acceptance/verify_pm_version_truth_source.py",
+        failure_message="pm version truth source probe failed",
+    ),
+    ScriptProbeDefinition(
         key="dashboard_pending_upstream_blockers",
         relative_path="scripts/acceptance/verify_dashboard_pending_upstream_blockers.py",
         failure_message="dashboard pending upstream blockers probe failed",

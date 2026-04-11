@@ -17,6 +17,10 @@ from .release_boundary_service import (
     collect_release_boundary_snapshot,
     format_release_boundary_prompt_lines,
 )
+from .pm_version_status_service import (
+    format_pm_version_prompt_lines,
+    load_pm_version_status,
+)
 from . import schedule_assignment_bridge as _schedule_assignment_bridge
 from .schedule_text_repair import (
     SCHEDULE_TEXT_FIELDS,
@@ -112,6 +116,10 @@ SCHEDULE_PM_LIFECYCLE_TEXT = (
 )
 SCHEDULE_PM_TEAMMATES_TEXT = (
     "workflow_devmate / workflow_testmate / workflow_qualitymate / workflow_bugmate"
+)
+SCHEDULE_SELF_UPGRADE_HINT = (
+    "正式升级改由 `prod` supervisor 托管的 idle watcher 周期检查并发起；"
+    "当前主线/巡检节点不要再通过自排除方式自己触发 `/api/runtime-upgrade/apply`。"
 )
 SCHEDULE_SELF_ITER_GUARD_DEFAULTS: dict[str, Any] = {
     "enabled": True,
@@ -1246,6 +1254,7 @@ def _ensure_self_iter_backup_schedule(
         backup_name = "pm持续唤醒 - workflow 主线巡检" if agent_id.lower() == "workflow" else f"pm持续唤醒 - {agent_id} 主线巡检"
         release_boundary = collect_release_boundary_snapshot(runtime_root=cfg.root)
         release_boundary_lines = format_release_boundary_prompt_lines(release_boundary)
+        pm_version_lines = format_pm_version_prompt_lines(load_pm_version_status(Path(cfg.root)))
         try:
             backup_dt = _parse_datetime_token(planned_trigger_at, field="planned_trigger_at") + timedelta(minutes=30)
         except Exception:
@@ -1284,6 +1293,7 @@ def _ensure_self_iter_backup_schedule(
                     f"先读版本计划：{SCHEDULE_PM_VERSION_PLAN_PATH}",
                     f"再对照持续唤醒需求：{SCHEDULE_PM_WAKE_REQUIREMENT_PATH}",
                     f"周期性工作泳道：{SCHEDULE_PM_PERIODIC_LANES_TEXT}",
+                    *pm_version_lines,
                     *release_boundary_lines,
                     f"最近阻塞: {summary}",
                 ]
@@ -1296,7 +1306,8 @@ def _ensure_self_iter_backup_schedule(
                     f"3.1 若快照显示根仓未同步或本地工作区 dirty，就立即读取 `{RELEASE_BOUNDARY_REPORT_PATH}` 并切到发布边界收口模式：先冻结同工作区新增实现，优先恢复小步推根仓节奏。",
                     "3.2 若看到这是上一轮遗留的 dirty/ahead 历史问题，本轮第一优先级先处理这批历史 release boundary；在收口或明确阻塞原因前，不要基于这批改动继续扩写。",
                     "4. 检查 prod 的 schedules、assignment graph、ready/running 节点、最近 runs 与 `/api/runtime-upgrade/status`。",
-                    "5. 若 `can_upgrade=true` 且当前无运行中任务，直接调用 `/api/runtime-upgrade/apply` 完成无痛升级，再继续巡检。",
+                    "5. 继续检查 `/api/runtime-upgrade/status` 作为升级门禁真相；正式升级申请改由 `prod` supervisor 托管的 idle watcher 周期检查并发起，当前巡检节点不要自己调用 `/api/runtime-upgrade/apply`。",
+                    f"5.1 {SCHEDULE_SELF_UPGRADE_HINT}",
                     "6. 若主链断开，补一条未来可执行入口或当前版本任务。",
                     f"7. 若测试/质量/开发/缺陷修复泳道缺少执行者，给 {SCHEDULE_PM_TEAMMATES_TEXT} 创建或续挂任务。",
                     "8. 更新 `.codex/memory/...` 时，在 `next` 明确写出下一次主线/保底触发时间，同时标注本轮泳道与生命周期阶段。",

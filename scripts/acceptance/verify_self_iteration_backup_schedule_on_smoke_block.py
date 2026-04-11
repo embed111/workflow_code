@@ -97,6 +97,7 @@ def main() -> int:
         assert bool(str(backup_items[0].get("next_trigger_at") or "").strip()), backup_items[0]
         assert str(backup_items[0].get("assigned_agent_id") or "").strip() == "workflow", backup_items[0]
         assert "docs/workflow/governance/PM版本推进计划.md" in str(backup_schedule.get("launch_summary") or ""), backup_schedule
+        assert "当前版本快照：" in str(backup_schedule.get("launch_summary") or ""), backup_schedule
         assert "docs/workflow/reports/7x24发布边界收口方案-20260409.md" in str(backup_schedule.get("launch_summary") or ""), backup_schedule
         assert "root_sync_state=" in str(backup_schedule.get("launch_summary") or ""), backup_schedule
         assert "UCD/设计优化" in str(backup_schedule.get("launch_summary") or ""), backup_schedule
@@ -107,6 +108,8 @@ def main() -> int:
         assert "workflow_devmate / workflow_testmate / workflow_qualitymate / workflow_bugmate" in str(
             backup_schedule.get("execution_checklist") or ""
         ), backup_schedule
+        assert "idle watcher" in str(backup_schedule.get("execution_checklist") or ""), backup_schedule
+        assert "不要自己调用" in str(backup_schedule.get("execution_checklist") or ""), backup_schedule
         assert "active 版本、泳道、生命周期阶段" in str(backup_schedule.get("done_definition") or ""), backup_schedule
         assert "root_sync_state / ahead_count / dirty_tracked_count / untracked_count / push_block_reason / next_push_batch" in str(
             backup_schedule.get("done_definition") or ""

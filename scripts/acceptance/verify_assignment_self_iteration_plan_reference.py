@@ -15,6 +15,7 @@ def main() -> int:
     from workflow_app.server.services import assignment_service, schedule_service
 
     payload = assignment_service._assignment_self_iteration_schedule_payload(
+        root=workspace_root,
         agent_id="workflow",
         ticket_id="asg-test-version-plan",
         node_id="node-test-version-plan",
@@ -23,6 +24,7 @@ def main() -> int:
         priority="P1",
     )
     pm_wake_payload = assignment_service._assignment_pm_wake_schedule_payload(
+        root=workspace_root,
         agent_id="workflow",
         result_summary="上一轮发现主链需要继续补链。",
         next_trigger_at="2026-04-06T13:00:00+08:00",
@@ -37,6 +39,7 @@ def main() -> int:
 
     assert "docs/workflow/governance/PM版本推进计划.md" in launch_summary, payload
     assert "docs/workflow/requirements/需求详情-pm持续唤醒与清醒维持.md" in launch_summary, payload
+    assert "当前版本快照：" in launch_summary, payload
     assert "docs/workflow/reports/7x24发布边界收口方案-20260409.md" in launch_summary, payload
     assert "root_sync_state=" in launch_summary, payload
     assert "next_push_batch:" in launch_summary, payload
@@ -67,6 +70,7 @@ def main() -> int:
 
     assert "docs/workflow/governance/PM版本推进计划.md" in pm_wake_launch_summary, pm_wake_payload
     assert "docs/workflow/requirements/需求详情-pm持续唤醒与清醒维持.md" in pm_wake_launch_summary, pm_wake_payload
+    assert "当前版本快照：" in pm_wake_launch_summary, pm_wake_payload
     assert "docs/workflow/reports/7x24发布边界收口方案-20260409.md" in pm_wake_launch_summary, pm_wake_payload
     assert "root_sync_state=" in pm_wake_launch_summary, pm_wake_payload
     assert "UCD/设计优化" in pm_wake_launch_summary, pm_wake_payload
