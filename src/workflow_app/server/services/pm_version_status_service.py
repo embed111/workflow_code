@@ -7,10 +7,19 @@ from typing import Any
 
 PM_VERSION_PLAN_RELATIVE_PATH = Path("docs") / "workflow" / "governance" / "PM版本推进计划.md"
 
+_CURRENT_SNAPSHOT_SECTION_RE = re.compile(r"### 4\.6\.1 当前现场更新(.*?)(?:\n### |\Z)", re.DOTALL)
+_CURRENT_ACTIVE_VERSION_RE = re.compile(r"^\s*\d+\.\s*active\s*版本(?:仍是|为)?\s*`([^`]+)`", re.IGNORECASE | re.MULTILINE)
+_CURRENT_LANE_RE = re.compile(r"^\s*\d+\.\s*当前最高价值泳道(?:为)?\s*`([^`]+)`", re.MULTILINE)
+_CURRENT_LIFECYCLE_STAGE_RE = re.compile(r"^\s*\d+\.\s*生命周期阶段(?:为)?\s*`([^`]+)`", re.MULTILINE)
+_CURRENT_BASELINE_RE = re.compile(
+    r"^\s*\d+\.\s*baseline\s*(?:继续沿用|为|已切到)?\s*`([^`]+)`",
+    re.IGNORECASE | re.MULTILINE,
+)
+_CURRENT_SNAPSHOT_AT_RE = re.compile(r"^\s*\d+\.\s*最新有效快照截至\s*`([^`]+)`", re.MULTILINE)
 _ACTIVE_VERSION_RE = re.compile(r"active\s*版本(?:仍是|为)?\s*`([^`]+)`", re.IGNORECASE)
 _LANE_RE = re.compile(r"当前最高价值泳道(?:为)?\s*`([^`]+)`")
 _LIFECYCLE_STAGE_RE = re.compile(r"生命周期阶段(?:为)?\s*`([^`]+)`")
-_BASELINE_RE = re.compile(r"baseline\s*(?:继续沿用|为)?\s*`([^`]+)`", re.IGNORECASE)
+_BASELINE_RE = re.compile(r"(?:baseline=|baseline\s+(?:继续沿用|为|已切到))\s*`([^`]+)`", re.IGNORECASE)
 _SNAPSHOT_AT_RE = re.compile(r"最新有效快照截至\s*`([^`]+)`")
 _ACTIVE_TABLE_RE = re.compile(r"^\|\s*`([^`]+)`[^|]*\|\s*`active`\s*\|", re.MULTILINE)
 
@@ -45,6 +54,11 @@ def _match_text(pattern: re.Pattern[str], text: str) -> str:
     return str(matched.group(1) or "").strip() if matched else ""
 
 
+def _current_snapshot_section(text: str) -> str:
+    matched = _CURRENT_SNAPSHOT_SECTION_RE.search(str(text or ""))
+    return str(matched.group(1) or "") if matched else ""
+
+
 def load_pm_version_status(root: Path | None = None) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "ok": False,
@@ -64,11 +78,20 @@ def load_pm_version_status(root: Path | None = None) -> dict[str, Any]:
         text = plan_path.read_text(encoding="utf-8")
     except Exception:
         return payload
-    active_version = _match_text(_ACTIVE_VERSION_RE, text) or _match_text(_ACTIVE_TABLE_RE, text)
-    lane = _match_text(_LANE_RE, text)
-    lifecycle_stage = _match_text(_LIFECYCLE_STAGE_RE, text)
-    baseline = _match_text(_BASELINE_RE, text)
-    snapshot_updated_at = _match_text(_SNAPSHOT_AT_RE, text)
+    current_snapshot = _current_snapshot_section(text)
+    active_version = (
+        _match_text(_CURRENT_ACTIVE_VERSION_RE, current_snapshot)
+        or _match_text(_ACTIVE_VERSION_RE, text)
+        or _match_text(_ACTIVE_TABLE_RE, text)
+    )
+    lane = _match_text(_CURRENT_LANE_RE, current_snapshot) or _match_text(_LANE_RE, text)
+    lifecycle_stage = _match_text(_CURRENT_LIFECYCLE_STAGE_RE, current_snapshot) or _match_text(
+        _LIFECYCLE_STAGE_RE, text
+    )
+    baseline = _match_text(_CURRENT_BASELINE_RE, current_snapshot) or _match_text(_BASELINE_RE, text)
+    snapshot_updated_at = _match_text(_CURRENT_SNAPSHOT_AT_RE, current_snapshot) or _match_text(
+        _SNAPSHOT_AT_RE, text
+    )
     payload.update(
         {
             "ok": bool(active_version or lane or lifecycle_stage or baseline),

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import re
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -18,6 +19,18 @@ class _CaptureHandler:
         self.payload = dict(payload or {})
 
 
+def _expected_current_snapshot_baseline(plan_text: str) -> str:
+    section_match = re.search(r"### 4\.6\.1 当前现场更新(.*?)(?:\n### |\Z)", str(plan_text or ""), re.DOTALL)
+    assert section_match, "current snapshot section missing"
+    baseline_match = re.search(
+        r"^\s*\d+\.\s*baseline\s*(?:继续沿用|为|已切到)?\s*`([^`]+)`",
+        section_match.group(1),
+        re.IGNORECASE | re.MULTILINE,
+    )
+    assert baseline_match, "current snapshot baseline missing"
+    return str(baseline_match.group(1) or "").strip()
+
+
 def main() -> int:
     workspace_root = Path(__file__).resolve().parents[2]
     src_root = workspace_root / "src"
@@ -30,14 +43,20 @@ def main() -> int:
         build_pm_version_truth_payload,
         format_pm_version_prompt_lines,
         load_pm_version_status,
+        resolve_pm_version_plan_path,
     )
 
+    plan_path = resolve_pm_version_plan_path(workspace_root)
+    assert isinstance(plan_path, Path), "pm version plan path missing"
+    plan_text = plan_path.read_text(encoding="utf-8")
+    expected_baseline = _expected_current_snapshot_baseline(plan_text)
     plan_status = load_pm_version_status(workspace_root)
     assert plan_status.get("ok"), plan_status
     assert str(plan_status.get("active_version") or "").strip(), plan_status
     assert str(plan_status.get("lane") or "").strip(), plan_status
     assert str(plan_status.get("lifecycle_stage") or "").strip(), plan_status
     assert str(plan_status.get("baseline") or "").strip(), plan_status
+    assert plan_status["baseline"] == expected_baseline, plan_status
     assert str(plan_status.get("source_path") or "").strip().endswith(
         "docs/workflow/governance/PM版本推进计划.md"
     ), plan_status
@@ -46,6 +65,7 @@ def main() -> int:
     prompt_text = "\n".join(prompt_lines)
     assert "当前版本快照：" in prompt_text, prompt_text
     assert f"active_version={plan_status['active_version']}" in prompt_text, prompt_text
+    assert f"baseline={expected_baseline}" in prompt_text, prompt_text
 
     truth_payload = build_pm_version_truth_payload(
         reported_active_version="disabled",
