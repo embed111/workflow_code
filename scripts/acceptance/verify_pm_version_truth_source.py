@@ -72,8 +72,10 @@ def main() -> int:
         plan_status=plan_status,
     )
     assert truth_payload["active_version"] == plan_status["active_version"], truth_payload
+    assert truth_payload["active_slot"] == "pm-plan", truth_payload
     assert truth_payload["active_version_source"] == "pm_version_plan", truth_payload
-    assert int(truth_payload["truth_mismatch_count"] or 0) == 1, truth_payload
+    assert truth_payload["runtime_active_version"] == "disabled", truth_payload
+    assert int(truth_payload["truth_mismatch_count"] or 0) == 0, truth_payload
 
     cfg = SimpleNamespace(root=workspace_root, agent_search_root=workspace_root.as_posix())
     handler = _CaptureHandler()
@@ -105,8 +107,9 @@ def main() -> int:
     assert ok, "dashboard status route not handled"
     assert handler.status_code == 200, handler.payload
     assert handler.payload.get("active_version") == plan_status["active_version"], handler.payload
+    assert handler.payload.get("active_slot") == "pm-plan", handler.payload
     assert handler.payload.get("active_version_source") == "pm_version_plan", handler.payload
-    assert int(handler.payload.get("truth_mismatch_count") or 0) == 1, handler.payload
+    assert int(handler.payload.get("truth_mismatch_count") or 0) == 0, handler.payload
     assert dict(handler.payload.get("pm_version_status") or {}).get("active_version") == plan_status["active_version"], handler.payload
 
     with (
@@ -120,8 +123,9 @@ def main() -> int:
     ):
         dashboard_payload = audit_runtime.dashboard(cfg, include_test_data=False)
     assert dashboard_payload["active_version"] == plan_status["active_version"], dashboard_payload
+    assert dashboard_payload["active_slot"] == "pm-plan", dashboard_payload
     assert dashboard_payload["active_version_source"] == "pm_version_plan", dashboard_payload
-    assert int(dashboard_payload["truth_mismatch_count"] or 0) == 1, dashboard_payload
+    assert int(dashboard_payload["truth_mismatch_count"] or 0) == 0, dashboard_payload
     assert dict(dashboard_payload.get("pm_version_status") or {}).get("baseline") == plan_status["baseline"], dashboard_payload
 
     print(

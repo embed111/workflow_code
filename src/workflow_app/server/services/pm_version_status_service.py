@@ -191,6 +191,10 @@ def build_pm_version_truth_payload(
     plan_active_version = str(plan_payload.get("active_version") or "").strip()
     runtime_active_version = str(reported_active_version or "").strip()
     runtime_active_slot = str(reported_active_slot or "").strip()
+    if runtime_active_version.lower() in {"", "disabled", "ab_disabled", "none", "n/a"}:
+        runtime_active_version = ""
+    if runtime_active_slot.lower() in {"", "disabled", "ab_disabled", "none", "n/a"}:
+        runtime_active_slot = ""
     active_version = plan_active_version or runtime_active_version or "disabled"
     active_slot = runtime_active_slot or ("pm-plan" if plan_active_version else "disabled")
     source = "pm_version_plan" if plan_active_version else "runtime_ab_status"
