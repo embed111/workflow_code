@@ -273,7 +273,7 @@ if ($runningProcess) {
     $runningState = Test-RunningProcessMatchesDescriptor -Descriptor $descriptor -Process $runningProcess
     if (-not [bool]$runningState.match) {
         if ($listeningProcess) {
-            throw "环境 $Environment 当前端口 $($descriptor.port) 仍有监听进程（PID=$($listeningProcess.Id)），同时实例状态不一致：$($runningState.reason)。请先停止后再部署。"
+            throw "环境 $Environment 当前端口 $($descriptor.port) 仍有监听进程（PID=$($listeningProcess.Id)），同时实例状态不一致：$($runningState.reason)。请先执行 scripts/stop_workflow_env.ps1 -Environment $Environment 停止该环境后再部署。"
         }
         Write-Host "[workflow-deploy] clear stale $Environment instance state: $($runningState.reason) (PID=$($runningProcess.Id))"
         Clear-StaleEnvironmentInstanceState -Descriptor $descriptor
@@ -286,10 +286,10 @@ if ($runningProcess) {
     }
 }
 if (-not $runningProcess -and $listeningProcess) {
-    throw "环境 $Environment 当前端口 $($descriptor.port) 已被占用（PID=$($listeningProcess.Id)），请先停止后再部署。"
+    throw "环境 $Environment 当前端口 $($descriptor.port) 已被占用（PID=$($listeningProcess.Id)），请先执行 scripts/stop_workflow_env.ps1 -Environment $Environment 停止该环境后再部署。"
 }
 if ($runningProcess) {
-    throw "环境 $Environment 当前正在运行（PID=$($runningProcess.Id)），请先停止后再部署。"
+    throw "环境 $Environment 当前正在运行（PID=$($runningProcess.Id)），请先执行 scripts/stop_workflow_env.ps1 -Environment $Environment 停止该环境后再部署。"
 }
 
 $version = New-VersionId
