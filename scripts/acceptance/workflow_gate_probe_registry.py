@@ -35,6 +35,11 @@ SCRIPT_PROBE_DEFINITIONS: tuple[ScriptProbeDefinition, ...] = (
         failure_message="runtime upgrade self exclusion probe failed",
     ),
     ScriptProbeDefinition(
+        key="runtime_upgrade_dispatch_drain",
+        relative_path="scripts/acceptance/verify_runtime_upgrade_dispatch_drain.py",
+        failure_message="runtime upgrade dispatch drain probe failed",
+    ),
+    ScriptProbeDefinition(
         key="assignment_self_upgrade_loopback",
         relative_path="scripts/acceptance/verify_assignment_self_upgrade_loopback.py",
         failure_message="assignment self upgrade loopback probe failed",
@@ -88,6 +93,11 @@ SCRIPT_PROBE_DEFINITIONS: tuple[ScriptProbeDefinition, ...] = (
         key="schedule_pending_trigger_replaced_by_newer",
         relative_path="scripts/acceptance/verify_schedule_pending_trigger_replaced_by_newer.py",
         failure_message="schedule pending trigger replacement probe failed",
+    ),
+    ScriptProbeDefinition(
+        key="schedule_upgrade_drain_recovery",
+        relative_path="scripts/acceptance/verify_schedule_upgrade_drain_recovery.py",
+        failure_message="schedule upgrade drain recovery probe failed",
     ),
     ScriptProbeDefinition(
         key="assignment_transient_retry",

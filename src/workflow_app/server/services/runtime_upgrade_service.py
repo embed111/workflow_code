@@ -594,6 +594,34 @@ def build_runtime_upgrade_highlights(snapshot: dict[str, Any]) -> list[str]:
     return ["正式环境已切换到新版本，本次包含若干体验与稳定性更新。"]
 
 
+def runtime_upgrade_drain_state(snapshot: dict[str, Any] | None = None) -> dict[str, Any]:
+    current = dict(snapshot or runtime_snapshot())
+    environment = str(current.get("environment") or "").strip().lower()
+    candidate = dict(current.get("candidate") or {})
+    request = dict(current.get("upgrade_request") or {})
+    state = {
+        "active": False,
+        "code": "",
+        "reason": "",
+        "environment": environment,
+        "current_version": str(current.get("current_version") or "").strip(),
+        "candidate_version": str(candidate.get("version") or "").strip(),
+        "request_pending": bool(request and str(request.get("candidate_version") or "").strip()),
+    }
+    if environment != "prod":
+        return state
+    if bool(state["request_pending"]):
+        state["active"] = True
+        state["code"] = "upgrade_request_pending"
+        state["reason"] = "正式升级请求已挂起，冻结新派发等待切版完成。"
+        return state
+    if candidate_is_newer(current):
+        state["active"] = True
+        state["code"] = "candidate_newer_pending_idle_window"
+        state["reason"] = "已存在更高 prod candidate，冻结新派发为 idle watcher 创造升级空窗。"
+    return state
+
+
 def build_runtime_upgrade_status(
     snapshot: dict[str, Any],
     *,
@@ -605,6 +633,7 @@ def build_runtime_upgrade_status(
     request = dict(snapshot.get("upgrade_request") or {})
     environment = str(snapshot.get("environment") or "source")
     is_prod = environment == "prod"
+    drain_state = runtime_upgrade_drain_state(snapshot)
     blocker = ""
     blocker_code = ""
     request_pending = bool(request and str(request.get("candidate_version") or "").strip())
@@ -636,6 +665,9 @@ def build_runtime_upgrade_status(
         "request_pending": request_pending,
         "request_candidate_version": str(request.get("candidate_version") or ""),
         "request_requested_at": str(request.get("requested_at") or ""),
+        "drain_active": bool(drain_state.get("active")),
+        "drain_reason": str(drain_state.get("reason") or ""),
+        "drain_reason_code": str(drain_state.get("code") or ""),
         "running_task_count": max(0, int(running_task_count)),
         "agent_call_count": max(0, int(agent_call_count)),
         "blocking_reason": blocker,

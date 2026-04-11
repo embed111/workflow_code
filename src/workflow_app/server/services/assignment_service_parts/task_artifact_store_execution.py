@@ -147,6 +147,34 @@ def _assignment_dispatch_snapshot(
     }
 
 
+def _assignment_dispatch_drain_state(task_record: dict[str, Any]) -> dict[str, Any]:
+    current = dict(task_record or {})
+    if bool(current.get("is_test_data")):
+        return {"active": False, "code": "", "reason": "", "message": ""}
+    try:
+        from workflow_app.server.services import runtime_upgrade_service
+
+        drain_state = runtime_upgrade_service.runtime_upgrade_drain_state()
+    except Exception:
+        drain_state = {}
+    active = bool(drain_state.get("active"))
+    reason_code = str(drain_state.get("code") or "").strip()
+    reason_text = _short_assignment_text(str(drain_state.get("reason") or "").strip(), 500)
+    message = ""
+    if active:
+        marker = reason_code or "unknown"
+        message = f"[upgrade_drain_active:{marker}] {reason_text or 'prod upgrade drain active'}"
+    return {
+        "active": active,
+        "code": reason_code,
+        "reason": reason_text,
+        "message": message,
+        "environment": str(drain_state.get("environment") or "").strip(),
+        "current_version": str(drain_state.get("current_version") or "").strip(),
+        "candidate_version": str(drain_state.get("candidate_version") or "").strip(),
+    }
+
+
 def _prepare_assignment_execution_run(
     root: Path,
     *,
@@ -308,6 +336,28 @@ def dispatch_assignment_next(
                 "dispatched_runs": [],
                 "skipped": [],
                 "message": "scheduler_not_running",
+                "graph_overview": _graph_overview_payload(
+                    snapshot["graph_row"],
+                    metrics_summary=snapshot["metrics_summary"],
+                    scheduler_state_payload=snapshot["scheduler"],
+                ),
+            }
+        drain_state = _assignment_dispatch_drain_state(task_record)
+        if bool(drain_state.get("active")):
+            drain_message = str(drain_state.get("message") or "").strip() or "[upgrade_drain_active] prod upgrade drain active"
+            return {
+                "ticket_id": ticket_id,
+                "dispatched": [],
+                "dispatched_runs": [],
+                "skipped": [
+                    {
+                        "code": "upgrade_drain_active",
+                        "message": drain_message,
+                    }
+                ],
+                "message": drain_message,
+                "code": "upgrade_drain_active",
+                "drain": drain_state,
                 "graph_overview": _graph_overview_payload(
                     snapshot["graph_row"],
                     metrics_summary=snapshot["metrics_summary"],
@@ -648,6 +698,29 @@ def resume_assignment_scheduler(
         include_test_data=include_test_data,
         reconcile_running=False,
     )
+    graph_overview = _graph_overview_payload(
+        snapshot["graph_row"],
+        metrics_summary=snapshot["metrics_summary"],
+        scheduler_state_payload=snapshot["scheduler"],
+    )
+    drain_state = _assignment_dispatch_drain_state(task_record)
+    if bool(drain_state.get("active")):
+        return {
+            "ticket_id": ticket_id,
+            "state": "running",
+            "state_text": _scheduler_state_text("running"),
+            "pause_note": note_text,
+            "audit_id": audit_id,
+            "graph_overview": graph_overview,
+            "dispatch_result": {
+                "mode": "drain",
+                "pending": False,
+                "code": "upgrade_drain_active",
+                "message": str(drain_state.get("message") or "").strip() or "[upgrade_drain_active] prod upgrade drain active",
+                "drain": drain_state,
+            },
+        }
+
     def _dispatch_after_resume() -> None:
         try:
             dispatch_assignment_next(
@@ -664,11 +737,6 @@ def resume_assignment_scheduler(
         daemon=True,
     )
     dispatch_thread.start()
-    graph_overview = _graph_overview_payload(
-        snapshot["graph_row"],
-        metrics_summary=snapshot["metrics_summary"],
-        scheduler_state_payload=snapshot["scheduler"],
-    )
     return {
         "ticket_id": ticket_id,
         "state": "running",

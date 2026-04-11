@@ -98,6 +98,7 @@ SCHEDULE_TRIGGER_RECOVERY_LOOKBACK_HOURS = 12
 SCHEDULE_TRIGGER_RECOVERY_BATCH_SIZE = 20
 SCHEDULE_TRIGGER_RECOVERY_RETRY_COOLDOWN_SECONDS = 60
 SCHEDULE_TRIGGER_RECOVERY_START_LIMIT_PER_PASS = 1
+SCHEDULE_UPGRADE_DRAIN_MESSAGE_PREFIX = "[upgrade_drain_active:"
 _SCHEDULE_WORKER_THREADS: dict[str, threading.Thread] = {}
 _SCHEDULE_WORKER_LOCK = threading.Lock()
 _SCHEDULE_TRIGGER_THREADS: dict[str, threading.Thread] = {}
@@ -155,6 +156,23 @@ def _iso_minute(dt: datetime) -> str:
 
 def _date_key() -> str:
     return _now_bj().strftime("%Y%m%d")
+
+
+def _schedule_prod_upgrade_dispatch_drain_state() -> dict[str, Any]:
+    try:
+        from workflow_app.server.services import runtime_upgrade_service
+
+        payload = runtime_upgrade_service.runtime_upgrade_drain_state()
+    except Exception:
+        payload = {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _schedule_trigger_waits_for_upgrade_drain(trigger_message: Any) -> bool:
+    text = str(trigger_message or "").strip().lower()
+    if not text:
+        return False
+    return text.startswith(SCHEDULE_UPGRADE_DRAIN_MESSAGE_PREFIX)
 
 
 def _schedule_id() -> str:
@@ -3120,7 +3138,7 @@ def _resume_pending_schedule_triggers(cfg: Any, *, operator: str = "schedule-wor
             """
             SELECT *
             FROM (
-                SELECT p.*,t.trigger_instance_id,t.planned_trigger_at,t.trigger_rule_summary,t.trigger_status,
+                SELECT p.*,t.trigger_instance_id,t.planned_trigger_at,t.trigger_rule_summary,t.trigger_status,t.trigger_message,
                        t.assignment_ticket_id,t.assignment_node_id,t.updated_at AS trigger_updated_at,
                        ROW_NUMBER() OVER (
                            PARTITION BY t.schedule_id
@@ -3168,6 +3186,10 @@ def _resume_pending_schedule_triggers(cfg: Any, *, operator: str = "schedule-wor
             except Exception:
                 retry_age_seconds = float(retry_cooldown_seconds)
             if retry_age_seconds <= retry_cooldown_seconds:
+                continue
+        if _schedule_trigger_waits_for_upgrade_drain(row["trigger_message"]):
+            drain_state = _schedule_prod_upgrade_dispatch_drain_state()
+            if bool(drain_state.get("active")):
                 continue
         if assignment_ticket_id and assignment_node_id:
             result_status = _assignment_runtime_status(
