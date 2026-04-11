@@ -5,6 +5,15 @@ import json
 import sys
 from pathlib import Path
 
+PM_GOVERNANCE_README = "pm/README.md"
+PM_MASTER_PLAN = "pm/PM版本推进计划.md"
+PM_CURRENT_PLAN = "pm/PM当前版本计划.md"
+PM_DAILY_TASK = "pm/PM每日任务清单.md"
+PM_DAILY_HISTORY_HINT = "pm/daily-execution-history/YYYY-MM-DD.md"
+PM_VERSION_HISTORY_HINT = "pm/versions/<active_version>/history/YYYY-MM/YYYY-MM-DD.md"
+WAKE_REQUIREMENT = "docs/workflow/requirements/需求详情-pm持续唤醒与清醒维持.md"
+RELEASE_BOUNDARY_REPORT = "docs/workflow/reports/7x24发布边界收口方案-20260409.md"
+
 
 def main() -> int:
     workspace_root = Path(__file__).resolve().parents[2]
@@ -37,63 +46,65 @@ def main() -> int:
     pm_wake_execution_checklist = str(pm_wake_payload.get("execution_checklist") or "")
     pm_wake_done_definition = str(pm_wake_payload.get("done_definition") or "")
 
-    assert "docs/workflow/governance/PM版本推进计划.md" in launch_summary, payload
-    assert "docs/workflow/requirements/需求详情-pm持续唤醒与清醒维持.md" in launch_summary, payload
+    assert PM_GOVERNANCE_README in launch_summary, payload
+    assert PM_MASTER_PLAN in launch_summary, payload
+    assert PM_CURRENT_PLAN in launch_summary, payload
+    assert PM_DAILY_TASK in launch_summary, payload
+    assert WAKE_REQUIREMENT in launch_summary, payload
     assert "当前版本快照：" in launch_summary, payload
-    assert "docs/workflow/reports/7x24发布边界收口方案-20260409.md" in launch_summary, payload
+    assert "当前版本文件：" in launch_summary, payload
+    assert RELEASE_BOUNDARY_REPORT in launch_summary, payload
     assert "root_sync_state=" in launch_summary, payload
     assert "next_push_batch:" in launch_summary, payload
-    assert "当前 active 版本" in execution_checklist, payload
-    assert "4.6.1 当前现场更新" in execution_checklist, payload
-    assert "PM版本推进现场更新总览.md" in execution_checklist, payload
-    assert "pm-version-live/YYYY-MM/现场更新总览.md" in execution_checklist, payload
-    assert "不要在主计划正文继续追加 `10./11./12.`" in execution_checklist, payload
-    assert "UCD/设计优化" in launch_summary, payload
+    assert PM_GOVERNANCE_README in execution_checklist, payload
+    assert PM_MASTER_PLAN in execution_checklist, payload
+    assert PM_CURRENT_PLAN in execution_checklist, payload
+    assert PM_DAILY_TASK in execution_checklist, payload
+    assert PM_DAILY_HISTORY_HINT in execution_checklist, payload
+    assert PM_VERSION_HISTORY_HINT in execution_checklist, payload
+    assert "UCD/设计优化" in execution_checklist, payload
     assert "需求提出 -> 澄清/评审 -> 形成基线 -> 变更控制 -> 开发实现 -> 基于基线测试 -> 验收 -> 归档回溯" in execution_checklist, payload
-    assert "baseline、变更控制" in execution_checklist, payload
+    assert "质量 / 效率 / 工作区小伙伴维护 = 4 / 4 / 2" in execution_checklist, payload
     assert "发布边界收口模式" in execution_checklist, payload
     assert "root_sync_state / ahead_count / dirty_tracked_count / untracked_count / push_block_reason / next_push_batch" in execution_checklist, payload
     assert "workflow_devmate / workflow_testmate / workflow_qualitymate / workflow_bugmate" in execution_checklist, payload
+    assert "不属于每日任务" in execution_checklist, payload
     assert "/api/runtime-upgrade/status" in execution_checklist, payload
     assert "/api/runtime-upgrade/apply" in execution_checklist, payload
     assert "idle watcher" in execution_checklist, payload
     assert "不要自己调用" in execution_checklist, payload
     assert "不要使用 bash heredoc" in execution_checklist, payload
     assert "不要把 `scripts/*.ps1` 这类通配路径直接交给 `rg`" in execution_checklist, payload
-    assert "不要手工猜测 run_id" in execution_checklist, payload
+    assert "不要手工猜 run_id" in execution_checklist, payload
     assert "在 `next` 明确写出下一次主线/保底触发时间" in execution_checklist, payload
-    assert "下一次唤醒已经排上" in done_definition, payload
-    assert "周期性泳道、生命周期阶段" in done_definition, payload
-    assert "4.6.1 当前现场更新" in done_definition, payload
-    assert "PM版本推进现场更新总览.md" in done_definition, payload
+    assert PM_DAILY_HISTORY_HINT in done_definition, payload
+    assert PM_VERSION_HISTORY_HINT in done_definition, payload
+    assert "当前泳道、生命周期阶段" in done_definition, payload
+    assert "后续出口" in done_definition, payload
     assert "本轮显式记录了 `root_sync_state / ahead_count / dirty_tracked_count / untracked_count / push_block_reason / next_push_batch`" in done_definition, payload
 
-    assert "docs/workflow/governance/PM版本推进计划.md" in pm_wake_launch_summary, pm_wake_payload
-    assert "docs/workflow/requirements/需求详情-pm持续唤醒与清醒维持.md" in pm_wake_launch_summary, pm_wake_payload
+    assert PM_GOVERNANCE_README in pm_wake_launch_summary, pm_wake_payload
+    assert PM_MASTER_PLAN in pm_wake_launch_summary, pm_wake_payload
+    assert PM_CURRENT_PLAN in pm_wake_launch_summary, pm_wake_payload
+    assert PM_DAILY_TASK in pm_wake_launch_summary, pm_wake_payload
+    assert WAKE_REQUIREMENT in pm_wake_launch_summary, pm_wake_payload
     assert "当前版本快照：" in pm_wake_launch_summary, pm_wake_payload
-    assert "docs/workflow/reports/7x24发布边界收口方案-20260409.md" in pm_wake_launch_summary, pm_wake_payload
+    assert RELEASE_BOUNDARY_REPORT in pm_wake_launch_summary, pm_wake_payload
     assert "root_sync_state=" in pm_wake_launch_summary, pm_wake_payload
-    assert "UCD/设计优化" in pm_wake_launch_summary, pm_wake_payload
+    assert "UCD/设计优化" in pm_wake_execution_checklist, pm_wake_payload
     assert "需求提出 -> 澄清/评审 -> 形成基线 -> 变更控制 -> 开发实现 -> 基于基线测试 -> 验收 -> 归档回溯" in pm_wake_execution_checklist, pm_wake_payload
-    assert "4.6.1 当前现场更新" in pm_wake_execution_checklist, pm_wake_payload
-    assert "PM版本推进现场更新总览.md" in pm_wake_execution_checklist, pm_wake_payload
-    assert "pm-version-live/YYYY-MM/现场更新总览.md" in pm_wake_execution_checklist, pm_wake_payload
-    assert "不要在主计划正文继续追加 `10./11./12.`" in pm_wake_execution_checklist, pm_wake_payload
+    assert PM_DAILY_HISTORY_HINT in pm_wake_execution_checklist, pm_wake_payload
+    assert PM_VERSION_HISTORY_HINT in pm_wake_execution_checklist, pm_wake_payload
     assert "发布边界收口模式" in pm_wake_execution_checklist, pm_wake_payload
-    assert "workflow_devmate / workflow_testmate / workflow_qualitymate / workflow_bugmate" in pm_wake_execution_checklist, pm_wake_payload
     assert "/api/runtime-upgrade/status" in pm_wake_execution_checklist, pm_wake_payload
     assert "/api/runtime-upgrade/apply" in pm_wake_execution_checklist, pm_wake_payload
     assert "idle watcher" in pm_wake_execution_checklist, pm_wake_payload
     assert "不要自己调用" in pm_wake_execution_checklist, pm_wake_payload
-    assert "不要使用 bash heredoc" in pm_wake_execution_checklist, pm_wake_payload
-    assert "不要把 `scripts/*.ps1` 这类通配路径直接交给 `rg`" in pm_wake_execution_checklist, pm_wake_payload
-    assert "不要手工猜测 run_id" in pm_wake_execution_checklist, pm_wake_payload
-    assert "active 版本、泳道、生命周期阶段" in pm_wake_done_definition, pm_wake_payload
-    assert "4.6.1 当前现场更新" in pm_wake_done_definition, pm_wake_payload
-    assert "PM版本推进现场更新总览.md" in pm_wake_done_definition, pm_wake_payload
+    assert "当前是继续推进、保持暂停、还是需要兜底补链" in pm_wake_done_definition, pm_wake_payload
+    assert PM_DAILY_HISTORY_HINT in pm_wake_done_definition, pm_wake_payload
     assert "root_sync_state / ahead_count / dirty_tracked_count / untracked_count / push_block_reason / next_push_batch" in pm_wake_done_definition, pm_wake_payload
     assert "异常治理现场" in execution_checklist, payload
-    assert "本地根仓收口" in execution_checklist, payload
+    assert "non-destructive 收口" in execution_checklist, payload
     assert "不要主动 `fetch/pull origin` 或拉 GitHub" in execution_checklist, payload
     assert "异常治理现场" in pm_wake_execution_checklist, pm_wake_payload
 

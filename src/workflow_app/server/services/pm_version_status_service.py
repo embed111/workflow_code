@@ -5,9 +5,16 @@ from pathlib import Path
 from typing import Any
 
 
-PM_VERSION_PLAN_RELATIVE_PATH = Path("docs") / "workflow" / "governance" / "PM版本推进计划.md"
+PM_VERSION_PLAN_RELATIVE_PATH = Path("pm") / "PM当前版本计划.md"
 
-_CURRENT_SNAPSHOT_SECTION_RE = re.compile(r"### 4\.6\.1 当前现场更新(.*?)(?:\n### |\Z)", re.DOTALL)
+_REFERENCE_ACTIVE_VERSION_RE = re.compile(r"^\s*-\s*active_version:\s*`([^`]+)`", re.MULTILINE)
+_REFERENCE_ACTIVE_VERSION_FILE_RE = re.compile(r"^\s*-\s*active_version_file:\s*`([^`]+)`", re.MULTILINE)
+_REFERENCE_ACTIVE_VERSION_TITLE_RE = re.compile(r"^\s*-\s*active_version_title:\s*`([^`]+)`", re.MULTILINE)
+
+_CURRENT_SNAPSHOT_SECTION_RE = re.compile(
+    r"^##+\s*[0-9.]*\s*当前状态快照\s*(.*?)(?=^##+\s|\Z)",
+    re.DOTALL | re.MULTILINE,
+)
 _CURRENT_ACTIVE_VERSION_RE = re.compile(r"^\s*\d+\.\s*active\s*版本(?:仍是|为)?\s*`([^`]+)`", re.IGNORECASE | re.MULTILINE)
 _CURRENT_LANE_RE = re.compile(r"^\s*\d+\.\s*当前最高价值泳道(?:为)?\s*`([^`]+)`", re.MULTILINE)
 _CURRENT_LIFECYCLE_STAGE_RE = re.compile(r"^\s*\d+\.\s*生命周期阶段(?:为)?\s*`([^`]+)`", re.MULTILINE)
@@ -24,7 +31,7 @@ _SNAPSHOT_AT_RE = re.compile(r"最新有效快照截至\s*`([^`]+)`")
 _ACTIVE_TABLE_RE = re.compile(r"^\|\s*`([^`]+)`[^|]*\|\s*`active`\s*\|", re.MULTILINE)
 
 
-def _plan_path_candidates(root: Path | None) -> list[Path]:
+def _path_candidates(root: Path | None, relative_path: Path) -> list[Path]:
     if isinstance(root, Path):
         anchor = root.resolve(strict=False)
     else:
@@ -33,7 +40,7 @@ def _plan_path_candidates(root: Path | None) -> list[Path]:
     candidates: list[Path] = []
     seen: set[str] = set()
     for base in bases:
-        candidate = (base / PM_VERSION_PLAN_RELATIVE_PATH).resolve(strict=False)
+        candidate = (base / relative_path).resolve(strict=False)
         key = candidate.as_posix()
         if key in seen:
             continue
@@ -42,8 +49,18 @@ def _plan_path_candidates(root: Path | None) -> list[Path]:
     return candidates
 
 
+def _resolve_relative_path(root: Path | None, relative_text: str) -> Path | None:
+    rel = Path(str(relative_text or "").strip())
+    if not rel.as_posix():
+        return None
+    for candidate in _path_candidates(root, rel):
+        if candidate.exists() and candidate.is_file():
+            return candidate
+    return None
+
+
 def resolve_pm_version_plan_path(root: Path | None = None) -> Path | None:
-    for candidate in _plan_path_candidates(root):
+    for candidate in _path_candidates(root, PM_VERSION_PLAN_RELATIVE_PATH):
         if candidate.exists() and candidate.is_file():
             return candidate
     return None
@@ -63,43 +80,68 @@ def load_pm_version_status(root: Path | None = None) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "ok": False,
         "active_version": "",
+        "active_version_title": "",
+        "active_version_file": "",
         "lane": "",
         "lifecycle_stage": "",
         "baseline": "",
         "snapshot_updated_at": "",
         "source_path": "",
         "source_relative_path": PM_VERSION_PLAN_RELATIVE_PATH.as_posix(),
+        "reference_path": "",
+        "reference_relative_path": PM_VERSION_PLAN_RELATIVE_PATH.as_posix(),
     }
-    plan_path = resolve_pm_version_plan_path(root)
-    if not isinstance(plan_path, Path):
+    reference_path = resolve_pm_version_plan_path(root)
+    if not isinstance(reference_path, Path):
         return payload
-    payload["source_path"] = plan_path.as_posix()
+    payload["reference_path"] = reference_path.as_posix()
     try:
-        text = plan_path.read_text(encoding="utf-8")
+        reference_text = reference_path.read_text(encoding="utf-8")
     except Exception:
         return payload
-    current_snapshot = _current_snapshot_section(text)
+
+    active_version = _match_text(_REFERENCE_ACTIVE_VERSION_RE, reference_text)
+    active_version_title = _match_text(_REFERENCE_ACTIVE_VERSION_TITLE_RE, reference_text)
+    active_version_file = _match_text(_REFERENCE_ACTIVE_VERSION_FILE_RE, reference_text)
+    version_path = _resolve_relative_path(root, active_version_file)
+    version_text = ""
+    if isinstance(version_path, Path):
+        try:
+            version_text = version_path.read_text(encoding="utf-8")
+        except Exception:
+            version_text = ""
+
+    detail_text = version_text or reference_text
+    current_snapshot = _current_snapshot_section(detail_text) or _current_snapshot_section(reference_text)
     active_version = (
-        _match_text(_CURRENT_ACTIVE_VERSION_RE, current_snapshot)
-        or _match_text(_ACTIVE_VERSION_RE, text)
-        or _match_text(_ACTIVE_TABLE_RE, text)
+        active_version
+        or _match_text(_CURRENT_ACTIVE_VERSION_RE, current_snapshot)
+        or _match_text(_ACTIVE_VERSION_RE, detail_text)
+        or _match_text(_ACTIVE_TABLE_RE, detail_text)
     )
-    lane = _match_text(_CURRENT_LANE_RE, current_snapshot) or _match_text(_LANE_RE, text)
+    lane = _match_text(_CURRENT_LANE_RE, current_snapshot) or _match_text(_LANE_RE, detail_text)
     lifecycle_stage = _match_text(_CURRENT_LIFECYCLE_STAGE_RE, current_snapshot) or _match_text(
-        _LIFECYCLE_STAGE_RE, text
+        _LIFECYCLE_STAGE_RE, detail_text
     )
-    baseline = _match_text(_CURRENT_BASELINE_RE, current_snapshot) or _match_text(_BASELINE_RE, text)
+    baseline = _match_text(_CURRENT_BASELINE_RE, current_snapshot) or _match_text(_BASELINE_RE, detail_text)
     snapshot_updated_at = _match_text(_CURRENT_SNAPSHOT_AT_RE, current_snapshot) or _match_text(
-        _SNAPSHOT_AT_RE, text
+        _SNAPSHOT_AT_RE, detail_text
     )
+
+    source_path = version_path.as_posix() if isinstance(version_path, Path) else reference_path.as_posix()
+    source_relative_path = active_version_file or PM_VERSION_PLAN_RELATIVE_PATH.as_posix()
     payload.update(
         {
             "ok": bool(active_version or lane or lifecycle_stage or baseline),
             "active_version": active_version,
+            "active_version_title": active_version_title,
+            "active_version_file": active_version_file,
             "lane": lane,
             "lifecycle_stage": lifecycle_stage,
             "baseline": baseline,
             "snapshot_updated_at": snapshot_updated_at,
+            "source_path": source_path,
+            "source_relative_path": source_relative_path,
         }
     )
     return payload
@@ -108,14 +150,21 @@ def load_pm_version_status(root: Path | None = None) -> dict[str, Any]:
 def format_pm_version_prompt_lines(status: dict[str, Any]) -> list[str]:
     payload = status if isinstance(status, dict) else {}
     active_version = str(payload.get("active_version") or "").strip()
+    active_version_title = str(payload.get("active_version_title") or "").strip()
+    active_version_file = str(payload.get("active_version_file") or "").strip()
     lane = str(payload.get("lane") or "").strip()
     lifecycle_stage = str(payload.get("lifecycle_stage") or "").strip()
     baseline = str(payload.get("baseline") or "").strip()
     snapshot_at = str(payload.get("snapshot_updated_at") or "").strip()
+    reference_relative_path = str(
+        payload.get("reference_relative_path") or PM_VERSION_PLAN_RELATIVE_PATH.as_posix()
+    ).strip()
     source_relative_path = str(payload.get("source_relative_path") or PM_VERSION_PLAN_RELATIVE_PATH.as_posix()).strip()
     fields = []
     if active_version:
         fields.append(f"active_version={active_version}")
+    if active_version_title:
+        fields.append(f"title={active_version_title}")
     if lane:
         fields.append(f"lane={lane}")
     if lifecycle_stage:
@@ -125,6 +174,8 @@ def format_pm_version_prompt_lines(status: dict[str, Any]) -> list[str]:
     lines: list[str] = []
     if fields:
         lines.append("当前版本快照： " + " ; ".join(fields))
+    if active_version_file:
+        lines.append(f"当前版本文件： {active_version_file} ; ref={reference_relative_path}")
     if snapshot_at:
         lines.append(f"版本快照时间： {snapshot_at} ; source={source_relative_path}")
     return lines
@@ -150,7 +201,9 @@ def build_pm_version_truth_payload(
                 "code": "active_version_mismatch",
                 "actual": runtime_active_version,
                 "expected": plan_active_version,
-                "source_path": str(plan_payload.get("source_relative_path") or PM_VERSION_PLAN_RELATIVE_PATH.as_posix()),
+                "source_path": str(
+                    plan_payload.get("source_relative_path") or PM_VERSION_PLAN_RELATIVE_PATH.as_posix()
+                ),
             }
         )
     return {
@@ -163,6 +216,8 @@ def build_pm_version_truth_payload(
         "truth_mismatch_items": mismatches,
         "pm_version_status": {
             "active_version": plan_active_version,
+            "active_version_title": str(plan_payload.get("active_version_title") or "").strip(),
+            "active_version_file": str(plan_payload.get("active_version_file") or "").strip(),
             "lane": str(plan_payload.get("lane") or "").strip(),
             "lifecycle_stage": str(plan_payload.get("lifecycle_stage") or "").strip(),
             "baseline": str(plan_payload.get("baseline") or "").strip(),
@@ -170,6 +225,10 @@ def build_pm_version_truth_payload(
             "source_path": str(plan_payload.get("source_path") or "").strip(),
             "source_relative_path": str(
                 plan_payload.get("source_relative_path") or PM_VERSION_PLAN_RELATIVE_PATH.as_posix()
+            ),
+            "reference_path": str(plan_payload.get("reference_path") or "").strip(),
+            "reference_relative_path": str(
+                plan_payload.get("reference_relative_path") or PM_VERSION_PLAN_RELATIVE_PATH.as_posix()
             ),
         },
     }

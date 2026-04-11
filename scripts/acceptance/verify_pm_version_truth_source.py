@@ -20,7 +20,7 @@ class _CaptureHandler:
 
 
 def _expected_current_snapshot_baseline(plan_text: str) -> str:
-    section_match = re.search(r"### 4\.6\.1 当前现场更新(.*?)(?:\n### |\Z)", str(plan_text or ""), re.DOTALL)
+    section_match = re.search(r"^##+\s*[0-9.]*\s*当前状态快照\s*(.*?)(?=^##+\s|\Z)", str(plan_text or ""), re.DOTALL | re.MULTILINE)
     assert section_match, "current snapshot section missing"
     baseline_match = re.search(
         r"^\s*\d+\.\s*baseline\s*(?:继续沿用|为|已切到)?\s*`([^`]+)`",
@@ -57,9 +57,8 @@ def main() -> int:
     assert str(plan_status.get("lifecycle_stage") or "").strip(), plan_status
     assert str(plan_status.get("baseline") or "").strip(), plan_status
     assert plan_status["baseline"] == expected_baseline, plan_status
-    assert str(plan_status.get("source_path") or "").strip().endswith(
-        "docs/workflow/governance/PM版本推进计划.md"
-    ), plan_status
+    assert str(plan_status.get("reference_path") or "").strip().endswith("pm/PM当前版本计划.md"), plan_status
+    assert str(plan_status.get("source_path") or "").strip().endswith("pm/versions/V1/版本计划.md"), plan_status
 
     prompt_lines = format_pm_version_prompt_lines(plan_status)
     prompt_text = "\n".join(prompt_lines)

@@ -107,7 +107,12 @@ _SCHEDULE_PROCESSING_LOCKS: dict[str, threading.Lock] = {}
 _SCHEDULE_PROCESSING_LOCK = threading.Lock()
 SCHEDULE_SELF_ITER_GUARD_FILE = Path("state") / "schedule_self_iter_guard.json"
 SCHEDULE_SMOKE_BASELINE_FILE = Path(".test") / "schedule_smoke_baseline.latest.json"
-SCHEDULE_PM_VERSION_PLAN_PATH = "docs/workflow/governance/PM版本推进计划.md"
+SCHEDULE_PM_GOVERNANCE_README_PATH = "pm/README.md"
+SCHEDULE_PM_MASTER_PLAN_PATH = "pm/PM版本推进计划.md"
+SCHEDULE_PM_VERSION_PLAN_PATH = "pm/PM当前版本计划.md"
+SCHEDULE_PM_DAILY_TASK_PATH = "pm/PM每日任务清单.md"
+SCHEDULE_PM_DAILY_HISTORY_HINT = "pm/daily-execution-history/YYYY-MM-DD.md"
+SCHEDULE_PM_VERSION_HISTORY_HINT = "pm/versions/<active_version>/history/YYYY-MM/YYYY-MM-DD.md"
 SCHEDULE_PM_WAKE_REQUIREMENT_PATH = "docs/workflow/requirements/需求详情-pm持续唤醒与清醒维持.md"
 SCHEDULE_PM_PERIODIC_LANES_TEXT = (
     "UCD/设计优化、测试探测、工程质量探测、需求分析、架构优化、功能开发、高价值功能探索"
@@ -1307,10 +1312,13 @@ def _ensure_self_iter_backup_schedule(
             "launch_summary": "\n".join(
                 [
                     "作为保底接力入口，检查 prod 当前是否仍存在未来可执行的 [持续迭代] workflow 或 active 版本任务。",
-                    "7x24 的业务目标是持续推进当前 active 版本，不是只维持存活或空转。",
-                    f"先读版本计划：{SCHEDULE_PM_VERSION_PLAN_PATH}",
-                    f"再对照持续唤醒需求：{SCHEDULE_PM_WAKE_REQUIREMENT_PATH}",
-                    f"周期性工作泳道：{SCHEDULE_PM_PERIODIC_LANES_TEXT}",
+                    "保底巡检不代替主线做整轮开发；只有主链断了或当前窗口明确要求兜底时，才补链或接管异常治理。",
+                    f"先读 PM 治理入口：{SCHEDULE_PM_GOVERNANCE_README_PATH}",
+                    f"必读：{SCHEDULE_PM_MASTER_PLAN_PATH} / {SCHEDULE_PM_VERSION_PLAN_PATH} / `{SCHEDULE_PM_VERSION_PLAN_PATH}` 中 `active_version_file` 指向的版本文件 / {SCHEDULE_PM_DAILY_TASK_PATH} / {SCHEDULE_PM_WAKE_REQUIREMENT_PATH}",
+                    (
+                        f"今日例行任务是否已完成，看 `{SCHEDULE_PM_DAILY_HISTORY_HINT}`；"
+                        "每日任务现在只包含“每日 1 次系统 7x24 运维质量检查”和“团队内每个小伙伴每日学习提示”。"
+                    ),
                     *pm_version_lines,
                     *release_boundary_lines,
                     f"最近阻塞: {summary}",
@@ -1318,27 +1326,29 @@ def _ensure_self_iter_backup_schedule(
             ).strip(),
             "execution_checklist": "\n".join(
                 [
-                    f"1. 读取 `{SCHEDULE_PM_VERSION_PLAN_PATH}` 与 `{SCHEDULE_PM_WAKE_REQUIREMENT_PATH}`，确认当前 active 版本、任务包，以及所处生命周期阶段：`{SCHEDULE_PM_LIFECYCLE_TEXT}`。",
-                    f"2. 从 `{SCHEDULE_PM_PERIODIC_LANES_TEXT}` 中判断当前最该推进的泳道；若 active 版本没有可执行任务，立即补 baseline、变更控制或下一条当前版本任务。",
-                    "3. 先记录当前根仓同步快照里的 `root_sync_state / ahead_count / dirty_tracked_count / untracked_count / push_block_reason / next_push_batch`。",
-                    f"3.1 若快照显示根仓未同步或本地工作区 dirty，就立即读取 `{RELEASE_BOUNDARY_REPORT_PATH}` 并切到发布边界收口模式：先冻结同工作区新增实现，优先恢复小步推根仓节奏。",
-                    "3.2 若看到这是上一轮遗留的 dirty/ahead 历史问题，本轮第一优先级先处理这批历史 release boundary；在收口或明确阻塞原因前，不要基于这批改动继续扩写。",
-                    "4. 检查 prod 的 schedules、assignment graph、ready/running 节点、最近 runs 与 `/api/runtime-upgrade/status`。",
-                    "5. 继续检查 `/api/runtime-upgrade/status` 作为升级门禁真相；正式升级申请改由 `prod` supervisor 托管的 idle watcher 周期检查并发起，当前巡检节点不要自己调用 `/api/runtime-upgrade/apply`。",
-                    f"5.1 {SCHEDULE_SELF_UPGRADE_HINT}",
-                    "6. 若主链断开，补一条未来可执行入口或当前版本任务。",
-                    f"7. 若测试/质量/开发/缺陷修复泳道缺少执行者，给 {SCHEDULE_PM_TEAMMATES_TEXT} 创建或续挂任务。",
-                    "8. 更新 `.codex/memory/...` 时，在 `next` 明确写出下一次主线/保底触发时间，同时标注本轮泳道与生命周期阶段。",
-                    "9. 输出本次保底巡检结论与下一步建议。",
+                    f"1. 按 `{SCHEDULE_PM_GOVERNANCE_README_PATH} -> {SCHEDULE_PM_MASTER_PLAN_PATH} -> {SCHEDULE_PM_VERSION_PLAN_PATH} -> {SCHEDULE_PM_VERSION_PLAN_PATH} 中 active_version_file 指向的版本文件 -> {SCHEDULE_PM_DAILY_TASK_PATH} -> {SCHEDULE_PM_WAKE_REQUIREMENT_PATH}` 的顺序补齐上下文。",
+                    f"2. 先确认本轮属于 `{SCHEDULE_PM_LIFECYCLE_TEXT}` 中的哪一段，并从 `{SCHEDULE_PM_PERIODIC_LANES_TEXT}` 里判断当前泳道。",
+                    f"3. 先检查 `{SCHEDULE_PM_DAILY_HISTORY_HINT}` 对应的今日日文件是否存在；若不存在，需要在当天合适窗口补做今天唯一一轮每日任务并落盘。",
+                    "4. 先判断当前版本引用和当前活跃版本文件是否要求暂停、治理调整或仅观察；若是，默认不补新主线，只报告现场并保持暂停。",
+                    "5. 再检查 `/healthz`、`/api/status`、`/api/schedules`、`/api/runtime-upgrade/status`；必要时再看 `assignment graph / status-detail / run.json / events.log`。",
+                    "6. 先记录 `root_sync_state / ahead_count / dirty_tracked_count / untracked_count / push_block_reason / next_push_batch`；若命中 dirty/ahead/异常治理现场，立即进入发布边界收口模式。",
+                    f"7. 只做受支持动作：基于本机 `../workflow_code` 的 non-destructive 收口、developer workspace bootstrap/refresh、helper stale `creating` / schedule / supervisor / runtime-upgrade 恢复。不要主动 `fetch/pull origin` 或拉 GitHub。",
+                    f"8. 正式升级申请改由 `prod` supervisor 托管的 idle watcher 周期检查并发起，当前巡检节点不要自己调用 `/api/runtime-upgrade/apply`。{SCHEDULE_SELF_UPGRADE_HINT}",
+                    "9. 只有主链断了，或当前版本引用/当前活跃版本文件明确要求补链/兜底时，才补新的 [持续迭代] workflow 入口；是否派发或恢复小伙伴，也要按版本文件里的每轮必查项判断。",
+                    f"10. 当天的版本推进、后移和后续版本排期判断先写 `{SCHEDULE_PM_VERSION_HISTORY_HINT}`；只有主判断变化时，才更新 `{SCHEDULE_PM_VERSION_PLAN_PATH}` 的当前状态快照。",
+                    "11. 若发现高杠杆新功能或低维护价值重构项，先记录并明确它进入哪个后续版本，不要借巡检窗口把当前版本加胖。",
+                    "12. 更新 `.codex/memory/...` 时，在 `next` 明确写出下一次主线/保底触发时间，并输出本次巡检结论与下一步建议；记忆库每一轮都要更新。",
                 ]
             ).strip(),
             "done_definition": "\n".join(
                 [
-                    "1. 保底巡检完成后，prod 至少保留一条未来可执行的 workflow 主线入口。",
-                    "2. 本次巡检结论明确写出 active 版本、泳道、生命周期阶段与证据。",
-                    "3. 本次巡检显式记录了 `root_sync_state / ahead_count / dirty_tracked_count / untracked_count / push_block_reason / next_push_batch`。",
-                    "4. 若发现这是上一轮遗留的 dirty/ahead 历史问题，本轮已经优先处理这批历史 release boundary，或明确写清阻塞原因。",
-                    "5. 若主链已断，本轮已经完成补链而不是只留口头说明。",
+                    "1. 本次巡检已经明确回答：当前是继续推进、保持暂停、还是需要兜底补链。",
+                    f"2. 若今日 `{SCHEDULE_PM_DAILY_HISTORY_HINT}` 原本不存在，本轮已经补齐当天每日执行结果，或明确写清为什么仍未完成。",
+                    "3. 若当前窗口是暂停/治理调整，本轮没有误补新的主线 schedule 或主线任务。",
+                    "4. 若当前窗口允许推进，prod 仍至少保留一条未来可执行的 workflow 主线入口，且不存在 ready 堆积但没有 live run 的假健康现场。",
+                    "5. 本次巡检显式记录了 `root_sync_state / ahead_count / dirty_tracked_count / untracked_count / push_block_reason / next_push_batch`。",
+                    f"6. 当天的版本推进、后移和后续版本排期判断已写入 `{SCHEDULE_PM_VERSION_HISTORY_HINT}`；只有主判断变化时才更新 `{SCHEDULE_PM_VERSION_PLAN_PATH}` 的当前状态快照。",
+                    "7. 若命中 7x24 异常治理现场，本轮已经执行受支持的治理收口动作，或明确写清为什么仍然 blocked。",
                 ]
             ).strip(),
             "priority": "P1",

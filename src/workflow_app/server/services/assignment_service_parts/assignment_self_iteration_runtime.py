@@ -17,9 +17,12 @@ ASSIGNMENT_PM_WAKE_SCHEDULE_NAME = "pm持续唤醒 - workflow 主线巡检"
 ASSIGNMENT_PM_WAKE_DELAY_MINUTES = 60
 ASSIGNMENT_PM_WAKE_EXPECTED_ARTIFACT = "workflow-pm-wake-summary"
 ASSIGNMENT_SELF_ITERATION_EXPECTED_ARTIFACT = "continuous-improvement-report.md"
-ASSIGNMENT_SELF_ITERATION_VERSION_PLAN_PATH = "docs/workflow/governance/PM版本推进计划.md"
-ASSIGNMENT_SELF_ITERATION_PLAN_LIVE_INDEX_PATH = "docs/workflow/governance/PM版本推进现场更新总览.md"
-ASSIGNMENT_SELF_ITERATION_PLAN_LIVE_MONTHLY_HINT = "docs/workflow/governance/pm-version-live/YYYY-MM/现场更新总览.md"
+ASSIGNMENT_PM_GOVERNANCE_README_PATH = "pm/README.md"
+ASSIGNMENT_SELF_ITERATION_MASTER_PLAN_PATH = "pm/PM版本推进计划.md"
+ASSIGNMENT_SELF_ITERATION_VERSION_PLAN_PATH = "pm/PM当前版本计划.md"
+ASSIGNMENT_SELF_ITERATION_DAILY_TASK_PATH = "pm/PM每日任务清单.md"
+ASSIGNMENT_SELF_ITERATION_DAILY_HISTORY_HINT = "pm/daily-execution-history/YYYY-MM-DD.md"
+ASSIGNMENT_SELF_ITERATION_VERSION_HISTORY_HINT = "pm/versions/<active_version>/history/YYYY-MM/YYYY-MM-DD.md"
 ASSIGNMENT_SELF_ITERATION_WAKE_REQUIREMENT_PATH = "docs/workflow/requirements/需求详情-pm持续唤醒与清醒维持.md"
 ASSIGNMENT_SELF_ITERATION_PERIODIC_LANES_TEXT = (
     "UCD/设计优化、测试探测、工程质量探测、需求分析、架构优化、功能开发、高价值功能探索"
@@ -110,39 +113,47 @@ def _assignment_self_iteration_schedule_payload(
         "launch_summary": "\n".join(
             [
                 "上一轮任务已经结束，请继续作为 workflow 的长期负责人推进 7x24 连续迭代。",
-                "7x24 的业务目标是持续推进当前 active 版本，不是只维持存活或空转。",
-                f"版本计划：{version_plan_path}",
-                f"持续唤醒需求：{wake_requirement_path}",
-                f"周期性工作泳道：{ASSIGNMENT_SELF_ITERATION_PERIODIC_LANES_TEXT}",
+                "本轮先服务当前 active 版本与当前窗口任务，不空转，也不把保底巡检职责混进主线。",
+                f"先读 PM 治理入口：{ASSIGNMENT_PM_GOVERNANCE_README_PATH}",
+                f"必读：{ASSIGNMENT_SELF_ITERATION_MASTER_PLAN_PATH} / {version_plan_path} / `{version_plan_path}` 中 `active_version_file` 指向的版本文件 / {ASSIGNMENT_SELF_ITERATION_DAILY_TASK_PATH} / {wake_requirement_path}",
+                (
+                    f"今日例行任务是否已完成，看 `{ASSIGNMENT_SELF_ITERATION_DAILY_HISTORY_HINT}`；"
+                    "每日任务现在只包含“每日 1 次系统 7x24 运维质量检查”和“团队内每个小伙伴每日学习提示”。"
+                ),
                 *pm_version_lines,
                 *release_boundary_lines,
-                f"上一轮 ticket: {ticket_id}",
-                f"上一轮 node: {node_id}",
                 f"上一轮结果: {summary_text}",
             ]
         ).strip(),
         "execution_checklist": "\n".join(
             [
-                f"1. 先读取 `{version_plan_path}`，确认当前 active 版本、当前优先任务包与当前生命周期阶段：`{ASSIGNMENT_SELF_ITERATION_LIFECYCLE_TEXT}`。",
-                f"2. 从 `{ASSIGNMENT_SELF_ITERATION_PERIODIC_LANES_TEXT}` 中选出本轮最高价值泳道；若当前 active 版本没有可执行任务，就先补 baseline、变更控制或下一个任务包，不允许空转。",
-                f"2.1 若更新 `{version_plan_path}`，`4.6.1 当前现场更新` 只允许覆盖成一版最新有效快照；详细时序现场改写到 `{ASSIGNMENT_SELF_ITERATION_PLAN_LIVE_INDEX_PATH}` 指向的活动月份总览（路径模式：`{ASSIGNMENT_SELF_ITERATION_PLAN_LIVE_MONTHLY_HINT}`），不要在主计划正文继续追加 `10./11./12.` 这类流水编号。",
-                "3. 先记录当前根仓同步快照里的 `root_sync_state / ahead_count / dirty_tracked_count / untracked_count / push_block_reason / next_push_batch`；这些字段只用于触发判断，不是本轮交付本身。",
-                f"4. 若快照显示根仓未同步、本地工作区 dirty，或命中异常治理现场，就立即读取 `{RELEASE_BOUNDARY_REPORT_PATH}` 并进入发布边界收口模式；这轮必须先执行清理动作，不允许只复述计数。受支持动作包括：基于本机 `../workflow_code` 的 non-destructive 本地根仓收口、developer workspace bootstrap/refresh、helper stale `creating` / schedule / supervisor / runtime-upgrade 恢复。除非你明确要求，不要主动 `fetch/pull origin` 或拉 GitHub。",
-                "5. 再检查 healthz、assignments、schedules、runs 与 `/api/runtime-upgrade/status`；当前 shell 是 PowerShell：不要使用 bash heredoc（如 `python - <<'PY'`），不要把 `scripts/*.ps1` 这类通配路径直接交给 `rg`，也不要手工猜测 run_id。",
-                f"6. 继续检查 `/api/runtime-upgrade/status` 作为升级门禁真相；正式升级申请改由 `prod` supervisor 托管的 idle watcher 周期检查并发起，当前主线节点不要自己调用 `/api/runtime-upgrade/apply`。{ASSIGNMENT_SELF_UPGRADE_HINT}",
-                "7. 在推进开发实现前，先明确本轮沿用的 baseline、需要变更控制的内容，以及基于哪条基线做后续测试与验收；优先推进当前版本里最高优先级且未完成的任务包，不要跳版抢做新功能。",
-                f"8. 视情况给 {ASSIGNMENT_SELF_ITERATION_TEAMMATES_TEXT} 创建或续挂任务；更新 `.codex/memory/...` 时，在 `next` 明确写出下一次主线/保底触发时间，同时写清本轮泳道与生命周期阶段，并确保系统已经挂上下一轮可执行任务或唤醒计划。",
+                f"1. 按 `{ASSIGNMENT_PM_GOVERNANCE_README_PATH} -> {ASSIGNMENT_SELF_ITERATION_MASTER_PLAN_PATH} -> {version_plan_path} -> {version_plan_path} 中 active_version_file 指向的版本文件 -> {ASSIGNMENT_SELF_ITERATION_DAILY_TASK_PATH} -> {wake_requirement_path}` 的顺序补齐上下文。",
+                f"2. 先确认本轮属于 `{ASSIGNMENT_SELF_ITERATION_LIFECYCLE_TEXT}` 中的哪一段，并从 `{ASSIGNMENT_SELF_ITERATION_PERIODIC_LANES_TEXT}` 里判断当前最高价值泳道。",
+                (
+                    f"3. 先检查 `{ASSIGNMENT_SELF_ITERATION_DAILY_HISTORY_HINT}` 对应的今日日文件是否存在；"
+                    "若不存在，需要在本轮合适窗口补做今天唯一一轮每日任务；若已存在，则不要把每日任务误当成每轮待办。"
+                ),
+                "4. 按 `质量 / 效率 / 工作区小伙伴维护 = 4 / 4 / 2` 判断本轮关注重点，只推进当前活跃版本文件里具体需求点的最高优先事项；若当前窗口写明暂停、治理调整或仅观察，则不要自动扩面。",
+                f"5. 先记录 `root_sync_state / ahead_count / dirty_tracked_count / untracked_count / push_block_reason / next_push_batch`；若命中 dirty/ahead/异常治理现场，立即进入发布边界收口模式。",
+                f"6. 只做受支持动作：基于本机 `../workflow_code` 的 non-destructive 收口、developer workspace bootstrap/refresh、helper stale `creating` / schedule / supervisor / runtime-upgrade 恢复；不要主动 `fetch/pull origin` 或拉 GitHub。",
+                "7. 再检查 `/healthz`、`/api/status`、`/api/schedules`、`/api/runtime-upgrade/status`；必要时再看 `status-detail / run.json / events.log`。当前 shell 是 PowerShell：不要使用 bash heredoc，不要把 `scripts/*.ps1` 这类通配路径直接交给 `rg`，也不要手工猜 run_id。",
+                f"8. 正式升级申请改由 `prod` supervisor 托管的 idle watcher 周期检查并发起，当前主线节点不要自己调用 `/api/runtime-upgrade/apply`。{ASSIGNMENT_SELF_UPGRADE_HINT}",
+                f"9. 每轮都要检查是否需要给 {ASSIGNMENT_SELF_ITERATION_TEAMMATES_TEXT} 创建、续挂、恢复或调整任务；这属于 PM 主线每轮必查项，不属于每日任务。",
+                f"10. 当天的版本推进、后移和后续版本排期判断先写 `{ASSIGNMENT_SELF_ITERATION_VERSION_HISTORY_HINT}`；只有本轮主判断发生变化时，才更新 `{version_plan_path}` 的当前状态快照，或对应版本文件的具体排期正文。",
+                "11. 若识别到新的高杠杆功能或低维护价值重构项，先记入版本记录，并明确它进入 `V2 / V3 / V4 / backlog` 的哪一处，不要继续把当前版本加胖。",
+                "12. 更新 `.codex/memory/...` 时，在 `next` 明确写出下一次主线/保底触发时间；记忆库每一轮都要更新，不能因为当天每日任务已完成就跳过。",
             ]
         ).strip(),
         "done_definition": "\n".join(
             [
-                f"1. 当前活跃版本对应任务包有可交付结果，且版本计划 `{version_plan_path}` 已同步最新状态。",
-                "2. 本轮明确记录了当前周期性泳道、生命周期阶段，以及是否发生 baseline/变更控制更新。",
-                f"2.1 若本轮更新 `{version_plan_path}`，主计划正文中的 `4.6.1 当前现场更新` 仍保持单份最新快照；详细现场已写入 `{ASSIGNMENT_SELF_ITERATION_PLAN_LIVE_INDEX_PATH}` 指向的活动月份总览，而不是继续把正文写成长流水。",
-                "3. 本轮显式记录了 `root_sync_state / ahead_count / dirty_tracked_count / untracked_count / push_block_reason / next_push_batch`，且没有把它们误当成终态交付。",
-                "4. 若本轮命中 dirty/ahead/阻塞，本轮已经先执行清理、切批、提交、推根仓或明确阻塞收口；不接受只汇报计数后继续等待状态自己恢复。",
-                "5. 若本轮命中 7x24 异常治理现场，本轮已经执行受支持的治理收口动作，或明确写清为什么仍然 blocked，而不是只停在“workspace_path 不允许”；并附带验证证据。",
-                "6. 如有需要，本轮已经给对应小伙伴挂好下一步任务或交接任务；若本轮没有新的 ready 任务，也必须保证下一次唤醒已经排上，7x24 连续推进不断链。",
+                "1. 当前活跃版本文件中的最高优先事项有可交付结果，或已经被明确标记为 blocked。",
+                f"2. 若今日 `{ASSIGNMENT_SELF_ITERATION_DAILY_HISTORY_HINT}` 原本不存在，本轮已经补齐当天每日执行结果，或明确写清为什么仍未完成。",
+                "3. 本轮明确记录了当前泳道、生命周期阶段，以及是否发生 baseline / 变更控制 / release boundary 主判断变化。",
+                f"4. 当天的版本推进、后移和后续版本排期判断已写入 `{ASSIGNMENT_SELF_ITERATION_VERSION_HISTORY_HINT}`；只有主判断变化时才更新 `{version_plan_path}` 的当前状态快照。",
+                "5. 本轮显式记录了 `root_sync_state / ahead_count / dirty_tracked_count / untracked_count / push_block_reason / next_push_batch`，并且没有把它们误当成最终交付本身。",
+                "6. 若识别到新功能想法或低维护价值重构项，本轮已明确后移去向，而不是继续扩胖当前版本。",
+                "7. 若本轮存在已验证代码改动，本轮结束前已经完成当前工作区 `commit / push / 根仓同步`，或明确写清收口阻塞原因。",
+                "8. 若当前窗口不是暂停/治理调整，本轮结束时至少还保留一个后续出口（ready / future / 明确的下一次唤醒）；若当前窗口是暂停/治理调整，则不得误续挂新的主线推进任务。",
             ]
         ),
         "priority": priority,
@@ -264,10 +275,13 @@ def _assignment_pm_wake_schedule_payload(
         "launch_summary": "\n".join(
             [
                 "作为保底接力入口，检查 prod 当前是否仍存在未来可执行的 [持续迭代] workflow 或 active 版本任务。",
-                "7x24 的业务目标是持续推进当前 active 版本，不是只维持存活或空转。",
-                f"先读版本计划：{version_plan_path}",
-                f"再对照持续唤醒需求：{wake_requirement_path}",
-                f"周期性工作泳道：{ASSIGNMENT_SELF_ITERATION_PERIODIC_LANES_TEXT}",
+                "保底巡检不代替主线做整轮开发；只有主链断了或当前窗口明确要求兜底时，才补链或接管异常治理。",
+                f"先读 PM 治理入口：{ASSIGNMENT_PM_GOVERNANCE_README_PATH}",
+                f"必读：{ASSIGNMENT_SELF_ITERATION_MASTER_PLAN_PATH} / {version_plan_path} / `{version_plan_path}` 中 `active_version_file` 指向的版本文件 / {ASSIGNMENT_SELF_ITERATION_DAILY_TASK_PATH} / {wake_requirement_path}",
+                (
+                    f"今日例行任务是否已完成，看 `{ASSIGNMENT_SELF_ITERATION_DAILY_HISTORY_HINT}`；"
+                    "每日任务现在只包含“每日 1 次系统 7x24 运维质量检查”和“团队内每个小伙伴每日学习提示”。"
+                ),
                 *pm_version_lines,
                 *release_boundary_lines,
                 f"最近上下文: {summary_text}",
@@ -275,30 +289,29 @@ def _assignment_pm_wake_schedule_payload(
         ).strip(),
         "execution_checklist": "\n".join(
             [
-                f"1. 读取 `{version_plan_path}` 与 `{wake_requirement_path}`，确认当前 active 版本、任务包，以及所处生命周期阶段：`{ASSIGNMENT_SELF_ITERATION_LIFECYCLE_TEXT}`。",
-                f"2. 从 `{ASSIGNMENT_SELF_ITERATION_PERIODIC_LANES_TEXT}` 中判断当前最该推进的泳道；若 active 版本没有可执行任务，立即补 baseline、变更控制或下一条当前版本任务。",
-                f"2.1 若更新 `{version_plan_path}`，`4.6.1 当前现场更新` 只允许覆盖成一版最新有效快照；详细时序现场改写到 `{ASSIGNMENT_SELF_ITERATION_PLAN_LIVE_INDEX_PATH}` 指向的活动月份总览（路径模式：`{ASSIGNMENT_SELF_ITERATION_PLAN_LIVE_MONTHLY_HINT}`），不要在主计划正文继续追加 `10./11./12.` 这类流水编号。",
-                "3. 先记录当前根仓同步快照里的 `root_sync_state / ahead_count / dirty_tracked_count / untracked_count / push_block_reason / next_push_batch`；这些字段只是触发信号，不是本轮交付本身。",
-                f"3.1 若快照显示根仓未同步、本地工作区 dirty，或命中异常治理现场，就立即读取 `{RELEASE_BOUNDARY_REPORT_PATH}` 并切到发布边界收口模式；必须先执行清理动作，不允许只抄数字等状态自然恢复。只做受支持动作：基于本机 `../workflow_code` 的 non-destructive 本地根仓收口、developer workspace bootstrap/refresh、helper stale `creating` / schedule / supervisor / runtime-upgrade 恢复。除非你明确要求，不要主动 `fetch/pull origin` 或拉 GitHub。",
-                "4. 检查 prod 当前 schedules、assignment graph、ready/running 节点、最近 runs 与 `/api/runtime-upgrade/status` 真相；当前 shell 是 PowerShell：不要使用 bash heredoc（如 `python - <<'PY'`），不要把 `scripts/*.ps1` 这类通配路径直接交给 `rg`，也不要手工猜测 run_id。",
-                "5. 继续检查 `/api/runtime-upgrade/status` 作为升级门禁真相；正式升级申请改由 `prod` supervisor 托管的 idle watcher 周期检查并发起，当前巡检节点不要自己调用 `/api/runtime-upgrade/apply`。",
-                f"5.1 {ASSIGNMENT_SELF_UPGRADE_HINT}",
-                "6. 若 [持续迭代] workflow 没有未来入口，立即补一条未来可执行入口或当前版本任务。",
-                f"7. 若测试/质量/开发/缺陷修复泳道缺少执行者，给 {ASSIGNMENT_SELF_ITERATION_TEAMMATES_TEXT} 创建或续挂任务。",
-                "8. 更新 `.codex/memory/...` 时，在 `next` 明确写出下一次主线/保底触发时间，同时标注本轮泳道与生命周期阶段。",
-                "9. 输出本次保底巡检结论、证据路径和下一次建议唤醒时间。",
+                f"1. 按 `{ASSIGNMENT_PM_GOVERNANCE_README_PATH} -> {ASSIGNMENT_SELF_ITERATION_MASTER_PLAN_PATH} -> {version_plan_path} -> {version_plan_path} 中 active_version_file 指向的版本文件 -> {ASSIGNMENT_SELF_ITERATION_DAILY_TASK_PATH} -> {wake_requirement_path}` 的顺序补齐上下文。",
+                f"2. 先确认本轮属于 `{ASSIGNMENT_SELF_ITERATION_LIFECYCLE_TEXT}` 中的哪一段，并从 `{ASSIGNMENT_SELF_ITERATION_PERIODIC_LANES_TEXT}` 里判断当前泳道。",
+                f"3. 先检查 `{ASSIGNMENT_SELF_ITERATION_DAILY_HISTORY_HINT}` 对应的今日日文件是否存在；若不存在，需要在当天合适窗口补做今天唯一一轮每日任务并落盘。",
+                "4. 先判断当前版本引用和当前活跃版本文件是否要求暂停、治理调整或仅观察；若是，默认不补新主线，只报告现场并保持暂停。",
+                "5. 再检查 `/healthz`、`/api/status`、`/api/schedules`、`/api/runtime-upgrade/status`；必要时再看 `assignment graph / status-detail / run.json / events.log`。",
+                "6. 先记录 `root_sync_state / ahead_count / dirty_tracked_count / untracked_count / push_block_reason / next_push_batch`；若命中 dirty/ahead/异常治理现场，立即进入发布边界收口模式。",
+                f"7. 只做受支持动作：基于本机 `../workflow_code` 的 non-destructive 收口、developer workspace bootstrap/refresh、helper stale `creating` / schedule / supervisor / runtime-upgrade 恢复。不要主动 `fetch/pull origin` 或拉 GitHub。",
+                f"8. 正式升级申请改由 `prod` supervisor 托管的 idle watcher 周期检查并发起，当前巡检节点不要自己调用 `/api/runtime-upgrade/apply`。{ASSIGNMENT_SELF_UPGRADE_HINT}",
+                f"9. 只有主链断了，或当前版本引用/当前活跃版本文件明确要求补链/兜底时，才补新的 [持续迭代] workflow 入口；是否派发或恢复小伙伴，也要按版本文件里的每轮必查项判断。",
+                f"10. 当天的版本推进、后移和后续版本排期判断先写 `{ASSIGNMENT_SELF_ITERATION_VERSION_HISTORY_HINT}`；只有本轮主判断发生变化时，才更新 `{version_plan_path}` 的当前状态快照。",
+                "11. 若发现高杠杆新功能或低维护价值重构项，先记录并明确它进入哪个后续版本，不要借巡检窗口把当前版本加胖。",
+                "12. 更新 `.codex/memory/...` 时，在 `next` 明确写出下一次主线/保底触发时间，并输出本次巡检结论与下一步建议；记忆库每一轮都要更新。",
             ]
         ).strip(),
         "done_definition": "\n".join(
             [
-                "1. prod 至少保留一条未来可执行的 workflow 主线入口。",
-                "2. 不能存在 `workflow` 已到时 ready 节点堆积但没有真实 live run 的假健康现场。",
-                "3. 本次巡检结论明确写出 active 版本、泳道、生命周期阶段与证据。",
-                f"3.1 若本轮更新 `{version_plan_path}`，主计划正文中的 `4.6.1 当前现场更新` 仍保持单份最新快照；详细现场已写入 `{ASSIGNMENT_SELF_ITERATION_PLAN_LIVE_INDEX_PATH}` 指向的活动月份总览，而不是继续把正文写成长流水。",
-                "4. 本次巡检显式记录了 `root_sync_state / ahead_count / dirty_tracked_count / untracked_count / push_block_reason / next_push_batch`，且没有把它们当成终态交付。",
-                "5. 若发现这是上一轮遗留的 dirty/ahead 历史问题，本轮已经先处理这批历史 release boundary，执行清理或明确阻塞；不接受只汇报计数后空等。",
-                "5.1 若本轮命中 7x24 异常治理现场，本轮已经执行受支持的治理收口动作，或明确写清为什么仍然 blocked，而不是只停在“workspace_path 不允许”。",
-                "6. 若主链已断，本轮已经完成补链而不是只留口头说明。",
+                "1. 本次巡检已经明确回答：当前是继续推进、保持暂停、还是需要兜底补链。",
+                f"2. 若今日 `{ASSIGNMENT_SELF_ITERATION_DAILY_HISTORY_HINT}` 原本不存在，本轮已经补齐当天每日执行结果，或明确写清为什么仍未完成。",
+                "3. 若当前窗口是暂停/治理调整，本轮没有误补新的主线 schedule 或主线任务。",
+                "4. 若当前窗口允许推进，prod 仍至少保留一条未来可执行的 workflow 主线入口，且不存在 ready 堆积但没有 live run 的假健康现场。",
+                "5. 本次巡检显式记录了 `root_sync_state / ahead_count / dirty_tracked_count / untracked_count / push_block_reason / next_push_batch`，并且没有把它们误当成终态交付。",
+                f"6. 当天的版本推进、后移和后续版本排期判断已写入 `{ASSIGNMENT_SELF_ITERATION_VERSION_HISTORY_HINT}`；只有主判断变化时才更新 `{version_plan_path}` 的当前状态快照。",
+                "7. 若命中 7x24 异常治理现场，本轮已经执行受支持的治理收口动作，或明确写清为什么仍然 blocked。",
             ]
         ).strip(),
         "priority": "P1",
