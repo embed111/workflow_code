@@ -39,6 +39,46 @@ def _run_git_readonly(repo: Path, args: list[str]) -> tuple[bool, str]:
     return True, str(proc.stdout or "").strip()
 
 
+def _git_is_ancestor(repo: Path, older_commit: str, newer_commit: str) -> bool | None:
+    older = str(older_commit or "").strip()
+    newer = str(newer_commit or "").strip()
+    if not older or not newer:
+        return None
+    ok, _output = _run_git_readonly(repo, ["merge-base", "--is-ancestor", older, newer])
+    if ok:
+        return True
+    git_bin = _git_available()
+    if not git_bin:
+        return None
+    try:
+        proc = subprocess.run(
+            [git_bin, "-C", repo.as_posix(), "merge-base", "--is-ancestor", older, newer],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+        )
+    except Exception:
+        return None
+    if proc.returncode == 0:
+        return True
+    if proc.returncode == 1:
+        return False
+    return None
+
+
+def _git_rev_count(repo: Path, revspec: str) -> int:
+    text = str(revspec or "").strip()
+    if not text:
+        return 0
+    ok, output = _run_git_readonly(repo, ["rev-list", "--count", text])
+    if not ok:
+        return 0
+    try:
+        return max(0, int(str(output or "").strip() or "0"))
+    except Exception:
+        return 0
+
+
 def _select_workspace_path(
     *,
     boundary: dict[str, Any],
@@ -180,6 +220,10 @@ def collect_release_boundary_snapshot(
         "code_root_head": "",
         "branch_status": "",
         "code_root_branch_status": "",
+        "upstream_ahead_count": 0,
+        "upstream_behind_count": 0,
+        "code_root_upstream_ahead_count": 0,
+        "code_root_upstream_behind_count": 0,
         "root_sync_state": "diverged_or_unknown",
         "code_root_sync_state": "diverged_or_unknown",
         "ahead_count": 0,
@@ -230,48 +274,67 @@ def collect_release_boundary_snapshot(
         _code_root_changed_paths,
     ) = _parse_git_status(code_status_text) if ok_code_status else ("", 0, 0, 0, 0, [])
     suggested_push_batches = _suggest_push_batches(changed_paths)
-    root_sync_state = _root_sync_state(
-        branch_status=branch_status,
-        ahead_count=ahead_count,
-        behind_count=behind_count,
-        dirty_tracked_count=dirty_tracked_count,
-        untracked_count=untracked_count,
+    upstream_ahead_count = ahead_count
+    upstream_behind_count = behind_count
+    code_root_upstream_ahead_count = code_root_ahead_count
+    code_root_upstream_behind_count = code_root_behind_count
+
+    ahead_count = 0
+    behind_count = 0
+    code_root_ahead_count = 0
+    code_root_behind_count = 0
+    code_root_sync_state = (
+        "ahead_dirty"
+        if (code_root_dirty_tracked_count > 0 or code_root_untracked_count > 0)
+        else ("clean_synced" if code_head else "diverged_or_unknown")
     )
-    code_root_sync_state = _root_sync_state(
-        branch_status=code_root_branch_status,
-        ahead_count=code_root_ahead_count,
-        behind_count=code_root_behind_count,
-        dirty_tracked_count=code_root_dirty_tracked_count,
-        untracked_count=code_root_untracked_count,
-    )
+
     push_block_reason = ""
-    if root_sync_state == "diverged_or_unknown":
-        push_block_reason = "workspace_branch_diverged_or_behind"
-    elif dirty_tracked_count > 0 or untracked_count > 0:
+    next_push_batch = suggested_push_batches[0] if suggested_push_batches else "待切批"
+
+    if dirty_tracked_count > 0 or untracked_count > 0:
+        root_sync_state = "ahead_dirty"
         push_block_reason = "workspace_dirty_changes_present"
-    elif ahead_count > 0:
-        push_block_reason = "unpushed_commits_present"
-    next_push_batch = suggested_push_batches[0] if suggested_push_batches else ("待切批" if push_block_reason else "")
-    if code_root_sync_state != "clean_synced" and root_sync_state == "clean_synced":
+    elif code_root_dirty_tracked_count > 0 or code_root_untracked_count > 0:
         root_sync_state = "diverged_or_unknown"
-        if code_root_behind_count > 0:
-            push_block_reason = "code_root_local_repo_behind_origin_main"
-            next_push_batch = "先快进 ../workflow_code 本地 main"
-        elif code_root_dirty_tracked_count > 0 or code_root_untracked_count > 0:
-            push_block_reason = "code_root_dirty_changes_present"
-            next_push_batch = "先收口 ../workflow_code 本地改动"
-        elif code_root_ahead_count > 0:
-            push_block_reason = "code_root_local_repo_ahead_origin_main"
-            next_push_batch = "先校准 ../workflow_code 与 origin/main"
+        push_block_reason = "code_root_dirty_changes_present"
+        next_push_batch = "先收口 ../workflow_code 本地改动"
+    elif workspace_head and code_head:
+        if workspace_head == code_head:
+            root_sync_state = "clean_synced"
+            next_push_batch = "待切批"
         else:
-            push_block_reason = "code_root_sync_unknown"
-            next_push_batch = "先校准 ../workflow_code 同步状态"
+            workspace_ahead_of_code_root = _git_is_ancestor(workspace_path, code_head, workspace_head)
+            code_root_ahead_of_workspace = _git_is_ancestor(code_root, workspace_head, code_head) if isinstance(code_root, Path) else None
+            if workspace_ahead_of_code_root is True:
+                root_sync_state = "ahead_clean"
+                ahead_count = _git_rev_count(workspace_path, f"{code_head}..{workspace_head}") or 1
+                push_block_reason = "workspace_commit_not_synced_to_code_root"
+                next_push_batch = suggested_push_batches[0] if suggested_push_batches else "同步当前批次到 ../workflow_code"
+            elif code_root_ahead_of_workspace is True:
+                root_sync_state = "diverged_or_unknown"
+                behind_count = _git_rev_count(code_root, f"{workspace_head}..{code_head}") or 1
+                push_block_reason = "workspace_head_behind_code_root"
+                next_push_batch = "先同步 ../workflow_code 到当前工作区"
+            else:
+                root_sync_state = "diverged_or_unknown"
+                push_block_reason = "workspace_and_code_root_diverged"
+                next_push_batch = "先校准当前工作区与 ../workflow_code"
+    else:
+        root_sync_state = "diverged_or_unknown"
+        push_block_reason = "workspace_or_code_root_head_unavailable"
+        next_push_batch = "先校准当前工作区与 ../workflow_code"
+
     snapshot.update(
         {
             "workspace_head": workspace_head if ok_workspace_head else "",
             "code_root_head": code_head if ok_code_head else "",
             "branch_status": branch_status,
             "code_root_branch_status": code_root_branch_status,
+            "upstream_ahead_count": upstream_ahead_count,
+            "upstream_behind_count": upstream_behind_count,
+            "code_root_upstream_ahead_count": code_root_upstream_ahead_count,
+            "code_root_upstream_behind_count": code_root_upstream_behind_count,
             "root_sync_state": root_sync_state,
             "code_root_sync_state": code_root_sync_state,
             "ahead_count": ahead_count,
@@ -315,7 +378,11 @@ def format_release_boundary_prompt_lines(snapshot: dict[str, Any]) -> list[str]:
             f" ; workspace_head={str(payload.get('workspace_head') or '').strip() or '-'}"
             f" ; code_root_head={str(payload.get('code_root_head') or '').strip() or '-'}"
         ),
-        f"branch_status: {str(payload.get('branch_status') or '').strip() or '-'}",
+        (
+            "上游参考状态(默认不阻塞)："
+            f" workspace={str(payload.get('branch_status') or '').strip() or '-'}"
+            f" ; code_root={str(payload.get('code_root_branch_status') or '').strip() or '-'}"
+        ),
         (
             "代码根仓快照："
             f" code_root_sync_state={str(payload.get('code_root_sync_state') or '').strip() or 'diverged_or_unknown'}"
@@ -324,7 +391,6 @@ def format_release_boundary_prompt_lines(snapshot: dict[str, Any]) -> list[str]:
             f" ; code_root_dirty_tracked_count={int(payload.get('code_root_dirty_tracked_count') or 0)}"
             f" ; code_root_untracked_count={int(payload.get('code_root_untracked_count') or 0)}"
         ),
-        f"code_root_branch_status: {str(payload.get('code_root_branch_status') or '').strip() or '-'}",
         (
             f"next_push_batch: {str(payload.get('next_push_batch') or '').strip() or '待切批'}"
             f" ; push_block_reason: {str(payload.get('push_block_reason') or '').strip() or '-'}"
@@ -332,11 +398,11 @@ def format_release_boundary_prompt_lines(snapshot: dict[str, Any]) -> list[str]:
     ]
     if root_sync_state == "clean_synced":
         lines.append(
-            "发布边界动作: 当前已 clean_synced；若本轮产生代码改动并完成验证，收尾前必须从当前工作区 commit/push 到 `../workflow_code/main`。"
+            "发布边界动作: 当前已相对本机 `../workflow_code` clean_synced；若本轮产生代码改动并完成验证，收尾前必须从当前工作区提交并同步到 `../workflow_code/main`。GitHub / origin 默认只作参考，不作为本轮阻塞。"
         )
     else:
         lines.append(
-            "发布边界动作: 当前未 clean_synced；若这是上轮留下的 dirty/ahead，本轮第一优先级先处理历史批次，未收口前不要继续扩同工作区改动面。"
+            "发布边界动作: 当前尚未相对本机 `../workflow_code` 收口；若这是上轮留下的 dirty/ahead，本轮第一优先级先处理历史批次，未收口前不要继续扩同工作区改动面。GitHub / origin 默认只作参考，不作为本轮阻塞。"
         )
     if str(payload.get("code_root_sync_state") or "").strip() not in {"", "clean_synced"}:
         lines.append(

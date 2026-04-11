@@ -50,6 +50,11 @@ SCRIPT_PROBE_DEFINITIONS: tuple[ScriptProbeDefinition, ...] = (
         failure_message="prod auto upgrade single-check helper probe failed",
     ),
     ScriptProbeDefinition(
+        key="release_boundary_local_root_sync_policy",
+        relative_path="scripts/acceptance/verify_release_boundary_local_root_sync_policy.py",
+        failure_message="release boundary local root sync policy probe failed",
+    ),
+    ScriptProbeDefinition(
         key="runtime_process_instance_fallback",
         relative_path="scripts/acceptance/verify_runtime_process_instance_fallback.py",
         failure_message="runtime process instance fallback probe failed",
