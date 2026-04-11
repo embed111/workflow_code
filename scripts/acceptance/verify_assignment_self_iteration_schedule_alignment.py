@@ -58,8 +58,8 @@ def main() -> int:
         self_item = next(item for item in items if str(item.get("schedule_name") or "").strip() == "[持续迭代] workflow")
         wake_item = next(item for item in items if "主线巡检" in str(item.get("schedule_name") or "").strip())
 
-        assert str(result.get("next_trigger_at") or "").strip() == "2026-04-08T02:43:00+08:00", result
-        assert str(result.get("backup_next_trigger_at") or "").strip() == "2026-04-08T03:13:00+08:00", result
+        assert str(result.get("next_trigger_at") or "").strip() == "2026-04-08T02:23:00+08:00", result
+        assert str(result.get("backup_next_trigger_at") or "").strip() == "2026-04-08T02:28:00+08:00", result
         assert str(self_item.get("next_trigger_at") or "").strip() == str(result.get("next_trigger_at") or "").strip(), {
             "result": result,
             "schedule": self_item,
