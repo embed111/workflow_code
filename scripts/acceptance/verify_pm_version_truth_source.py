@@ -23,7 +23,7 @@ def _expected_current_snapshot_baseline(plan_text: str) -> str:
     section_match = re.search(r"^##+\s*[0-9.]*\s*当前状态快照\s*(.*?)(?=^##+\s|\Z)", str(plan_text or ""), re.DOTALL | re.MULTILINE)
     assert section_match, "current snapshot section missing"
     baseline_match = re.search(
-        r"^\s*\d+\.\s*baseline\s*(?:继续沿用|为|已切到)?\s*`([^`]+)`",
+        r"^\s*\d+\.\s*baseline\s*(?:继续沿用|为|已切到|已更新为)?\s*`([^`]+)`",
         section_match.group(1),
         re.IGNORECASE | re.MULTILINE,
     )
@@ -64,6 +64,7 @@ def main() -> int:
     prompt_text = "\n".join(prompt_lines)
     assert "当前版本快照：" in prompt_text, prompt_text
     assert f"active_version={plan_status['active_version']}" in prompt_text, prompt_text
+    assert f"lifecycle_stage={plan_status['lifecycle_stage']}" in prompt_text, prompt_text
     assert f"baseline={expected_baseline}" in prompt_text, prompt_text
 
     truth_payload = build_pm_version_truth_payload(

@@ -17,16 +17,22 @@ _CURRENT_SNAPSHOT_SECTION_RE = re.compile(
 )
 _CURRENT_ACTIVE_VERSION_RE = re.compile(r"^\s*\d+\.\s*active\s*版本(?:仍是|为)?\s*`([^`]+)`", re.IGNORECASE | re.MULTILINE)
 _CURRENT_LANE_RE = re.compile(r"^\s*\d+\.\s*当前最高价值泳道(?:为)?\s*`([^`]+)`", re.MULTILINE)
-_CURRENT_LIFECYCLE_STAGE_RE = re.compile(r"^\s*\d+\.\s*生命周期阶段(?:为)?\s*`([^`]+)`", re.MULTILINE)
+_CURRENT_LIFECYCLE_STAGE_RE = re.compile(
+    r"^\s*\d+\.\s*生命周期阶段(?:为|继续保持)?\s*`([^`]+)`",
+    re.MULTILINE,
+)
 _CURRENT_BASELINE_RE = re.compile(
-    r"^\s*\d+\.\s*baseline\s*(?:继续沿用|为|已切到)?\s*`([^`]+)`",
+    r"^\s*\d+\.\s*baseline\s*(?:继续沿用|为|已切到|已更新为)?\s*`([^`]+)`",
     re.IGNORECASE | re.MULTILINE,
 )
 _CURRENT_SNAPSHOT_AT_RE = re.compile(r"^\s*\d+\.\s*最新有效快照截至\s*`([^`]+)`", re.MULTILINE)
 _ACTIVE_VERSION_RE = re.compile(r"active\s*版本(?:仍是|为)?\s*`([^`]+)`", re.IGNORECASE)
 _LANE_RE = re.compile(r"当前最高价值泳道(?:为)?\s*`([^`]+)`")
-_LIFECYCLE_STAGE_RE = re.compile(r"生命周期阶段(?:为)?\s*`([^`]+)`")
-_BASELINE_RE = re.compile(r"(?:baseline=|baseline\s+(?:继续沿用|为|已切到))\s*`([^`]+)`", re.IGNORECASE)
+_LIFECYCLE_STAGE_RE = re.compile(r"生命周期阶段(?:为|继续保持)?\s*`([^`]+)`")
+_BASELINE_RE = re.compile(
+    r"(?:baseline=|baseline\s+(?:继续沿用|为|已切到|已更新为))\s*`([^`]+)`",
+    re.IGNORECASE,
+)
 _SNAPSHOT_AT_RE = re.compile(r"最新有效快照截至\s*`([^`]+)`")
 _ACTIVE_TABLE_RE = re.compile(r"^\|\s*`([^`]+)`[^|]*\|\s*`active`\s*\|", re.MULTILINE)
 
