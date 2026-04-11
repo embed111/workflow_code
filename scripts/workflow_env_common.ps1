@@ -1457,3 +1457,205 @@ function Write-WorkflowDeploymentEvent {
     }
     Append-WorkflowJsonLine -Path (Get-WorkflowDeploymentEventsPath -SourceRoot $SourceRoot) -Payload $row
 }
+
+function Get-WorkflowEnvironmentVariableText {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Name
+    )
+
+    foreach ($scope in @('Process', 'User', 'Machine')) {
+        $rawValue = [Environment]::GetEnvironmentVariable($Name, $scope)
+        if ($null -eq $rawValue) {
+            continue
+        }
+        $text = ([string]$rawValue).Trim()
+        if (-not [string]::IsNullOrWhiteSpace($text)) {
+            return $text
+        }
+    }
+    return ''
+}
+
+function Get-WorkflowBooleanEnvironmentValue {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Name,
+        [bool]$Default = $false
+    )
+
+    $text = Get-WorkflowEnvironmentVariableText -Name $Name
+    if ([string]::IsNullOrWhiteSpace($text)) {
+        return $Default
+    }
+    switch -Regex ($text.Trim().ToLowerInvariant()) {
+        '^(1|true|yes|on)$' { return $true }
+        '^(0|false|no|off)$' { return $false }
+        default { return $Default }
+    }
+}
+
+function Get-WorkflowIntegerEnvironmentValue {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Name,
+        [Parameter(Mandatory = $true)]
+        [int]$Default,
+        [int]$Minimum = 0,
+        [int]$Maximum = [int]::MaxValue
+    )
+
+    $fallback = $Default
+    if ($fallback -lt $Minimum) {
+        $fallback = $Minimum
+    }
+    if ($fallback -gt $Maximum) {
+        $fallback = $Maximum
+    }
+
+    $text = Get-WorkflowEnvironmentVariableText -Name $Name
+    if ([string]::IsNullOrWhiteSpace($text)) {
+        return $fallback
+    }
+    $value = 0
+    if (-not [int]::TryParse($text, [ref]$value)) {
+        return $fallback
+    }
+    if ($value -lt $Minimum) {
+        return $Minimum
+    }
+    if ($value -gt $Maximum) {
+        return $Maximum
+    }
+    return $value
+}
+
+function Resolve-WorkflowPythonCommand {
+    foreach ($commandName in @('python', 'py')) {
+        $command = Get-Command $commandName -ErrorAction SilentlyContinue
+        if ($command) {
+            return [string]$command.Source
+        }
+    }
+    throw 'python command not found'
+}
+
+function Get-WorkflowProdAutoUpgradeLogPath {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$SourceRoot
+    )
+
+    return Join-Path (Join-Path (Get-WorkflowGovernanceRoot -SourceRoot $SourceRoot) 'logs\runs') 'prod-idle-upgrade-watchdog-live.md'
+}
+
+function Invoke-WorkflowProdAutoUpgradeSingleCheck {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$SourceRoot,
+        [Parameter(Mandatory = $true)]
+        [hashtable]$Descriptor,
+        [string]$Operator = 'prod-idle-upgrade-watchdog',
+        [string]$LogPath = '',
+        [int]$RequestTimeoutSeconds = 8,
+        [int]$TimeoutSeconds = 30
+    )
+
+    $environment = [string]$Descriptor.environment
+    if ($environment -ne 'prod') {
+        return @{
+            ok = $true
+            skipped = $true
+            reason = 'environment_not_prod'
+            exit_code = 0
+        }
+    }
+
+    $bindHost = [string]$Descriptor.host
+    $port = 0
+    try {
+        $port = [int]$Descriptor.port
+    }
+    catch {
+        $port = 0
+    }
+    if ([string]::IsNullOrWhiteSpace($bindHost) -or $port -le 0) {
+        return @{
+            ok = $false
+            skipped = $true
+            reason = 'descriptor_missing_host_or_port'
+            exit_code = -1
+        }
+    }
+
+    $scriptPath = Join-Path $SourceRoot 'scripts\apply_prod_candidate_when_idle.py'
+    if (-not (Test-Path -LiteralPath $scriptPath)) {
+        return @{
+            ok = $false
+            skipped = $true
+            reason = 'watcher_script_missing'
+            exit_code = -1
+            script_path = $scriptPath
+        }
+    }
+
+    if ([string]::IsNullOrWhiteSpace($LogPath)) {
+        $LogPath = Get-WorkflowProdAutoUpgradeLogPath -SourceRoot $SourceRoot
+    }
+
+    try {
+        $pythonCommand = Resolve-WorkflowPythonCommand
+    }
+    catch {
+        return @{
+            ok = $false
+            skipped = $true
+            reason = 'python_command_missing'
+            error = $_.Exception.Message
+            exit_code = -1
+            script_path = $scriptPath
+            log_path = $LogPath
+        }
+    }
+
+    $baseUrl = "http://$bindHost`:$port"
+    $outputLines = @()
+    $exitCode = -1
+    try {
+        $outputLines = & $pythonCommand `
+            $scriptPath `
+            '--base-url' $baseUrl `
+            '--single-check' `
+            '--operator' $Operator `
+            '--request-timeout-seconds' ([string]$RequestTimeoutSeconds) `
+            '--timeout-seconds' ([string]$TimeoutSeconds) `
+            '--log-path' $LogPath 2>&1
+        $exitCode = if ($null -ne $LASTEXITCODE) { [int]$LASTEXITCODE } else { 0 }
+    }
+    catch {
+        return @{
+            ok = $false
+            skipped = $true
+            reason = 'watcher_invocation_failed'
+            error = $_.Exception.Message
+            exit_code = -1
+            python_command = $pythonCommand
+            script_path = $scriptPath
+            log_path = $LogPath
+            base_url = $baseUrl
+        }
+    }
+
+    return @{
+        ok = ($exitCode -eq 0)
+        skipped = ($exitCode -eq 0)
+        reason = if ($exitCode -eq 0) { 'completed' } else { 'watcher_exit_nonzero' }
+        exit_code = $exitCode
+        python_command = $pythonCommand
+        script_path = $scriptPath
+        log_path = $LogPath
+        base_url = $baseUrl
+        operator = $Operator
+        output = @($outputLines | ForEach-Object { [string]$_ })
+    }
+}

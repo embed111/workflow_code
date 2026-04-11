@@ -1,10 +1,5 @@
 from __future__ import annotations
 
-import json
-from urllib import error as urllib_error
-from urllib import parse as urllib_parse
-from urllib import request as urllib_request
-
 from workflow_app.server.services.release_boundary_service import (
     RELEASE_BOUNDARY_REPORT_PATH,
     collect_release_boundary_snapshot,
@@ -29,12 +24,9 @@ ASSIGNMENT_SELF_ITERATION_LIFECYCLE_TEXT = (
 ASSIGNMENT_SELF_ITERATION_TEAMMATES_TEXT = (
     "workflow_devmate / workflow_testmate / workflow_qualitymate / workflow_bugmate"
 )
-ASSIGNMENT_SELF_UPGRADE_OPERATOR = "assignment-self-upgrade"
-ASSIGNMENT_SELF_UPGRADE_TIMEOUT_SECONDS = 8.0
 ASSIGNMENT_SELF_UPGRADE_HINT = (
-    "若只剩当前主线/巡检节点占用 running 槽，可带 `exclude_assignment_ticket_id` / "
-    "`exclude_assignment_node_id` 再复核 `/api/runtime-upgrade/status`，确认后直接调用 "
-    "`/api/runtime-upgrade/apply`。"
+    "正式升级改由 `prod` supervisor 托管的 idle watcher 周期检查并发起；"
+    "当前主线/巡检节点不要再通过自排除方式自己触发 `/api/runtime-upgrade/apply`。"
 )
 
 
@@ -121,7 +113,7 @@ def _assignment_self_iteration_schedule_payload(
                 "3. 先记录当前根仓同步快照里的 `root_sync_state / ahead_count / dirty_tracked_count / untracked_count / push_block_reason / next_push_batch`，不要只写“继续收 Git 边界”。",
                 f"4. 若快照显示根仓未同步、本地工作区 dirty，或命中异常治理现场，就立即读取 `{RELEASE_BOUNDARY_REPORT_PATH}` 并进入发布边界收口模式；这轮只做受支持动作：non-destructive `git fetch / pull --ff-only`、developer workspace bootstrap/refresh、helper stale `creating` / schedule / supervisor / runtime-upgrade 恢复。",
                 "5. 再检查 healthz、assignments、schedules、runs 与 `/api/runtime-upgrade/status`；当前 shell 是 PowerShell：不要使用 bash heredoc（如 `python - <<'PY'`），不要把 `scripts/*.ps1` 这类通配路径直接交给 `rg`，也不要手工猜测 run_id。",
-                f"6. 若 `can_upgrade=true` 且当前无运行中任务，直接调用 `/api/runtime-upgrade/apply` 完成无痛升级；{ASSIGNMENT_SELF_UPGRADE_HINT}",
+                f"6. 继续检查 `/api/runtime-upgrade/status` 作为升级门禁真相；正式升级申请改由 `prod` supervisor 托管的 idle watcher 周期检查并发起，当前主线节点不要自己调用 `/api/runtime-upgrade/apply`。{ASSIGNMENT_SELF_UPGRADE_HINT}",
                 "7. 在推进开发实现前，先明确本轮沿用的 baseline、需要变更控制的内容，以及基于哪条基线做后续测试与验收；优先推进当前版本里最高优先级且未完成的任务包，不要跳版抢做新功能。",
                 f"8. 视情况给 {ASSIGNMENT_SELF_ITERATION_TEAMMATES_TEXT} 创建或续挂任务；更新 `.codex/memory/...` 时，在 `next` 明确写出下一次主线/保底触发时间，同时写清本轮泳道与生命周期阶段，并确保系统已经挂上下一轮可执行任务或唤醒计划。",
             ]
@@ -269,7 +261,7 @@ def _assignment_pm_wake_schedule_payload(
                 "3. 先记录当前根仓同步快照里的 `root_sync_state / ahead_count / dirty_tracked_count / untracked_count / push_block_reason / next_push_batch`。",
                 f"3.1 若快照显示根仓未同步、本地工作区 dirty，或命中异常治理现场，就立即读取 `{RELEASE_BOUNDARY_REPORT_PATH}` 并切到发布边界收口模式；只做受支持动作：non-destructive `git fetch / pull --ff-only`、developer workspace bootstrap/refresh、helper stale `creating` / schedule / supervisor / runtime-upgrade 恢复。",
                 "4. 检查 prod 当前 schedules、assignment graph、ready/running 节点、最近 runs 与 `/api/runtime-upgrade/status` 真相；当前 shell 是 PowerShell：不要使用 bash heredoc（如 `python - <<'PY'`），不要把 `scripts/*.ps1` 这类通配路径直接交给 `rg`，也不要手工猜测 run_id。",
-                "5. 若 `can_upgrade=true` 且当前无运行中任务，直接调用 `/api/runtime-upgrade/apply` 完成无痛升级，再继续巡检。",
+                "5. 继续检查 `/api/runtime-upgrade/status` 作为升级门禁真相；正式升级申请改由 `prod` supervisor 托管的 idle watcher 周期检查并发起，当前巡检节点不要自己调用 `/api/runtime-upgrade/apply`。",
                 f"5.1 {ASSIGNMENT_SELF_UPGRADE_HINT}",
                 "6. 若 [持续迭代] workflow 没有未来入口，立即补一条未来可执行入口或当前版本任务。",
                 f"7. 若测试/质量/开发/缺陷修复泳道缺少执行者，给 {ASSIGNMENT_SELF_ITERATION_TEAMMATES_TEXT} 创建或续挂任务。",
@@ -416,57 +408,6 @@ def _assignment_runtime_upgrade_loopback_base_url() -> str:
     return f"http://{host}:{port}"
 
 
-def _assignment_runtime_upgrade_json_request(
-    *,
-    base_url: str,
-    method: str,
-    path: str,
-    payload: dict[str, Any] | None = None,
-    timeout_seconds: float = ASSIGNMENT_SELF_UPGRADE_TIMEOUT_SECONDS,
-) -> tuple[int, dict[str, Any]]:
-    url = f"{str(base_url or '').rstrip('/')}{str(path or '').strip()}"
-    headers = {"Accept": "application/json"}
-    data = None
-    if payload is not None:
-        headers["Content-Type"] = "application/json; charset=utf-8"
-        data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-    request = urllib_request.Request(
-        url,
-        data=data,
-        headers=headers,
-        method=str(method or "GET").strip().upper() or "GET",
-    )
-    try:
-        with urllib_request.urlopen(request, timeout=max(1.0, float(timeout_seconds or 0.0))) as response:
-            status = int(getattr(response, "status", 0) or response.getcode() or 0)
-            raw = response.read().decode("utf-8", "replace")
-    except urllib_error.HTTPError as exc:
-        status = int(exc.code or 0)
-        raw = exc.read().decode("utf-8", "replace")
-    except Exception as exc:
-        return 0, {
-            "ok": False,
-            "error": str(exc),
-            "code": "runtime_upgrade_loopback_request_failed",
-        }
-    try:
-        payload_data = json.loads(raw) if raw else {}
-    except Exception:
-        payload_data = {
-            "ok": False,
-            "error": "runtime upgrade loopback response invalid json",
-            "code": "runtime_upgrade_loopback_invalid_json",
-            "raw_body": raw[:1000],
-        }
-    if not isinstance(payload_data, dict):
-        payload_data = {
-            "ok": False,
-            "error": "runtime upgrade loopback response payload invalid",
-            "code": "runtime_upgrade_loopback_invalid_payload",
-        }
-    return status, payload_data
-
-
 def _assignment_maybe_request_prod_upgrade_after_finalize(
     root: Path,
     *,
@@ -480,82 +421,13 @@ def _assignment_maybe_request_prod_upgrade_after_finalize(
             "reason": "agent_not_enabled",
         }
     base_url = _assignment_runtime_upgrade_loopback_base_url()
-    if not base_url:
-        return {
-            "requested": False,
-            "suppress_dispatch": False,
-            "reason": "runtime_upgrade_loopback_unavailable",
-        }
     ticket_id = str(task_record.get("ticket_id") or "").strip()
     node_id = str(node_record.get("node_id") or "").strip()
-    query = urllib_parse.urlencode(
-        {
-            "exclude_assignment_ticket_id": ticket_id,
-            "exclude_assignment_node_id": node_id,
-        }
-    )
-    status_code, status_payload = _assignment_runtime_upgrade_json_request(
-        base_url=base_url,
-        method="GET",
-        path=f"/api/runtime-upgrade/status?{query}",
-    )
-    if status_code != 200 or not bool((status_payload or {}).get("ok")):
-        return {
-            "requested": False,
-            "suppress_dispatch": False,
-            "reason": "runtime_upgrade_status_unavailable",
-            "status_code": int(status_code or 0),
-            "status_payload": status_payload,
-        }
-    request_pending = bool((status_payload or {}).get("request_pending"))
-    if request_pending:
-        return {
-            "requested": False,
-            "suppress_dispatch": True,
-            "reason": "runtime_upgrade_already_requested",
-            "status_code": int(status_code or 0),
-            "status_payload": status_payload,
-            "current_version": str((status_payload or {}).get("current_version") or "").strip(),
-            "candidate_version": str((status_payload or {}).get("candidate_version") or "").strip(),
-        }
-    if not bool((status_payload or {}).get("can_upgrade")):
-        return {
-            "requested": False,
-            "suppress_dispatch": False,
-            "reason": str((status_payload or {}).get("blocking_reason_code") or "runtime_upgrade_blocked").strip()
-            or "runtime_upgrade_blocked",
-            "status_code": int(status_code or 0),
-            "status_payload": status_payload,
-            "current_version": str((status_payload or {}).get("current_version") or "").strip(),
-            "candidate_version": str((status_payload or {}).get("candidate_version") or "").strip(),
-        }
-    apply_body = {
-        "operator": ASSIGNMENT_SELF_UPGRADE_OPERATOR,
-        "exclude_assignment_ticket_id": ticket_id,
-        "exclude_assignment_node_id": node_id,
-    }
-    apply_status, apply_payload = _assignment_runtime_upgrade_json_request(
-        base_url=base_url,
-        method="POST",
-        path="/api/runtime-upgrade/apply",
-        payload=apply_body,
-    )
-    requested = int(apply_status or 0) == 202 and bool((apply_payload or {}).get("ok"))
-    apply_code = str((apply_payload or {}).get("code") or "").strip()
-    suppress_dispatch = requested or apply_code == "runtime_upgrade_already_requested" or bool(
-        (apply_payload or {}).get("request_pending")
-    )
     return {
-        "requested": requested,
-        "suppress_dispatch": bool(suppress_dispatch),
-        "reason": "prod_upgrade_requested" if requested else (apply_code or "runtime_upgrade_apply_failed"),
+        "requested": False,
+        "suppress_dispatch": False,
+        "reason": "runtime_upgrade_delegated_to_watchdog",
         "base_url": base_url,
         "ticket_id": ticket_id,
         "node_id": node_id,
-        "status_code": int(status_code or 0),
-        "apply_status": int(apply_status or 0),
-        "current_version": str((status_payload or {}).get("current_version") or "").strip(),
-        "candidate_version": str((status_payload or {}).get("candidate_version") or "").strip(),
-        "status_payload": status_payload,
-        "apply_payload": apply_payload,
     }

@@ -13,6 +13,10 @@ $ErrorActionPreference = 'Stop'
 
 $script:ProdUpgradeExitCode = 73
 $script:ProdWatchdogRestartDelaySeconds = 5
+$script:ProdAutoUpgradeWatchdogOperator = 'prod-idle-upgrade-watchdog'
+$script:ProdAutoUpgradeDefaultIntervalSeconds = 7200
+$script:ProdAutoUpgradeDefaultTimeoutSeconds = 30
+$script:ProdAutoUpgradeDefaultRequestTimeoutSeconds = 8
 
 function Resolve-WorkflowStartSourceRoot {
     param(
@@ -592,6 +596,32 @@ Assert-WorkflowArtifactIsolation -Descriptor $descriptor
 
 $pendingUpgrade = $null
 $openedBrowser = $false
+$prodAutoUpgradeEnabled = ($Environment -eq 'prod') -and (Get-WorkflowBooleanEnvironmentValue -Name 'WORKFLOW_PROD_AUTO_UPGRADE_ENABLED' -Default $true)
+$prodAutoUpgradeCheckIntervalSeconds = Get-WorkflowIntegerEnvironmentValue `
+    -Name 'WORKFLOW_PROD_AUTO_UPGRADE_CHECK_INTERVAL_SECONDS' `
+    -Default $script:ProdAutoUpgradeDefaultIntervalSeconds `
+    -Minimum 60 `
+    -Maximum 86400
+$prodAutoUpgradeCheckTimeoutSeconds = Get-WorkflowIntegerEnvironmentValue `
+    -Name 'WORKFLOW_PROD_AUTO_UPGRADE_CHECK_TIMEOUT_SECONDS' `
+    -Default $script:ProdAutoUpgradeDefaultTimeoutSeconds `
+    -Minimum 5 `
+    -Maximum 600
+$prodAutoUpgradeRequestTimeoutSeconds = Get-WorkflowIntegerEnvironmentValue `
+    -Name 'WORKFLOW_PROD_AUTO_UPGRADE_REQUEST_TIMEOUT_SECONDS' `
+    -Default $script:ProdAutoUpgradeDefaultRequestTimeoutSeconds `
+    -Minimum 1 `
+    -Maximum 120
+$nextProdAutoUpgradeCheckAt = if ($prodAutoUpgradeEnabled) {
+    (Get-Date).AddSeconds($prodAutoUpgradeCheckIntervalSeconds)
+}
+else {
+    $null
+}
+
+if ($prodAutoUpgradeEnabled) {
+    Write-Host "[workflow-start] prod auto-upgrade single-check enabled: interval=$prodAutoUpgradeCheckIntervalSeconds s"
+}
 
 while ($true) {
     $launcher = Start-EnvironmentLauncher -Descriptor $descriptor -SkipBackfill:$SkipBackfill -OpenBrowser:$false
@@ -678,8 +708,45 @@ while ($true) {
         $pendingUpgrade = $null
     }
 
-    $launcher.WaitForExit()
-    $exitCode = $launcher.ExitCode
+    if ($Environment -eq 'prod') {
+        while (-not $launcher.WaitForExit(1000)) {
+            if (
+                $prodAutoUpgradeEnabled `
+                -and $null -ne $nextProdAutoUpgradeCheckAt `
+                -and -not $pendingUpgrade `
+                -and (Get-Date) -ge $nextProdAutoUpgradeCheckAt
+            ) {
+                $checkStartedAt = Get-Date
+                try {
+                    $autoUpgradeResult = Invoke-WorkflowProdAutoUpgradeSingleCheck `
+                        -SourceRoot $sourceRoot `
+                        -Descriptor $descriptor `
+                        -Operator $script:ProdAutoUpgradeWatchdogOperator `
+                        -RequestTimeoutSeconds $prodAutoUpgradeRequestTimeoutSeconds `
+                        -TimeoutSeconds $prodAutoUpgradeCheckTimeoutSeconds
+                    if ([bool]$autoUpgradeResult.ok) {
+                        Write-Host "[workflow-start] prod auto-upgrade single-check completed: log=$($autoUpgradeResult.log_path)"
+                    }
+                    else {
+                        $warningText = "[workflow-start] prod auto-upgrade single-check failed-open: reason=$($autoUpgradeResult.reason) exit_code=$($autoUpgradeResult.exit_code)"
+                        if (-not [string]::IsNullOrWhiteSpace([string]$autoUpgradeResult.error)) {
+                            $warningText += " error=$([string]$autoUpgradeResult.error)"
+                        }
+                        Write-Host $warningText
+                    }
+                }
+                catch {
+                    Write-Host "[workflow-start] prod auto-upgrade single-check failed-open: $($_.Exception.Message)"
+                }
+                $nextProdAutoUpgradeCheckAt = $checkStartedAt.AddSeconds($prodAutoUpgradeCheckIntervalSeconds)
+            }
+        }
+        $exitCode = $launcher.ExitCode
+    }
+    else {
+        $launcher.WaitForExit()
+        $exitCode = $launcher.ExitCode
+    }
 
     $pendingUpgradeContext = if ($Environment -eq 'prod') {
         Get-WorkflowPendingProdUpgradeContext -SourceRoot $sourceRoot -CurrentVersion ([string]$descriptor.version)

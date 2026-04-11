@@ -138,6 +138,61 @@ def _wait_for_upgrade_completion(
     return False
 
 
+def _run_single_check(args: argparse.Namespace, *, log_path: Path) -> int:
+    status_code, status_payload = _request_json(
+        base_url=args.base_url,
+        path="/api/runtime-upgrade/status",
+        timeout_seconds=args.request_timeout_seconds,
+    )
+    if status_code != 200 or not bool(status_payload.get("ok")):
+        _log_message(
+            log_path,
+            f"单次检查读取状态失败：status_code={int(status_code or 0)} payload={json.dumps(status_payload, ensure_ascii=False)}",
+        )
+        return 3
+
+    _log_message(log_path, f"单次检查状态：{_status_summary(status_payload)}")
+    candidate_version = str(status_payload.get("candidate_version") or "").strip()
+    candidate_is_newer = bool(status_payload.get("candidate_is_newer"))
+    running_task_count = int(status_payload.get("running_task_count") or 0)
+    can_upgrade = bool(status_payload.get("can_upgrade"))
+    request_pending = bool(status_payload.get("request_pending"))
+
+    if not candidate_version:
+        _log_message(log_path, "当前没有 prod candidate，单次检查跳过。")
+        return 0
+    if args.require_candidate_newer and not candidate_is_newer:
+        _log_message(log_path, "candidate 已不比 current 更新，单次检查跳过。")
+        return 0
+    if request_pending:
+        _log_message(log_path, "当前已有升级请求 pending，单次检查跳过。")
+        return 0
+    if running_task_count > 0 or not can_upgrade:
+        _log_message(log_path, "当前仍未到可升级空窗，单次检查跳过。")
+        return 0
+
+    apply_status, apply_payload = _request_json(
+        base_url=args.base_url,
+        path="/api/runtime-upgrade/apply",
+        method="POST",
+        payload={"operator": args.operator},
+        timeout_seconds=args.request_timeout_seconds,
+    )
+    _log_message(
+        log_path,
+        f"单次检查发起 apply：status_code={int(apply_status or 0)} payload={json.dumps(apply_payload, ensure_ascii=False)}",
+    )
+    apply_code = str(apply_payload.get("code") or "").strip()
+    if int(apply_status or 0) in {200, 202} and bool(apply_payload.get("ok")):
+        _log_message(log_path, "单次检查已发起 apply，请交给 supervisor 完成后续切版。")
+        return 0
+    if apply_code == "runtime_upgrade_already_requested" or bool(apply_payload.get("request_pending")):
+        _log_message(log_path, "单次检查发现升级请求已在处理中，直接结束。")
+        return 0
+    _log_message(log_path, "单次检查发起 apply 失败。")
+    return 4
+
+
 def run_watcher(args: argparse.Namespace) -> int:
     repo_root = Path(__file__).resolve().parents[1]
     log_path = Path(args.log_path).resolve() if str(args.log_path or "").strip() else _default_log_path(repo_root)
@@ -156,6 +211,9 @@ def run_watcher(args: argparse.Namespace) -> int:
             ]
         ),
     )
+
+    if bool(args.single_check):
+        return _run_single_check(args, log_path=log_path)
 
     deadline = time.monotonic() + max(1.0, float(args.timeout_seconds or 0.0))
     while time.monotonic() < deadline:
@@ -239,6 +297,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--log-path", default="")
     parser.add_argument("--require-candidate-newer", action="store_true", default=True)
     parser.add_argument("--allow-equal-candidate", dest="require_candidate_newer", action="store_false")
+    parser.add_argument("--single-check", action="store_true")
     return parser
 
 

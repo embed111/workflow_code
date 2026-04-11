@@ -45,6 +45,11 @@ SCRIPT_PROBE_DEFINITIONS: tuple[ScriptProbeDefinition, ...] = (
         failure_message="apply prod candidate when idle probe failed",
     ),
     ScriptProbeDefinition(
+        key="prod_auto_upgrade_single_check_helper",
+        relative_path="scripts/acceptance/verify_prod_auto_upgrade_single_check_helper.py",
+        failure_message="prod auto upgrade single-check helper probe failed",
+    ),
+    ScriptProbeDefinition(
         key="runtime_process_instance_fallback",
         relative_path="scripts/acceptance/verify_runtime_process_instance_fallback.py",
         failure_message="runtime process instance fallback probe failed",

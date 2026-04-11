@@ -49,6 +49,8 @@ def main() -> int:
     assert "workflow_devmate / workflow_testmate / workflow_qualitymate / workflow_bugmate" in execution_checklist, payload
     assert "/api/runtime-upgrade/status" in execution_checklist, payload
     assert "/api/runtime-upgrade/apply" in execution_checklist, payload
+    assert "idle watcher" in execution_checklist, payload
+    assert "不要自己调用" in execution_checklist, payload
     assert "不要使用 bash heredoc" in execution_checklist, payload
     assert "不要把 `scripts/*.ps1` 这类通配路径直接交给 `rg`" in execution_checklist, payload
     assert "不要手工猜测 run_id" in execution_checklist, payload
@@ -67,6 +69,8 @@ def main() -> int:
     assert "workflow_devmate / workflow_testmate / workflow_qualitymate / workflow_bugmate" in pm_wake_execution_checklist, pm_wake_payload
     assert "/api/runtime-upgrade/status" in pm_wake_execution_checklist, pm_wake_payload
     assert "/api/runtime-upgrade/apply" in pm_wake_execution_checklist, pm_wake_payload
+    assert "idle watcher" in pm_wake_execution_checklist, pm_wake_payload
+    assert "不要自己调用" in pm_wake_execution_checklist, pm_wake_payload
     assert "不要使用 bash heredoc" in pm_wake_execution_checklist, pm_wake_payload
     assert "不要把 `scripts/*.ps1` 这类通配路径直接交给 `rg`" in pm_wake_execution_checklist, pm_wake_payload
     assert "不要手工猜测 run_id" in pm_wake_execution_checklist, pm_wake_payload
