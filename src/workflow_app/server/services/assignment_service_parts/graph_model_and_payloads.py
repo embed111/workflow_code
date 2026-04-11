@@ -1220,7 +1220,7 @@ def _build_assignment_execution_prompt(
     if allow_pm_governance_exception:
         lines[lines.index("2. 完成后必须只输出一个 JSON 对象，不要输出 markdown fence、不要追加解释。"):lines.index("2. 完成后必须只输出一个 JSON 对象，不要输出 markdown fence、不要追加解释。")] = [
             "1.1 但若这轮命中会破坏 7x24 连续性的异常治理现场，你现在作为 `workflow(pm)` 允许直接处理，不要只把它记成“受 workspace_path 限制”。",
-            "1.2 受支持的例外动作仅限：对 `../workflow_code` 执行 non-destructive `git fetch / pull --ff-only` 快进；调用受支持的 developer workspace bootstrap/refresh；通过受支持 API/脚本处理 helper `runtime_status=creating`、schedule/dispatch/supervisor/runtime-upgrade 这类恢复动作；以及补齐当前工作区下的治理与留痕。",
+            "1.2 受支持的例外动作仅限：基于本机 `../workflow_code` 执行 non-destructive 本地根仓收口；调用受支持的 developer workspace bootstrap/refresh；通过受支持 API/脚本处理 helper `runtime_status=creating`、schedule/dispatch/supervisor/runtime-upgrade 这类恢复动作；以及补齐当前工作区下的治理与留痕。除非用户明确要求，不要主动 `fetch/pull origin` 或拉 GitHub。",
             "1.3 仍然禁止直接手改 `../workflow_code` 工作树内容，禁止把 `.running/prod` / `.running/test` 当开发面，禁止 destructive git 或绕过验证的手工热修。",
             "1.4 当前 shell 是 PowerShell：不要使用 bash heredoc（如 `python - <<'PY'`），也不要把 `scripts/*.ps1` 这类通配路径直接交给 `rg`；优先用 here-string 管道、`rg --files` 或 `Get-ChildItem`。",
             "1.5 当你要核对某条 live run 的 `run.json/events.log/stderr.txt` 时，不要手工猜测 run_id 或直接拼不存在的路径；优先使用 `status-detail`、`audit.jsonl`、当前 node/run 返回的 `*_ref` 字段，或先列目录再读取。",

@@ -14,6 +14,8 @@ ASSIGNMENT_PM_WAKE_DELAY_MINUTES = 60
 ASSIGNMENT_PM_WAKE_EXPECTED_ARTIFACT = "workflow-pm-wake-summary"
 ASSIGNMENT_SELF_ITERATION_EXPECTED_ARTIFACT = "continuous-improvement-report.md"
 ASSIGNMENT_SELF_ITERATION_VERSION_PLAN_PATH = "docs/workflow/governance/PM版本推进计划.md"
+ASSIGNMENT_SELF_ITERATION_PLAN_LIVE_INDEX_PATH = "docs/workflow/governance/PM版本推进现场更新总览.md"
+ASSIGNMENT_SELF_ITERATION_PLAN_LIVE_MONTHLY_HINT = "docs/workflow/governance/pm-version-live/YYYY-MM/现场更新总览.md"
 ASSIGNMENT_SELF_ITERATION_WAKE_REQUIREMENT_PATH = "docs/workflow/requirements/需求详情-pm持续唤醒与清醒维持.md"
 ASSIGNMENT_SELF_ITERATION_PERIODIC_LANES_TEXT = (
     "UCD/设计优化、测试探测、工程质量探测、需求分析、架构优化、功能开发、高价值功能探索"
@@ -110,8 +112,9 @@ def _assignment_self_iteration_schedule_payload(
             [
                 f"1. 先读取 `{version_plan_path}`，确认当前 active 版本、当前优先任务包与当前生命周期阶段：`{ASSIGNMENT_SELF_ITERATION_LIFECYCLE_TEXT}`。",
                 f"2. 从 `{ASSIGNMENT_SELF_ITERATION_PERIODIC_LANES_TEXT}` 中选出本轮最高价值泳道；若当前 active 版本没有可执行任务，就先补 baseline、变更控制或下一个任务包，不允许空转。",
+                f"2.1 若更新 `{version_plan_path}`，`4.6.1 当前现场更新` 只允许覆盖成一版最新有效快照；详细时序现场改写到 `{ASSIGNMENT_SELF_ITERATION_PLAN_LIVE_INDEX_PATH}` 指向的活动月份总览（路径模式：`{ASSIGNMENT_SELF_ITERATION_PLAN_LIVE_MONTHLY_HINT}`），不要在主计划正文继续追加 `10./11./12.` 这类流水编号。",
                 "3. 先记录当前根仓同步快照里的 `root_sync_state / ahead_count / dirty_tracked_count / untracked_count / push_block_reason / next_push_batch`，不要只写“继续收 Git 边界”。",
-                f"4. 若快照显示根仓未同步、本地工作区 dirty，或命中异常治理现场，就立即读取 `{RELEASE_BOUNDARY_REPORT_PATH}` 并进入发布边界收口模式；这轮只做受支持动作：non-destructive `git fetch / pull --ff-only`、developer workspace bootstrap/refresh、helper stale `creating` / schedule / supervisor / runtime-upgrade 恢复。",
+                f"4. 若快照显示根仓未同步、本地工作区 dirty，或命中异常治理现场，就立即读取 `{RELEASE_BOUNDARY_REPORT_PATH}` 并进入发布边界收口模式；这轮只做受支持动作：基于本机 `../workflow_code` 的 non-destructive 本地根仓收口、developer workspace bootstrap/refresh、helper stale `creating` / schedule / supervisor / runtime-upgrade 恢复。除非你明确要求，不要主动 `fetch/pull origin` 或拉 GitHub。",
                 "5. 再检查 healthz、assignments、schedules、runs 与 `/api/runtime-upgrade/status`；当前 shell 是 PowerShell：不要使用 bash heredoc（如 `python - <<'PY'`），不要把 `scripts/*.ps1` 这类通配路径直接交给 `rg`，也不要手工猜测 run_id。",
                 f"6. 继续检查 `/api/runtime-upgrade/status` 作为升级门禁真相；正式升级申请改由 `prod` supervisor 托管的 idle watcher 周期检查并发起，当前主线节点不要自己调用 `/api/runtime-upgrade/apply`。{ASSIGNMENT_SELF_UPGRADE_HINT}",
                 "7. 在推进开发实现前，先明确本轮沿用的 baseline、需要变更控制的内容，以及基于哪条基线做后续测试与验收；优先推进当前版本里最高优先级且未完成的任务包，不要跳版抢做新功能。",
@@ -122,6 +125,7 @@ def _assignment_self_iteration_schedule_payload(
             [
                 f"1. 当前活跃版本对应任务包有可交付结果，且版本计划 `{version_plan_path}` 已同步最新状态。",
                 "2. 本轮明确记录了当前周期性泳道、生命周期阶段，以及是否发生 baseline/变更控制更新。",
+                f"2.1 若本轮更新 `{version_plan_path}`，主计划正文中的 `4.6.1 当前现场更新` 仍保持单份最新快照；详细现场已写入 `{ASSIGNMENT_SELF_ITERATION_PLAN_LIVE_INDEX_PATH}` 指向的活动月份总览，而不是继续把正文写成长流水。",
                 "3. 本轮显式记录了 `root_sync_state / ahead_count / dirty_tracked_count / untracked_count / push_block_reason / next_push_batch`。",
                 "4. 若本轮存在已验证代码改动，本轮结束前已经完成当前工作区 `commit / push / 根仓同步`，或明确写清 release boundary 阻塞原因。",
                 "5. 若本轮命中 7x24 异常治理现场，本轮已经执行受支持的治理收口动作，或明确写清为什么仍然 blocked，而不是只停在“workspace_path 不允许”；并附带验证证据。",
@@ -258,8 +262,9 @@ def _assignment_pm_wake_schedule_payload(
             [
                 f"1. 读取 `{version_plan_path}` 与 `{wake_requirement_path}`，确认当前 active 版本、任务包，以及所处生命周期阶段：`{ASSIGNMENT_SELF_ITERATION_LIFECYCLE_TEXT}`。",
                 f"2. 从 `{ASSIGNMENT_SELF_ITERATION_PERIODIC_LANES_TEXT}` 中判断当前最该推进的泳道；若 active 版本没有可执行任务，立即补 baseline、变更控制或下一条当前版本任务。",
+                f"2.1 若更新 `{version_plan_path}`，`4.6.1 当前现场更新` 只允许覆盖成一版最新有效快照；详细时序现场改写到 `{ASSIGNMENT_SELF_ITERATION_PLAN_LIVE_INDEX_PATH}` 指向的活动月份总览（路径模式：`{ASSIGNMENT_SELF_ITERATION_PLAN_LIVE_MONTHLY_HINT}`），不要在主计划正文继续追加 `10./11./12.` 这类流水编号。",
                 "3. 先记录当前根仓同步快照里的 `root_sync_state / ahead_count / dirty_tracked_count / untracked_count / push_block_reason / next_push_batch`。",
-                f"3.1 若快照显示根仓未同步、本地工作区 dirty，或命中异常治理现场，就立即读取 `{RELEASE_BOUNDARY_REPORT_PATH}` 并切到发布边界收口模式；只做受支持动作：non-destructive `git fetch / pull --ff-only`、developer workspace bootstrap/refresh、helper stale `creating` / schedule / supervisor / runtime-upgrade 恢复。",
+                f"3.1 若快照显示根仓未同步、本地工作区 dirty，或命中异常治理现场，就立即读取 `{RELEASE_BOUNDARY_REPORT_PATH}` 并切到发布边界收口模式；只做受支持动作：基于本机 `../workflow_code` 的 non-destructive 本地根仓收口、developer workspace bootstrap/refresh、helper stale `creating` / schedule / supervisor / runtime-upgrade 恢复。除非你明确要求，不要主动 `fetch/pull origin` 或拉 GitHub。",
                 "4. 检查 prod 当前 schedules、assignment graph、ready/running 节点、最近 runs 与 `/api/runtime-upgrade/status` 真相；当前 shell 是 PowerShell：不要使用 bash heredoc（如 `python - <<'PY'`），不要把 `scripts/*.ps1` 这类通配路径直接交给 `rg`，也不要手工猜测 run_id。",
                 "5. 继续检查 `/api/runtime-upgrade/status` 作为升级门禁真相；正式升级申请改由 `prod` supervisor 托管的 idle watcher 周期检查并发起，当前巡检节点不要自己调用 `/api/runtime-upgrade/apply`。",
                 f"5.1 {ASSIGNMENT_SELF_UPGRADE_HINT}",
@@ -274,6 +279,7 @@ def _assignment_pm_wake_schedule_payload(
                 "1. prod 至少保留一条未来可执行的 workflow 主线入口。",
                 "2. 不能存在 `workflow` 已到时 ready 节点堆积但没有真实 live run 的假健康现场。",
                 "3. 本次巡检结论明确写出 active 版本、泳道、生命周期阶段与证据。",
+                f"3.1 若本轮更新 `{version_plan_path}`，主计划正文中的 `4.6.1 当前现场更新` 仍保持单份最新快照；详细现场已写入 `{ASSIGNMENT_SELF_ITERATION_PLAN_LIVE_INDEX_PATH}` 指向的活动月份总览，而不是继续把正文写成长流水。",
                 "4. 本次巡检显式记录了 `root_sync_state / ahead_count / dirty_tracked_count / untracked_count / push_block_reason / next_push_batch`。",
                 "5. 若发现这是上一轮遗留的 dirty/ahead 历史问题，本轮已经优先处理这批历史 release boundary，或明确写清阻塞原因。",
                 "5.1 若本轮命中 7x24 异常治理现场，本轮已经执行受支持的治理收口动作，或明确写清为什么仍然 blocked，而不是只停在“workspace_path 不允许”。",
