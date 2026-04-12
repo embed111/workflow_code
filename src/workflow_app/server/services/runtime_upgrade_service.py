@@ -424,7 +424,8 @@ def read_prod_upgrade_request() -> dict[str, Any]:
 def runtime_snapshot() -> dict[str, Any]:
     manifest = current_runtime_manifest()
     environment = current_runtime_environment()
-    current_version = str(os.getenv(RUNTIME_VERSION_VAR) or manifest.get("current_version") or "").strip()
+    # The manifest is the live source of truth after deploy/watchdog restart.
+    current_version = str(manifest.get("current_version") or os.getenv(RUNTIME_VERSION_VAR) or "").strip()
     current_rank = str(manifest.get("current_version_rank") or current_version).strip()
     return {
         "environment": environment,

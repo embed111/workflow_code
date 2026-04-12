@@ -84,6 +84,15 @@ def main() -> int:
             assert instance_payload["version"] == "20260407-230500", instance_payload
             assert instance_payload["status"] == "running", instance_payload
 
+            os.environ["WORKFLOW_RUNTIME_CONTROL_ROOT"] = str(control_root)
+            os.environ["WORKFLOW_RUNTIME_MANIFEST_PATH"] = str(manifest_path)
+            os.environ["WORKFLOW_RUNTIME_DEPLOY_ROOT"] = str(deploy_root)
+            os.environ["WORKFLOW_RUNTIME_PID_FILE"] = str(pid_path)
+            os.environ["WORKFLOW_RUNTIME_INSTANCE_FILE"] = str(instance_path)
+            snapshot = runtime_upgrade_service.runtime_snapshot()
+            assert snapshot["current_version"] == "20260407-230500", snapshot
+            assert snapshot["current_version_rank"] == "20260407-230500", snapshot
+
             runtime_upgrade_service.runtime_process_stop(runtime_root=runtime_root)
             stopped_payload = json.loads(instance_path.read_text(encoding="utf-8"))
             assert not pid_path.exists(), pid_path
