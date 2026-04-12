@@ -78,6 +78,7 @@ def _schedule_template_texts(*, expected_artifact: Any, assigned_agent_id: Any) 
                 [
                     "作为保底接力入口，检查 prod 当前是否仍存在未来可执行的 [持续迭代] workflow 或 active 版本任务。",
                     "保底巡检不代替主线做整轮开发；只有主链断了或当前窗口明确要求兜底时，才补链或接管异常治理。",
+                    "保底巡检也不能重复复述上一轮；若现场没有实质变化，要主动切到更高价值的探测、补链或开发方向。",
                     f"先读 PM 治理入口：{SCHEDULE_PM_GOVERNANCE_README_PATH}",
                     f"必读：{SCHEDULE_MASTER_PLAN_PATH} / {SCHEDULE_VERSION_PLAN_PATH} / `{SCHEDULE_VERSION_PLAN_PATH}` 中 `active_version_file` 指向的版本文件 / {SCHEDULE_DAILY_TASK_PATH} / {SCHEDULE_WAKE_REQUIREMENT_PATH}",
                     (
@@ -90,24 +91,27 @@ def _schedule_template_texts(*, expected_artifact: Any, assigned_agent_id: Any) 
                 [
                     f"1. 按 `{SCHEDULE_PM_GOVERNANCE_README_PATH} -> {SCHEDULE_MASTER_PLAN_PATH} -> {SCHEDULE_VERSION_PLAN_PATH} -> {SCHEDULE_VERSION_PLAN_PATH} 中 active_version_file 指向的版本文件 -> {SCHEDULE_DAILY_TASK_PATH} -> {SCHEDULE_WAKE_REQUIREMENT_PATH}` 的顺序补齐上下文。",
                     f"2. 先检查 `{SCHEDULE_DAILY_HISTORY_HINT}` 对应的今日日文件是否存在；若不存在，需要在当天合适窗口补做今天唯一一轮每日任务并落盘。",
-                    "3. 先判断当前版本引用和当前活跃版本文件是否要求暂停、治理调整或仅观察；若是，默认不补新主线，只报告现场并保持暂停。",
-                    "4. 检查 `/healthz`、`/api/status`、`/api/schedules`、`/api/runtime-upgrade/status`；必要时再看 `assignment graph / status-detail / run.json / events.log`。",
-                    "5. 先记录 `root_sync_state / ahead_count / dirty_tracked_count / untracked_count / push_block_reason / next_push_batch`；若命中 dirty/ahead/异常治理现场，先处理 release boundary。",
-                    f"6. 正式升级申请改由 `prod` supervisor 托管的 idle watcher 周期检查并发起，当前巡检节点不要自己调用 `/api/runtime-upgrade/apply`。{SCHEDULE_SELF_UPGRADE_HINT}",
-                    "7. 只有主链断了或当前版本引用/当前活跃版本文件明确允许时，才补新的 [持续迭代] workflow 入口；是否派发或恢复小伙伴，也要按版本文件里的每轮必查项判断。",
-                    f"8. 当天的版本推进、后移和后续版本排期判断先写 `{SCHEDULE_VERSION_HISTORY_HINT}`；只有主判断变化时，才更新 `pm/PM当前版本计划.md` 的当前状态快照。",
-                    "9. 若发现高杠杆新功能或低维护价值重构项，先记录并明确它进入哪个后续版本，不要借巡检窗口把当前版本加胖。",
-                    "10. 更细现场写入 `logs/runs/*.md` 或今日日记，不要把主计划正文写成长流水。",
-                    "11. 更新 `.codex/memory/...` 时，在 `next` 明确写出下一次主线/保底触发时间；记忆库每一轮都要更新。",
+                    "3. 先对照上一轮结果和最近版本记录，判断这轮如果继续做同样的事，会不会只是重复消耗 token；若答案是会，就必须切到更高价值的巡检、探测或开发事项。",
+                    "4. PM 最重要的职责之一，是时刻判断版本进度有没有真的推进；本轮至少要明确回答：当前版本在工程质量探测、bug 探测、需求开发、发布推进中的哪一项发生了新进展。",
+                    "5. 先判断当前版本引用和当前活跃版本文件是否要求暂停、治理调整或仅观察；若是，默认不补新主线，只报告现场并保持暂停。",
+                    "6. 检查 `/healthz`、`/api/status`、`/api/schedules`、`/api/runtime-upgrade/status`；必要时再看 `assignment graph / status-detail / run.json / events.log`。",
+                    "7. 先记录 `root_sync_state / ahead_count / dirty_tracked_count / untracked_count / push_block_reason / next_push_batch`；若命中 dirty/ahead/异常治理现场，先处理 release boundary。",
+                    f"8. 正式升级申请改由 `prod` supervisor 托管的 idle watcher 周期检查并发起，当前巡检节点不要自己调用 `/api/runtime-upgrade/apply`。{SCHEDULE_SELF_UPGRADE_HINT}",
+                    "9. 只有主链断了或当前版本引用/当前活跃版本文件明确允许时，才补新的 [持续迭代] workflow 入口；是否派发或恢复小伙伴，也要按版本文件里的每轮必查项判断。",
+                    f"10. 当天的版本推进、后移和后续版本排期判断先写 `{SCHEDULE_VERSION_HISTORY_HINT}`；只有主判断变化时，才更新 `pm/PM当前版本计划.md` 的当前状态快照。",
+                    "11. 若发现高杠杆新功能或低维护价值重构项，先记录并明确它进入哪个后续版本，不要借巡检窗口把当前版本加胖。",
+                    "12. 更细现场写入 `logs/runs/*.md` 或今日日记，不要把主计划正文写成长流水。",
+                    "13. 更新 `.codex/memory/...` 时，在 `next` 明确写出下一次主线/保底触发时间；记忆库每一轮都要更新。",
                 ]
             ).strip(),
             "done_definition": "\n".join(
                 [
                     "1. 本次巡检已经明确回答：当前是继续推进、保持暂停，还是需要兜底补链。",
                     f"2. 若今日 `{SCHEDULE_DAILY_HISTORY_HINT}` 原本不存在，本轮已经补齐当天每日执行结果，或明确写清为什么仍未完成。",
-                    "3. 若当前窗口允许推进，prod 至少保留一条未来可执行的 workflow 主线入口。",
-                    "4. 本次巡检结论和证据可追溯。",
-                    "5. 若发现上一轮遗留的 dirty/ahead 历史问题，本轮已经优先处理这批 release boundary，或明确写清阻塞原因。",
+                    "3. 本轮巡检内容不能与上一轮主结论实质一致；若判断继续推进，必须指出新增进展、风险变化或新切换的最高价值动作。",
+                    "4. 若当前窗口允许推进，prod 至少保留一条未来可执行的 workflow 主线入口。",
+                    "5. 本次巡检结论和证据可追溯。",
+                    "6. 若发现上一轮遗留的 dirty/ahead 历史问题，本轮已经优先处理这批 release boundary，或明确写清阻塞原因。",
                 ]
             ).strip(),
         }
@@ -118,6 +122,7 @@ def _schedule_template_texts(*, expected_artifact: Any, assigned_agent_id: Any) 
                 [
                     "上一轮任务已经结束，请继续作为 workflow 的长期负责人推进 7x24 连续迭代。",
                     "本轮先服务当前 active 版本与当前窗口任务，不空转，也不把保底巡检职责混进主线。",
+                    "禁止把本轮做成上一轮的改写版；你必须先识别上一轮已经做过什么，再重新判断当前最高执行价值内容。",
                     f"先读 PM 治理入口：{SCHEDULE_PM_GOVERNANCE_README_PATH}",
                     f"必读：{SCHEDULE_MASTER_PLAN_PATH} / {SCHEDULE_VERSION_PLAN_PATH} / `{SCHEDULE_VERSION_PLAN_PATH}` 中 `active_version_file` 指向的版本文件 / {SCHEDULE_DAILY_TASK_PATH} / {SCHEDULE_WAKE_REQUIREMENT_PATH}",
                     (
@@ -130,26 +135,30 @@ def _schedule_template_texts(*, expected_artifact: Any, assigned_agent_id: Any) 
                 [
                     f"1. 按 `{SCHEDULE_PM_GOVERNANCE_README_PATH} -> {SCHEDULE_MASTER_PLAN_PATH} -> {SCHEDULE_VERSION_PLAN_PATH} -> {SCHEDULE_VERSION_PLAN_PATH} 中 active_version_file 指向的版本文件 -> {SCHEDULE_DAILY_TASK_PATH} -> {SCHEDULE_WAKE_REQUIREMENT_PATH}` 的顺序补齐上下文。",
                     f"2. 先检查 `{SCHEDULE_DAILY_HISTORY_HINT}` 对应的今日日文件是否存在；若不存在，需要在本轮合适窗口完成今天唯一一轮每日任务并落盘。",
-                    "3. 先确认当前窗口属于继续推进、异常治理还是治理调整；若当前版本引用或当前活跃版本文件写明暂停或仅观察，则不要自动扩面。",
-                    "4. 再检查 `/healthz`、`/api/status`、`/api/schedules`、`/api/runtime-upgrade/status`；必要时再看 `status-detail / run.json / events.log`。",
-                    "5. 先记录 `root_sync_state / ahead_count / dirty_tracked_count / untracked_count / push_block_reason / next_push_batch`；若命中 dirty/ahead/异常治理现场，先处理 release boundary。",
-                    f"6. 正式升级申请改由 `prod` supervisor 托管的 idle watcher 周期检查并发起，当前主线节点不要自己调用 `/api/runtime-upgrade/apply`。{SCHEDULE_SELF_UPGRADE_HINT}",
-                    "7. 按 `质量 / 效率 / 工作区小伙伴维护 = 4 / 4 / 2` 判断当前重点，只推进当前活跃版本文件里具体需求点的最高优先事项。",
-                    "8. 每轮都要检查是否需要给小伙伴创建、续挂、恢复或调整任务；这属于 PM 主线每轮必查项，不属于每日任务。",
-                    f"9. 当天的版本推进、后移和后续版本排期判断先写 `{SCHEDULE_VERSION_HISTORY_HINT}`；只有主判断变化时，才更新 `pm/PM当前版本计划.md` 的当前状态快照。",
-                    "10. 若发现高杠杆新功能或低维护价值重构项，先记录并明确它进入哪个后续版本，不要继续把当前版本加胖。",
-                    "11. 更细现场写入 `logs/runs/*.md` 或今日日记。",
-                    "12. 更新 `.codex/memory/...` 时，在 `next` 明确写出下一次主线/保底触发时间；记忆库每一轮都要更新。",
+                    "3. 先对照上一轮结果和最近版本记录，明确哪些动作已经做过、哪些事项只是重复复述；如果你准备做的内容与上一轮主产出实质一致，必须改选更高价值切片。",
+                    "4. PM 最重要的职责之一，是时刻判断版本进度有没有真的推进；本轮至少要明确回答：这轮让版本在工程质量探测、bug 探测、需求开发、发布推进中的哪一项前进了什么。若答案只是复述上一轮，就视为无效轮次。",
+                    "5. 先确认当前窗口属于继续推进、异常治理还是治理调整；若当前版本引用或当前活跃版本文件写明暂停或仅观察，则不要自动扩面。",
+                    "6. 再检查 `/healthz`、`/api/status`、`/api/schedules`、`/api/runtime-upgrade/status`；必要时再看 `status-detail / run.json / events.log`。",
+                    "7. 先记录 `root_sync_state / ahead_count / dirty_tracked_count / untracked_count / push_block_reason / next_push_batch`；若命中 dirty/ahead/异常治理现场，先处理 release boundary。",
+                    f"8. 正式升级申请改由 `prod` supervisor 托管的 idle watcher 周期检查并发起，当前主线节点不要自己调用 `/api/runtime-upgrade/apply`。{SCHEDULE_SELF_UPGRADE_HINT}",
+                    "9. 按 `质量 / 效率 / 工作区小伙伴维护 = 4 / 4 / 2` 判断当前重点，但不要太死板；若 live 真相显示另一条线更高价值，你必须主动重排优先级，而不是机械重复上一轮泳道。",
+                    "10. 当前默认优先产出应落在 `工程质量探测 / bug 探测 / 当前需求开发` 三类之一；只有 helper workspace 真异常时，才把工作区可用性重新抬成最高优先级。",
+                    "11. 每轮都要检查是否需要给小伙伴创建、续挂、恢复或调整任务；这属于 PM 主线每轮必查项，不属于每日任务。",
+                    f"12. 当天的版本推进、后移和后续版本排期判断先写 `{SCHEDULE_VERSION_HISTORY_HINT}`；只有主判断变化时，才更新 `pm/PM当前版本计划.md` 的当前状态快照。",
+                    "13. 若发现高杠杆新功能或低维护价值重构项，先记录并明确它进入哪个后续版本，不要继续把当前版本加胖。",
+                    "14. 更细现场写入 `logs/runs/*.md` 或今日日记。",
+                    "15. 更新 `.codex/memory/...` 时，在 `next` 明确写出下一次主线/保底触发时间；记忆库每一轮都要更新。",
                 ]
             ).strip(),
             "done_definition": "\n".join(
                 [
                     "1. 当前窗口最高优先事项有可交付结果，或已经被明确标记为 blocked。",
                     f"2. 若今日 `{SCHEDULE_DAILY_HISTORY_HINT}` 原本不存在，本轮已经补齐当天每日执行结果，或明确写清为什么仍未完成。",
-                    "3. 本轮附带验证证据，而不是只给方向性描述。",
-                    f"4. 当天的版本推进、后移和后续版本排期判断已写入 `{SCHEDULE_VERSION_HISTORY_HINT}`；只有主判断变化时才更新 `pm/PM当前版本计划.md` 的当前状态快照。",
-                    "5. 若本轮存在已验证代码改动，本轮结束前已经完成当前工作区 `commit / push / 根仓同步`，或明确写清阻塞原因。",
-                    "6. 若当前窗口不是暂停/治理调整，本轮结束时至少还保留一个后续出口；若当前窗口是暂停/治理调整，则不得误续挂新的主线推进任务。",
+                    "3. 本轮执行内容不能与上一轮主内容实质一致；若沿同一事项继续推进，必须新增新的证据、缺陷、实现、决策或发布动作，不接受只换措辞重复输出。",
+                    "4. 本轮附带验证证据，而不是只给方向性描述。",
+                    f"5. 当天的版本推进、后移和后续版本排期判断已写入 `{SCHEDULE_VERSION_HISTORY_HINT}`；只有主判断变化时才更新 `pm/PM当前版本计划.md` 的当前状态快照。",
+                    "6. 若本轮存在已验证代码改动，本轮结束前已经完成当前工作区 `commit / push / 根仓同步`，或明确写清阻塞原因。",
+                    "7. 若当前窗口不是暂停/治理调整，本轮结束时至少还保留一个后续出口；若当前窗口是暂停/治理调整，则不得误续挂新的主线推进任务。",
                 ]
             ).strip(),
         }

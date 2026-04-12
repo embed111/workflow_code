@@ -69,6 +69,9 @@ def main() -> int:
     assert "root_sync_state / ahead_count / dirty_tracked_count / untracked_count / push_block_reason / next_push_batch" in execution_checklist, payload
     assert "workflow_devmate / workflow_testmate / workflow_qualitymate / workflow_bugmate" in execution_checklist, payload
     assert "不属于每日任务" in execution_checklist, payload
+    assert "如果你准备做的内容与上一轮主产出实质一致" in execution_checklist, payload
+    assert "版本进度有没有真的推进" in execution_checklist, payload
+    assert "工程质量探测、bug 探测、需求开发" in execution_checklist, payload
     assert "/api/runtime-upgrade/status" in execution_checklist, payload
     assert "/api/runtime-upgrade/apply" in execution_checklist, payload
     assert "idle watcher" in execution_checklist, payload
@@ -81,6 +84,8 @@ def main() -> int:
     assert PM_VERSION_HISTORY_HINT in done_definition, payload
     assert "当前泳道、生命周期阶段" in done_definition, payload
     assert "后续出口" in done_definition, payload
+    assert "本轮执行内容不能与上一轮主内容实质一致" in done_definition, payload
+    assert "版本是否真的发生推进" in done_definition, payload
     assert "本轮显式记录了 `root_sync_state / ahead_count / dirty_tracked_count / untracked_count / push_block_reason / next_push_batch`" in done_definition, payload
 
     assert PM_GOVERNANCE_README in pm_wake_launch_summary, pm_wake_payload
@@ -96,12 +101,15 @@ def main() -> int:
     assert PM_DAILY_HISTORY_HINT in pm_wake_execution_checklist, pm_wake_payload
     assert PM_VERSION_HISTORY_HINT in pm_wake_execution_checklist, pm_wake_payload
     assert "发布边界收口模式" in pm_wake_execution_checklist, pm_wake_payload
+    assert "如果继续做同样的事，会不会只是重复消耗 token" in pm_wake_execution_checklist, pm_wake_payload
+    assert "版本进度有没有真的推进" in pm_wake_execution_checklist, pm_wake_payload
     assert "/api/runtime-upgrade/status" in pm_wake_execution_checklist, pm_wake_payload
     assert "/api/runtime-upgrade/apply" in pm_wake_execution_checklist, pm_wake_payload
     assert "idle watcher" in pm_wake_execution_checklist, pm_wake_payload
     assert "不要自己调用" in pm_wake_execution_checklist, pm_wake_payload
     assert "当前是继续推进、保持暂停、还是需要兜底补链" in pm_wake_done_definition, pm_wake_payload
     assert PM_DAILY_HISTORY_HINT in pm_wake_done_definition, pm_wake_payload
+    assert "本轮巡检内容不能与上一轮主结论实质一致" in pm_wake_done_definition, pm_wake_payload
     assert "root_sync_state / ahead_count / dirty_tracked_count / untracked_count / push_block_reason / next_push_batch" in pm_wake_done_definition, pm_wake_payload
     assert "异常治理现场" in execution_checklist, payload
     assert "non-destructive 收口" in execution_checklist, payload
