@@ -63,12 +63,32 @@ def _json_load(path: Path) -> dict:
     return payload if isinstance(payload, dict) else {}
 
 
+def _jsonl_load(path: Path) -> list[dict]:
+    if not path.exists() or not path.is_file():
+        return []
+    rows: list[dict] = []
+    try:
+        for raw in path.read_text(encoding="utf-8").splitlines():
+            text = str(raw or "").strip()
+            if not text:
+                continue
+            try:
+                payload = json.loads(text)
+            except Exception:
+                continue
+            if isinstance(payload, dict):
+                rows.append(payload)
+    except Exception:
+        return []
+    return rows
+
+
 def _workboard_pending_blocking_reasons(
     node: dict,
     *,
     node_map_by_id: dict[str, dict],
     upstream_map: dict[str, list[str]],
-) -> list[dict]:
+    ) -> list[dict]:
     node_id = str((node or {}).get("node_id") or "").strip()
     status = str((node or {}).get("status") or "").strip().lower()
     if not node_id or status != "pending":
@@ -81,6 +101,118 @@ def _workboard_pending_blocking_reasons(
         )
         or []
     )
+
+
+def _is_workflow_mainline_node(node: dict) -> bool:
+    return bool(ws._assignment_is_workflow_mainline_node(node)) or str(node.get("node_name") or "").strip().startswith(
+        "[持续迭代] workflow"
+    )
+
+
+def _is_workflow_patrol_node(node: dict) -> bool:
+    return bool(ws._assignment_is_workflow_patrol_node(node)) or str(node.get("node_name") or "").strip().startswith(
+        "pm持续唤醒 - workflow 主线巡检"
+    )
+
+
+def _workflow_mainline_starvation_signal(*, all_nodes: list[dict], audit_rows: list[dict]) -> dict:
+    payload = {
+        "workflow_mainline_starvation_signal": False,
+        "workflow_mainline_starvation_state": "",
+        "workflow_mainline_starvation_note": "",
+    }
+    if not all_nodes or not audit_rows:
+        return payload
+    node_map_by_id = {
+        str(item.get("node_id") or "").strip(): dict(item)
+        for item in list(all_nodes or [])
+        if str(item.get("node_id") or "").strip()
+    }
+    deleted_candidates: list[dict] = []
+    for node in list(all_nodes or []):
+        if not _is_workflow_mainline_node(node):
+            continue
+        if str(node.get("record_state") or "active").strip().lower() != "deleted":
+            continue
+        delete_meta = dict(node.get("delete_meta") or {})
+        delete_reason = str(delete_meta.get("delete_reason") or "").strip().lower()
+        if delete_reason != "superseded by newer schedule trigger":
+            continue
+        deleted_candidates.append(
+            {
+                "node": dict(node),
+                "deleted_at": str(delete_meta.get("deleted_at") or node.get("updated_at") or "").strip(),
+            }
+        )
+    if not deleted_candidates:
+        return payload
+    deleted_candidates.sort(
+        key=lambda item: (
+            str(item.get("deleted_at") or ""),
+            str((item.get("node") or {}).get("updated_at") or ""),
+            str((item.get("node") or {}).get("created_at") or ""),
+            str((item.get("node") or {}).get("node_id") or ""),
+        ),
+        reverse=True,
+    )
+    for candidate in deleted_candidates:
+        node = dict(candidate.get("node") or {})
+        node_id = str(node.get("node_id") or "").strip()
+        deleted_at_text = str(candidate.get("deleted_at") or "").strip()
+        deleted_at = _parse_iso_datetime(deleted_at_text)
+        if not node_id:
+            continue
+        busy_blocked = False
+        for row in list(audit_rows or []):
+            if str(row.get("action") or "").strip().lower() != "followup_dispatch_blocked":
+                continue
+            detail = dict(row.get("detail") or {})
+            for skipped in list(detail.get("skipped") or []):
+                if not isinstance(skipped, dict):
+                    continue
+                if str(skipped.get("node_id") or "").strip() != node_id:
+                    continue
+                code = str(skipped.get("code") or "").strip().lower()
+                message = str(skipped.get("message") or "").strip().lower()
+                if code == "agent_busy" or "assigned agent already has running node" in message:
+                    busy_blocked = True
+                    break
+            if busy_blocked:
+                break
+        if not busy_blocked:
+            continue
+        later_dispatch = {}
+        for row in list(audit_rows or []):
+            if str(row.get("action") or "").strip().lower() != "dispatch":
+                continue
+            dispatch_node_id = str(row.get("node_id") or "").strip()
+            dispatch_node = dict(node_map_by_id.get(dispatch_node_id) or {})
+            if not dispatch_node or not _is_workflow_mainline_node(dispatch_node):
+                continue
+            row_created_at = _parse_iso_datetime(str(row.get("created_at") or "").strip())
+            if isinstance(deleted_at, datetime) and isinstance(row_created_at, datetime) and row_created_at <= deleted_at:
+                continue
+            later_dispatch = dict(row)
+            break
+        payload["workflow_mainline_starvation_signal"] = True
+        if later_dispatch:
+            later_node = dict(node_map_by_id.get(str(later_dispatch.get("node_id") or "").strip()) or {})
+            payload["workflow_mainline_starvation_state"] = "mitigated"
+            payload["workflow_mainline_starvation_note"] = (
+                f"最近一条 mainline `{ws._assignment_display_node_name(node, fallback=node_id)}` ({node_id}) "
+                "曾在 busy-skip 后被新 trigger 覆盖；"
+                f"`{ws._assignment_display_node_name(later_node, fallback=str(later_dispatch.get('node_id') or '').strip())}` "
+                f"({str(later_dispatch.get('node_id') or '').strip()}) "
+                f"已于 `{str(later_dispatch.get('created_at') or '').strip()}` 成功 dispatch，当前按“已缓解但需继续观察”处理。"
+            )
+        else:
+            payload["workflow_mainline_starvation_state"] = "active"
+            payload["workflow_mainline_starvation_note"] = (
+                f"最近一条 mainline `{ws._assignment_display_node_name(node, fallback=node_id)}` ({node_id}) "
+                "在 busy-skip 后被新 trigger 覆盖，且尚未看到后续 mainline dispatch；当前应按正式 starvation 风险处理。"
+            )
+        return payload
+    return payload
 
 
 def _running_agent_count_from_workboard(workboard: dict) -> int:
@@ -368,12 +500,18 @@ def _workboard_payload(cfg, *, include_test_data: bool) -> dict:
             "blocked_task_count": 0,
             "workflow_mainline_handoff_pending": False,
             "workflow_mainline_handoff_note": "",
+            "workflow_mainline_starvation_signal": False,
+            "workflow_mainline_starvation_state": "",
+            "workflow_mainline_starvation_note": "",
         }
     artifact_root = Path(resolver(cfg.root)).resolve(strict=False)
     tasks_root = (artifact_root / "tasks").resolve(strict=False)
     groups = {}
     run_snapshot_cache: dict[str, dict] = {}
     target_task_dir = None
+    current_ticket_id = ""
+    all_nodes: list[dict] = []
+    audit_rows: list[dict] = []
     if tasks_root.exists() and tasks_root.is_dir():
         for task_dir in sorted(tasks_root.iterdir(), key=lambda item: item.name.lower()):
             if not task_dir.is_dir():
@@ -399,9 +537,11 @@ def _workboard_payload(cfg, *, include_test_data: bool) -> dict:
                 node = _json_load(node_path)
                 if not node:
                     continue
+                all_nodes.append(dict(node))
                 if str(node.get("record_state") or "active").strip().lower() == "deleted":
                     continue
                 raw_nodes.append(node)
+            audit_rows = _jsonl_load(target_task_dir / "audit" / "audit.jsonl")
             projected_nodes = list(
                 ws._assignment_project_live_run_status_for_nodes(
                     cfg.root,
@@ -469,8 +609,8 @@ def _workboard_payload(cfg, *, include_test_data: bool) -> dict:
                     "planned_trigger_at": str(node.get("planned_trigger_at") or "").strip(),
                     "created_at": str(node.get("created_at") or "").strip(),
                     "updated_at": str(node.get("updated_at") or "").strip(),
-                    "is_workflow_mainline": bool(ws._assignment_is_workflow_mainline_node(node)),
-                    "is_workflow_patrol": bool(ws._assignment_is_workflow_patrol_node(node)),
+                    "is_workflow_mainline": bool(_is_workflow_mainline_node(node)),
+                    "is_workflow_patrol": bool(_is_workflow_patrol_node(node)),
                     "waiting_upstream": waiting_upstream,
                     "blocking_reasons": pending_blocking_reasons,
                     **run_snapshot,
@@ -517,7 +657,6 @@ def _workboard_payload(cfg, *, include_test_data: bool) -> dict:
                 row
                 for row in running_items
                 if bool(row.get("is_workflow_mainline"))
-                or str(row.get("node_name") or "").strip().startswith("[持续迭代] workflow")
             ),
             {},
         )
@@ -526,7 +665,6 @@ def _workboard_payload(cfg, *, include_test_data: bool) -> dict:
                 row
                 for row in queued_items
                 if bool(row.get("is_workflow_mainline"))
-                or str(row.get("node_name") or "").strip().startswith("[持续迭代] workflow")
             ),
             {},
         )
@@ -535,7 +673,6 @@ def _workboard_payload(cfg, *, include_test_data: bool) -> dict:
                 row
                 for row in running_items
                 if bool(row.get("is_workflow_patrol"))
-                or str(row.get("node_name") or "").strip().startswith("pm持续唤醒 - workflow 主线巡检")
             ),
             {},
         )
@@ -549,8 +686,12 @@ def _workboard_payload(cfg, *, include_test_data: bool) -> dict:
             )
         item["workflow_mainline_handoff_pending"] = handoff_pending
         item["workflow_mainline_handoff_note"] = handoff_note
+        item["workflow_mainline_starvation_signal"] = False
+        item["workflow_mainline_starvation_state"] = ""
+        item["workflow_mainline_starvation_note"] = ""
 
     schedule_preview, schedule_total = _schedule_preview_payload(cfg)
+    workflow_signal = _workflow_mainline_starvation_signal(all_nodes=all_nodes, audit_rows=audit_rows)
     workflow_group = next(
         (
             item
@@ -559,6 +700,16 @@ def _workboard_payload(cfg, *, include_test_data: bool) -> dict:
         ),
         {},
     )
+    if workflow_group:
+        workflow_group["workflow_mainline_starvation_signal"] = bool(
+            workflow_signal.get("workflow_mainline_starvation_signal")
+        )
+        workflow_group["workflow_mainline_starvation_state"] = str(
+            workflow_signal.get("workflow_mainline_starvation_state") or ""
+        ).strip()
+        workflow_group["workflow_mainline_starvation_note"] = str(
+            workflow_signal.get("workflow_mainline_starvation_note") or ""
+        ).strip()
     return {
         "assignment_workboard_agents": agent_items,
         "assignment_workboard_summary": {
@@ -577,6 +728,9 @@ def _workboard_payload(cfg, *, include_test_data: bool) -> dict:
         "blocked_task_count": blocked_task_count,
         "workflow_mainline_handoff_pending": bool(workflow_group.get("workflow_mainline_handoff_pending")),
         "workflow_mainline_handoff_note": str(workflow_group.get("workflow_mainline_handoff_note") or "").strip(),
+        "workflow_mainline_starvation_signal": bool(workflow_signal.get("workflow_mainline_starvation_signal")),
+        "workflow_mainline_starvation_state": str(workflow_signal.get("workflow_mainline_starvation_state") or "").strip(),
+        "workflow_mainline_starvation_note": str(workflow_signal.get("workflow_mainline_starvation_note") or "").strip(),
     }
 
 
