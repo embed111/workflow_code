@@ -322,7 +322,7 @@ def build_schedule_assignment_goal(
     planned_trigger_at: str,
     trigger_rule_summary: str,
 ) -> str:
-    return "\n".join(
+    goal = "\n".join(
         [
             f"计划名称：{str(schedule.get('schedule_name') or '').strip()}",
             f"计划时间：{planned_trigger_at}",
@@ -338,6 +338,9 @@ def build_schedule_assignment_goal(
             str(schedule.get("done_definition") or "").strip() or "-",
         ]
     ).strip()
+    # Schedule payloads are allowed to evolve, but assignment node_goal still has a hard cap.
+    # Clamp here so richer PM prompts do not turn into create_failed during trigger handling.
+    return goal[:3800]
 
 
 def create_schedule_node(
