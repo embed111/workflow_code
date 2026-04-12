@@ -22,6 +22,7 @@ from run_acceptance_schedule_center_browser import (
 
 
 FAST_SUCCESS_COMMAND_TEMPLATE = 'cmd.exe /c rem "{codex_path}" "{workspace_path}"'
+WATCHDOG_TIMES_TEXT = ",".join(f"{hour:02d}:{minute:02d}" for hour in range(24) for minute in range(0, 60, 20))
 
 
 def parse_args() -> argparse.Namespace:
@@ -67,6 +68,20 @@ def _poll_self_iteration_schedule(base_url: str, *, timeout_seconds: float = 20.
                 return item
         time.sleep(0.5)
     raise AssertionError(f"self iteration schedule missing: {json.dumps(last_body, ensure_ascii=False)}")
+
+
+def _poll_backup_schedule(base_url: str, *, timeout_seconds: float = 20.0) -> dict[str, Any]:
+    deadline = time.time() + timeout_seconds
+    last_body: dict[str, Any] = {}
+    while time.time() < deadline:
+        status, body = api_request(base_url, "GET", "/api/schedules")
+        assert_true(status == 200 and isinstance(body, dict) and body.get("ok"), f"schedule list failed: {body}")
+        last_body = body
+        for item in list(body.get("items") or []):
+            if str((item or {}).get("expected_artifact") or "").strip() == "workflow-pm-wake-summary":
+                return item
+        time.sleep(0.5)
+    raise AssertionError(f"backup schedule missing: {json.dumps(last_body, ensure_ascii=False)}")
 
 
 def main() -> int:
@@ -190,6 +205,19 @@ def main() -> int:
         assert_true("workflow_devmate" in execution_checklist, f"execution_checklist missing teammate routing: {schedule_item}")
         assert_true("版本计划" in done_definition, f"done_definition missing version plan contract: {schedule_item}")
 
+        backup_schedule = _poll_backup_schedule(base_url)
+        write_json(api_dir / "backup_schedule.json", backup_schedule)
+        backup_launch_summary = str(backup_schedule.get("launch_summary") or "").strip()
+        backup_execution_checklist = str(backup_schedule.get("execution_checklist") or "").strip()
+        backup_editor_inputs = backup_schedule.get("editor_rule_inputs") if isinstance(backup_schedule.get("editor_rule_inputs"), dict) else {}
+        backup_daily = backup_editor_inputs.get("daily") if isinstance(backup_editor_inputs.get("daily"), dict) else {}
+        assert_true(str(backup_schedule.get("assigned_agent_id") or "").strip() == "workflow", f"unexpected backup agent: {backup_schedule}")
+        assert_true(bool(str(backup_schedule.get("next_trigger_at") or "").strip()), f"backup next_trigger_at missing: {backup_schedule}")
+        assert_true("20 分钟真定时看门狗" in backup_launch_summary, f"backup launch_summary missing watchdog wording: {backup_schedule}")
+        assert_true("主线健康" in backup_execution_checklist, f"backup execution_checklist missing healthy-mainline branch: {backup_schedule}")
+        assert_true(bool(backup_daily.get("enabled")), f"backup daily rule not enabled: {backup_schedule}")
+        assert_true(str(backup_daily.get("times_text") or "").strip() == WATCHDOG_TIMES_TEXT, f"backup daily times mismatch: {backup_schedule}")
+
         summary.update(
             {
                 "ok": True,
@@ -198,6 +226,8 @@ def main() -> int:
                 "original_final_status": final_status,
                 "self_iteration_schedule_id": str(schedule_item.get("schedule_id") or "").strip(),
                 "self_iteration_next_trigger_at": str(schedule_item.get("next_trigger_at") or "").strip(),
+                "backup_schedule_id": str(backup_schedule.get("schedule_id") or "").strip(),
+                "backup_next_trigger_at": str(backup_schedule.get("next_trigger_at") or "").strip(),
             }
         )
 

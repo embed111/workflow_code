@@ -14,7 +14,7 @@ ASSIGNMENT_SELF_ITERATION_SCHEDULE_PREFIX = "[持续迭代]"
 ASSIGNMENT_SELF_ITERATION_SUCCESS_DELAY_MINUTES = 15
 ASSIGNMENT_SELF_ITERATION_FAILURE_DELAY_MINUTES = 10
 ASSIGNMENT_PM_WAKE_SCHEDULE_NAME = "pm持续唤醒 - workflow 主线巡检"
-ASSIGNMENT_PM_WAKE_DELAY_MINUTES = 60
+ASSIGNMENT_PM_WATCHDOG_INTERVAL_MINUTES = 20
 ASSIGNMENT_PM_WAKE_EXPECTED_ARTIFACT = "workflow-pm-wake-summary"
 ASSIGNMENT_SELF_ITERATION_EXPECTED_ARTIFACT = "continuous-improvement-report.md"
 ASSIGNMENT_PM_GOVERNANCE_README_PATH = "pm/README.md"
@@ -60,6 +60,14 @@ def _assignment_pm_wake_schedule_name(agent_id: str) -> str:
     if agent_text == "workflow" or not agent_text:
         return ASSIGNMENT_PM_WAKE_SCHEDULE_NAME
     return f"pm持续唤醒 - {str(agent_id or '').strip()} 主线巡检"
+
+
+def _assignment_pm_watchdog_times() -> list[str]:
+    interval_minutes = max(1, int(ASSIGNMENT_PM_WATCHDOG_INTERVAL_MINUTES))
+    return [
+        f"{int(total_minutes // 60):02d}:{int(total_minutes % 60):02d}"
+        for total_minutes in range(0, 24 * 60, interval_minutes)
+    ]
 
 
 def _assignment_release_boundary_compact_lines(*, root: Path | None = None) -> list[str]:
@@ -241,7 +249,7 @@ def _assignment_pm_wake_next_trigger_at(*, primary_next_trigger_at: str = "") ->
             base_dt = None
     if base_dt is None:
         base_dt = now_local()
-    trigger_dt = base_dt + timedelta(minutes=max(1, int(ASSIGNMENT_PM_WAKE_DELAY_MINUTES)))
+    trigger_dt = base_dt + timedelta(minutes=max(1, int(ASSIGNMENT_PM_WATCHDOG_INTERVAL_MINUTES)))
     return trigger_dt.isoformat(timespec="seconds")
 
 
@@ -281,8 +289,8 @@ def _assignment_pm_wake_schedule_payload(
         "assigned_agent_id": agent_id,
         "launch_summary": "\n".join(
             [
-                "作为保底接力入口，检查 prod 当前是否仍存在未来可执行的 [持续迭代] workflow 或 active 版本任务。",
-                "保底巡检不代替主线做整轮开发；只有主链断了或当前窗口明确要求兜底时，才补链或接管异常治理。",
+                f"作为 20 分钟真定时看门狗，检查 prod 当前是否仍存在未来可执行的 [持续迭代] workflow 或 active 版本任务。",
+                "若主线健康，只留下简短检查报告，不补链、不扰动现网；只有主链断了或当前窗口明确要求兜底时，才补链或接管异常治理。",
                 "保底巡检也不能重复上一轮；若现场没新变化，就切到更高价值的探测、补链或开发。",
                 f"先读 PM 治理入口：{ASSIGNMENT_PM_GOVERNANCE_README_PATH}",
                 f"必读：{ASSIGNMENT_SELF_ITERATION_MASTER_PLAN_PATH} / {version_plan_path} / `{version_plan_path}` 中 `active_version_file` 指向的版本文件 / {ASSIGNMENT_SELF_ITERATION_DAILY_TASK_PATH} / {wake_requirement_path}",
@@ -304,14 +312,15 @@ def _assignment_pm_wake_schedule_payload(
                 "5. 本轮必须明确版本究竟推进了哪一项：`工程质量探测 / bug 探测 / 当前需求开发 / 发布推进`。",
                 "6. 先判断当前版本引用和当前活跃版本文件是否要求暂停、治理调整或仅观察；若是，默认不补新主线，只报告现场并保持暂停。",
                 "7. 再检查 `/healthz`、`/api/status`、`/api/schedules`、`/api/runtime-upgrade/status`；必要时再看 `assignment graph / status-detail / run.json / events.log`。",
-                "8. 先记录 `root_sync_state / ahead_count / dirty_tracked_count / untracked_count / push_block_reason / next_push_batch`；若命中 dirty/ahead/异常治理现场，立即进入发布边界收口模式。",
-                f"9. 只做受支持动作：基于本机 `../workflow_code` 的 non-destructive 收口、developer workspace bootstrap/refresh、helper stale `creating` / schedule / supervisor / runtime-upgrade 恢复。不要主动 `fetch/pull origin` 或拉 GitHub。",
-                "10. 命中工作区问题时，不能停在“等待问题被解决”。只要属于受支持动作范围，你必须主动治理收口；只有确实超出支持范围或继续动作风险更大时，才允许记为 blocked。",
-                f"11. 正式升级申请改由 `prod` supervisor 托管的 idle watcher 周期检查并发起，当前巡检节点不要自己调用 `/api/runtime-upgrade/apply`。{ASSIGNMENT_SELF_UPGRADE_HINT}",
-                f"12. 只有主链断了，或当前版本引用/当前活跃版本文件明确要求补链/兜底时，才补新的 [持续迭代] workflow 入口；是否派发或恢复小伙伴，也要按版本文件里的每轮必查项判断。",
-                f"13. 当天的版本推进、后移和后续版本排期判断先写 `{ASSIGNMENT_SELF_ITERATION_VERSION_HISTORY_HINT}`；只有本轮主判断发生变化时，才更新 `{version_plan_path}` 的当前状态快照。",
-                "14. 若发现高杠杆新功能或低维护价值重构项，先记录并明确它进入哪个后续版本，不要借巡检窗口把当前版本加胖。",
-                "15. 更新 `.codex/memory/...` 时，在 `next` 明确写出下一次主线/保底触发时间，并输出本次巡检结论与下一步建议；记忆库每一轮都要更新。",
+                "8. 若主线健康、future/ready 出口存在且没有 `0 running + ready pileup` 假健康，本轮只输出最小检查报告，不做额外治理动作。",
+                "9. 先记录 `root_sync_state / ahead_count / dirty_tracked_count / untracked_count / push_block_reason / next_push_batch`；若命中 dirty/ahead/异常治理现场，立即进入发布边界收口模式。",
+                f"10. 只做受支持动作：基于本机 `../workflow_code` 的 non-destructive 收口、developer workspace bootstrap/refresh、helper stale `creating` / schedule / supervisor / runtime-upgrade 恢复。不要主动 `fetch/pull origin` 或拉 GitHub。",
+                "11. 命中工作区问题时，不能停在“等待问题被解决”。只要属于受支持动作范围，你必须主动治理收口；只有确实超出支持范围或继续动作风险更大时，才允许记为 blocked。",
+                f"12. 正式升级申请改由 `prod` supervisor 托管的 idle watcher 周期检查并发起，当前巡检节点不要自己调用 `/api/runtime-upgrade/apply`。{ASSIGNMENT_SELF_UPGRADE_HINT}",
+                f"13. 只有主链断了，或当前版本引用/当前活跃版本文件明确要求补链/兜底时，才补新的 [持续迭代] workflow 入口；是否派发或恢复小伙伴，也要按版本文件里的每轮必查项判断。",
+                f"14. 当天的版本推进、后移和后续版本排期判断先写 `{ASSIGNMENT_SELF_ITERATION_VERSION_HISTORY_HINT}`；只有本轮主判断发生变化时，才更新 `{version_plan_path}` 的当前状态快照。",
+                "15. 若发现高杠杆新功能或低维护价值重构项，先记录并明确它进入哪个后续版本，不要借巡检窗口把当前版本加胖。",
+                "16. 更新 `.codex/memory/...` 时，在 `next` 明确写出下一次主线/保底触发时间，并输出本次巡检结论与下一步建议；记忆库每一轮都要更新。",
             ]
         ).strip(),
         "done_definition": "\n".join(
@@ -332,8 +341,8 @@ def _assignment_pm_wake_schedule_payload(
         "rule_sets": {
             "monthly": {"enabled": False},
             "weekly": {"enabled": False},
-            "daily": {"enabled": False},
-            "once": {"enabled": True, "date_times_text": next_trigger_at},
+            "daily": {"enabled": True, "times_text": ",".join(_assignment_pm_watchdog_times())},
+            "once": {"enabled": False},
         },
         "operator": "assignment-self-iteration",
     }

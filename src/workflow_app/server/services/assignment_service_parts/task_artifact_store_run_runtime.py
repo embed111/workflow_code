@@ -66,6 +66,28 @@ def _assignment_touch_run_heartbeat(
     _assignment_write_run_record(root, ticket_id=ticket_id, run_record=run_record, sync_index=False)
 
 
+def _assignment_mark_run_result_finalizing(
+    root: Path,
+    *,
+    ticket_id: str,
+    run_id: str,
+    finalizing_at: str,
+) -> None:
+    run_record = _assignment_load_run_record(root, ticket_id=ticket_id, run_id=run_id)
+    if not run_record:
+        return
+    current_status = str(run_record.get("status") or "").strip().lower()
+    if current_status not in {"starting", "running"}:
+        return
+    # Provider may have exited while the worker is still extracting the final JSON payload.
+    # Clear provider_pid and refresh timestamps so stale recovery does not cancel a live finalize window.
+    run_record["provider_pid"] = 0
+    run_record["latest_event"] = "Provider 已退出，正在整理结果。"
+    run_record["latest_event_at"] = finalizing_at
+    run_record["updated_at"] = finalizing_at
+    _assignment_write_run_record(root, ticket_id=ticket_id, run_record=run_record, sync_index=False)
+
+
 def _assignment_execution_codex_failure(
     root: Path,
     *,
@@ -848,6 +870,12 @@ def _assignment_execution_worker(
                         proc.stderr.close()
                 except Exception:
                     pass
+        _assignment_mark_run_result_finalizing(
+            root,
+            ticket_id=ticket_id,
+            run_id=run_id,
+            finalizing_at=iso_ts(now_local()),
+        )
         attempt_stdout_text = "".join(stdout_chunks[attempt_stdout_index:])
         attempt_stderr_text = "".join(stderr_chunks[attempt_stderr_index:])
         observed_payload = last_observed_result_payload()

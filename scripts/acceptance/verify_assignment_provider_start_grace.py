@@ -135,6 +135,59 @@ def main() -> int:
     assert str(refreshed_run.get("status") or "").strip().lower() == "starting", refreshed_run
     assert str(refreshed_node.get("status") or "").strip().lower() == "running", refreshed_node
 
+    finalizing_run_id = "arun-test-provider-finalizing-grace"
+    finalizing_node_id = "node-provider-finalizing-grace"
+    finalizing_files = ws._assignment_run_file_paths(root, ticket_id, finalizing_run_id)
+    finalizing_files["trace_dir"].mkdir(parents=True, exist_ok=True)
+    finalizing_at = ws.iso_ts(now_dt - timedelta(seconds=90))
+    finalizing_run_record = ws._assignment_build_run_record(
+        run_id=finalizing_run_id,
+        ticket_id=ticket_id,
+        node_id=finalizing_node_id,
+        provider="codex",
+        workspace_path=str(workspace_root),
+        status="running",
+        command_summary="test provider finalizing grace",
+        prompt_ref=finalizing_files["prompt"].as_posix(),
+        stdout_ref=finalizing_files["stdout"].as_posix(),
+        stderr_ref=finalizing_files["stderr"].as_posix(),
+        result_ref=finalizing_files["result"].as_posix(),
+        latest_event="Provider 已退出，正在整理结果。",
+        latest_event_at=finalizing_at,
+        exit_code=0,
+        started_at=dispatch_at,
+        finished_at="",
+        created_at=dispatch_at,
+        updated_at=finalizing_at,
+        provider_pid=0,
+    )
+    ws._assignment_write_run_record(root, ticket_id=ticket_id, run_record=finalizing_run_record)
+    finalizing_node_payload = dict(node_payload)
+    finalizing_node_payload["node_id"] = finalizing_node_id
+    finalizing_node_payload["node_name"] = "keep finalizing run alive"
+    finalizing_node_payload["status"] = "running"
+    finalizing_node_payload["status_text"] = "进行中"
+    finalizing_node_payload["updated_at"] = finalizing_at
+    ws._assignment_write_json(ws._assignment_node_record_path(root, ticket_id, finalizing_node_id), finalizing_node_payload)
+
+    finalizing_graph = ws.get_assignment_graph(
+        root,
+        ticket_id,
+        include_test_data=True,
+        active_batch_size=20,
+        history_batch_size=20,
+    )
+    refreshed_finalizing_run = ws._assignment_load_run_record(root, ticket_id=ticket_id, run_id=finalizing_run_id)
+    finalizing_nodes = list(finalizing_graph.get("nodes") or [])
+    refreshed_finalizing_node = next(
+        (item for item in finalizing_nodes if str((item or {}).get("node_id") or "").strip() == finalizing_node_id),
+        {},
+    )
+
+    assert str(refreshed_finalizing_run.get("status") or "").strip().lower() == "running", refreshed_finalizing_run
+    assert str(refreshed_finalizing_run.get("provider_pid") or "").strip() in {"", "0"}, refreshed_finalizing_run
+    assert str(refreshed_finalizing_node.get("status") or "").strip().lower() == "running", refreshed_finalizing_node
+
     print(
         json.dumps(
             {
@@ -146,6 +199,10 @@ def main() -> int:
                 "node_status": refreshed_node.get("status"),
                 "latest_event": refreshed_run.get("latest_event"),
                 "latest_event_at": refreshed_run.get("latest_event_at"),
+                "finalizing_run_id": finalizing_run_id,
+                "finalizing_run_status": refreshed_finalizing_run.get("status"),
+                "finalizing_node_id": finalizing_node_id,
+                "finalizing_node_status": refreshed_finalizing_node.get("status"),
             },
             ensure_ascii=False,
             indent=2,

@@ -123,6 +123,7 @@ SCHEDULE_PM_LIFECYCLE_TEXT = (
 SCHEDULE_PM_TEAMMATES_TEXT = (
     "workflow_devmate / workflow_testmate / workflow_qualitymate / workflow_bugmate"
 )
+SCHEDULE_PM_WATCHDOG_INTERVAL_MINUTES = 20
 SCHEDULE_SELF_UPGRADE_HINT = (
     "正式升级改由 `prod` supervisor 托管的 idle watcher 周期检查并发起；"
     "当前主线/巡检节点不要再通过自排除方式自己触发 `/api/runtime-upgrade/apply`。"
@@ -201,6 +202,14 @@ def _safe_token(value: Any, *, max_len: int = 160) -> str:
         if ch.isalnum() or ch in {"-", "_", ".", ":"}:
             out.append(ch)
     return "".join(out)
+
+
+def _pm_watchdog_times() -> list[str]:
+    interval_minutes = max(1, int(SCHEDULE_PM_WATCHDOG_INTERVAL_MINUTES))
+    return [
+        f"{int(total_minutes // 60):02d}:{int(total_minutes % 60):02d}"
+        for total_minutes in range(0, 24 * 60, interval_minutes)
+    ]
 
 
 def _json_dumps(value: Any, fallback: str) -> str:
@@ -1264,8 +1273,6 @@ def _ensure_self_iter_backup_schedule(
     reason: str,
     planned_trigger_at: str,
 ) -> dict[str, Any]:
-    from datetime import timedelta
-
     schedule_name = str(schedule.get("schedule_name") or "").strip()
     if not schedule_name.startswith("[持续迭代]"):
         return {"queued": False, "reason": "non_self_iteration"}
@@ -1278,11 +1285,6 @@ def _ensure_self_iter_backup_schedule(
         release_boundary = collect_release_boundary_snapshot(runtime_root=cfg.root)
         release_boundary_lines = format_release_boundary_prompt_lines(release_boundary)
         pm_version_lines = format_pm_version_prompt_lines(load_pm_version_status(Path(cfg.root)))
-        try:
-            backup_dt = _parse_datetime_token(planned_trigger_at, field="planned_trigger_at") + timedelta(minutes=30)
-        except Exception:
-            backup_dt = _minute_floor(_now_bj()) + timedelta(minutes=30)
-        next_trigger_at = backup_dt.isoformat(timespec="seconds")
         existing = {}
         conn = connect_db(cfg.root)
         try:
@@ -1300,10 +1302,6 @@ def _ensure_self_iter_backup_schedule(
                 existing = {key: row[key] for key in row.keys()}
         finally:
             conn.close()
-        existing_next = str(existing.get("next_trigger_at") or "").strip()
-        current_time = _now_bj().isoformat(timespec="seconds")
-        if existing_next and existing_next > current_time and existing_next < next_trigger_at:
-            next_trigger_at = existing_next
         payload = {
             "operator": "schedule-worker-backup",
             "schedule_name": backup_name,
@@ -1311,8 +1309,8 @@ def _ensure_self_iter_backup_schedule(
             "assigned_agent_id": agent_id,
             "launch_summary": "\n".join(
                 [
-                    "作为保底接力入口，检查 prod 当前是否仍存在未来可执行的 [持续迭代] workflow 或 active 版本任务。",
-                    "保底巡检不代替主线做整轮开发；只有主链断了或当前窗口明确要求兜底时，才补链或接管异常治理。",
+                    "作为 20 分钟真定时看门狗，检查 prod 当前是否仍存在未来可执行的 [持续迭代] workflow 或 active 版本任务。",
+                    "若主线健康，只留下简短检查报告，不补链、不扰动现网；只有主链断了或当前窗口明确要求兜底时，才补链或接管异常治理。",
                     "保底巡检也不能重复上一轮；若现场没新变化，就切到更高价值的探测、补链或开发。",
                     f"先读 PM 治理入口：{SCHEDULE_PM_GOVERNANCE_README_PATH}",
                     f"必读：{SCHEDULE_PM_MASTER_PLAN_PATH} / {SCHEDULE_PM_VERSION_PLAN_PATH} / `{SCHEDULE_PM_VERSION_PLAN_PATH}` 中 `active_version_file` 指向的版本文件 / {SCHEDULE_PM_DAILY_TASK_PATH} / {SCHEDULE_PM_WAKE_REQUIREMENT_PATH}",
@@ -1334,14 +1332,15 @@ def _ensure_self_iter_backup_schedule(
                     "5. 本轮必须明确版本究竟推进了哪一项：`工程质量探测 / bug 探测 / 当前需求开发 / 发布推进`。",
                     "6. 先判断当前版本引用和当前活跃版本文件是否要求暂停、治理调整或仅观察；若是，默认不补新主线，只报告现场并保持暂停。",
                     "7. 再检查 `/healthz`、`/api/status`、`/api/schedules`、`/api/runtime-upgrade/status`；必要时再看 `assignment graph / status-detail / run.json / events.log`。",
-                    "8. 先记录 `root_sync_state / ahead_count / dirty_tracked_count / untracked_count / push_block_reason / next_push_batch`；若命中 dirty/ahead/异常治理现场，立即进入发布边界收口模式。",
-                    "9. 命中工作区问题时，不能停在“等待问题被解决”。只要属于受支持动作范围，你必须主动治理收口；只有确实超出支持范围或继续动作风险更大时，才允许记为 blocked。",
-                    f"10. 只做受支持动作：基于本机 `../workflow_code` 的 non-destructive 收口、developer workspace bootstrap/refresh、helper stale `creating` / schedule / supervisor / runtime-upgrade 恢复。不要主动 `fetch/pull origin` 或拉 GitHub。",
-                    f"11. 正式升级申请改由 `prod` supervisor 托管的 idle watcher 周期检查并发起，当前巡检节点不要自己调用 `/api/runtime-upgrade/apply`。{SCHEDULE_SELF_UPGRADE_HINT}",
-                    "12. 只有主链断了，或当前版本引用/当前活跃版本文件明确要求补链/兜底时，才补新的 [持续迭代] workflow 入口；是否派发或恢复小伙伴，也要按版本文件里的每轮必查项判断。",
-                    f"13. 当天的版本推进、后移和后续版本排期判断先写 `{SCHEDULE_PM_VERSION_HISTORY_HINT}`；只有主判断变化时，才更新 `{SCHEDULE_PM_VERSION_PLAN_PATH}` 的当前状态快照。",
-                    "14. 若发现高杠杆新功能或低维护价值重构项，先记录并明确它进入哪个后续版本，不要借巡检窗口把当前版本加胖。",
-                    "15. 更新 `.codex/memory/...` 时，在 `next` 明确写出下一次主线/保底触发时间，并输出本次巡检结论与下一步建议；记忆库每一轮都要更新。",
+                    "8. 若主线健康、future/ready 出口存在且没有 `0 running + ready pileup` 假健康，本轮只输出最小检查报告，不做额外治理动作。",
+                    "9. 先记录 `root_sync_state / ahead_count / dirty_tracked_count / untracked_count / push_block_reason / next_push_batch`；若命中 dirty/ahead/异常治理现场，立即进入发布边界收口模式。",
+                    "10. 命中工作区问题时，不能停在“等待问题被解决”。只要属于受支持动作范围，你必须主动治理收口；只有确实超出支持范围或继续动作风险更大时，才允许记为 blocked。",
+                    f"11. 只做受支持动作：基于本机 `../workflow_code` 的 non-destructive 收口、developer workspace bootstrap/refresh、helper stale `creating` / schedule / supervisor / runtime-upgrade 恢复。不要主动 `fetch/pull origin` 或拉 GitHub。",
+                    f"12. 正式升级申请改由 `prod` supervisor 托管的 idle watcher 周期检查并发起，当前巡检节点不要自己调用 `/api/runtime-upgrade/apply`。{SCHEDULE_SELF_UPGRADE_HINT}",
+                    "13. 只有主链断了，或当前版本引用/当前活跃版本文件明确要求补链/兜底时，才补新的 [持续迭代] workflow 入口；是否派发或恢复小伙伴，也要按版本文件里的每轮必查项判断。",
+                    f"14. 当天的版本推进、后移和后续版本排期判断先写 `{SCHEDULE_PM_VERSION_HISTORY_HINT}`；只有主判断变化时，才更新 `{SCHEDULE_PM_VERSION_PLAN_PATH}` 的当前状态快照。",
+                    "15. 若发现高杠杆新功能或低维护价值重构项，先记录并明确它进入哪个后续版本，不要借巡检窗口把当前版本加胖。",
+                    "16. 更新 `.codex/memory/...` 时，在 `next` 明确写出下一次主线/保底触发时间，并输出本次巡检结论与下一步建议；记忆库每一轮都要更新。",
                 ]
             ).strip(),
             "done_definition": "\n".join(
@@ -1362,8 +1361,8 @@ def _ensure_self_iter_backup_schedule(
             "rule_sets": {
                 "monthly": {"enabled": False},
                 "weekly": {"enabled": False},
-                "daily": {"enabled": False},
-                "once": {"enabled": True, "date_times_text": next_trigger_at},
+                "daily": {"enabled": True, "times_text": ",".join(_pm_watchdog_times())},
+                "once": {"enabled": False},
             },
         }
         if existing:
@@ -1378,7 +1377,7 @@ def _ensure_self_iter_backup_schedule(
                 "schedule_id": str(schedule.get("schedule_id") or "").strip(),
                 "detail": {
                     "backup_schedule_id": str(result.get("schedule_id") or "").strip(),
-                    "backup_next_trigger_at": next_trigger_at,
+                    "backup_next_trigger_at": str(result.get("next_trigger_at") or "").strip(),
                     "reason": summary,
                 },
             },
@@ -1386,7 +1385,7 @@ def _ensure_self_iter_backup_schedule(
         return {
             "queued": True,
             "schedule_id": str(result.get("schedule_id") or "").strip(),
-            "next_trigger_at": next_trigger_at,
+            "next_trigger_at": str(result.get("next_trigger_at") or "").strip(),
             "agent_id": agent_id,
         }
     except Exception as exc:

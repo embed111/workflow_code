@@ -8,6 +8,8 @@ from datetime import datetime
 from pathlib import Path
 from unittest.mock import patch
 
+WATCHDOG_TIMES_TEXT = ",".join(f"{hour:02d}:{minute:02d}" for hour in range(24) for minute in range(0, 60, 20))
+
 
 def main() -> int:
     workspace_root = Path(__file__).resolve().parents[2]
@@ -59,7 +61,7 @@ def main() -> int:
         wake_item = next(item for item in items if "主线巡检" in str(item.get("schedule_name") or "").strip())
 
         assert str(result.get("next_trigger_at") or "").strip() == "2026-04-08T02:23:00+08:00", result
-        assert str(result.get("backup_next_trigger_at") or "").strip() == "2026-04-08T03:23:00+08:00", result
+        assert str(result.get("backup_next_trigger_at") or "").strip() == "2026-04-08T02:20:00+08:00", result
         assert str(self_item.get("next_trigger_at") or "").strip() == str(result.get("next_trigger_at") or "").strip(), {
             "result": result,
             "schedule": self_item,
@@ -68,6 +70,12 @@ def main() -> int:
             "result": result,
             "backup_schedule": wake_item,
         }
+        wake_editor_inputs = wake_item.get("editor_rule_inputs") if isinstance(wake_item.get("editor_rule_inputs"), dict) else {}
+        wake_daily = wake_editor_inputs.get("daily") if isinstance(wake_editor_inputs.get("daily"), dict) else {}
+        wake_once = wake_editor_inputs.get("once") if isinstance(wake_editor_inputs.get("once"), dict) else {}
+        assert bool(wake_daily.get("enabled")), wake_item
+        assert str(wake_daily.get("times_text") or "").strip() == WATCHDOG_TIMES_TEXT, wake_item
+        assert not bool(wake_once.get("enabled")), wake_item
 
     print(
         json.dumps(

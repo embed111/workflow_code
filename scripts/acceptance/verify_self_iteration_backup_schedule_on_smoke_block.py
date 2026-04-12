@@ -14,6 +14,7 @@ PM_CURRENT_PLAN = "pm/PM当前版本计划.md"
 PM_DAILY_TASK = "pm/PM每日任务清单.md"
 PM_DAILY_HISTORY_HINT = "pm/daily-execution-history/YYYY-MM-DD.md"
 PM_VERSION_HISTORY_HINT = "pm/versions/<active_version>/history/YYYY-MM/YYYY-MM-DD.md"
+WATCHDOG_TIMES_TEXT = ",".join(f"{hour:02d}:{minute:02d}" for hour in range(24) for minute in range(0, 60, 20))
 
 
 def main() -> int:
@@ -104,6 +105,7 @@ def main() -> int:
         assert bool(str(backup_items[0].get("next_trigger_at") or "").strip()), backup_items[0]
         assert str(backup_items[0].get("assigned_agent_id") or "").strip() == "workflow", backup_items[0]
         assert PM_GOVERNANCE_README in str(backup_schedule.get("launch_summary") or ""), backup_schedule
+        assert "20 分钟真定时看门狗" in str(backup_schedule.get("launch_summary") or ""), backup_schedule
         assert PM_MASTER_PLAN in str(backup_schedule.get("launch_summary") or ""), backup_schedule
         assert PM_CURRENT_PLAN in str(backup_schedule.get("launch_summary") or ""), backup_schedule
         assert PM_DAILY_TASK in str(backup_schedule.get("launch_summary") or ""), backup_schedule
@@ -114,6 +116,7 @@ def main() -> int:
             backup_schedule.get("execution_checklist") or ""
         ), backup_schedule
         assert "UCD/设计优化" in str(backup_schedule.get("execution_checklist") or ""), backup_schedule
+        assert "主线健康" in str(backup_schedule.get("execution_checklist") or ""), backup_schedule
         assert PM_DAILY_HISTORY_HINT in str(backup_schedule.get("execution_checklist") or ""), backup_schedule
         assert PM_VERSION_HISTORY_HINT in str(backup_schedule.get("execution_checklist") or ""), backup_schedule
         assert "发布边界收口模式" in str(backup_schedule.get("execution_checklist") or ""), backup_schedule
@@ -124,6 +127,12 @@ def main() -> int:
         assert "root_sync_state / ahead_count / dirty_tracked_count / untracked_count / push_block_reason / next_push_batch" in str(
             backup_schedule.get("done_definition") or ""
         ), backup_schedule
+        editor_inputs = backup_schedule.get("editor_rule_inputs") if isinstance(backup_schedule.get("editor_rule_inputs"), dict) else {}
+        daily_rule = editor_inputs.get("daily") if isinstance(editor_inputs.get("daily"), dict) else {}
+        once_rule = editor_inputs.get("once") if isinstance(editor_inputs.get("once"), dict) else {}
+        assert bool(daily_rule.get("enabled")), backup_schedule
+        assert str(daily_rule.get("times_text") or "").strip() == WATCHDOG_TIMES_TEXT, backup_schedule
+        assert not bool(once_rule.get("enabled")), backup_schedule
 
         print(
             json.dumps(
