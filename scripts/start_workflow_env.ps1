@@ -14,7 +14,7 @@ $ErrorActionPreference = 'Stop'
 $script:ProdUpgradeExitCode = 73
 $script:ProdWatchdogRestartDelaySeconds = 5
 $script:ProdAutoUpgradeWatchdogOperator = 'prod-idle-upgrade-watchdog'
-$script:ProdAutoUpgradeDefaultIntervalSeconds = 7200
+$script:ProdAutoUpgradeDefaultIntervalSeconds = 3600
 $script:ProdAutoUpgradeDefaultTimeoutSeconds = 30
 $script:ProdAutoUpgradeDefaultRequestTimeoutSeconds = 8
 

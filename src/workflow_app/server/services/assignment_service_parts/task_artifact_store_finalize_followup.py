@@ -78,6 +78,26 @@ def _assignment_finalize_followup_dispatch(
             ],
         }
     if ready_node_count > 0:
+        auto_upgrade_single_check: dict[str, Any] = {}
+        drain_hit = str(payload.get("code") or "").strip() == "upgrade_drain_active" or any(
+            str(item.get("code") or "").strip() == "upgrade_drain_active"
+            for item in skipped
+        )
+        if drain_hit:
+            try:
+                from workflow_app.server.services import runtime_upgrade_service
+
+                auto_upgrade_single_check = runtime_upgrade_service.request_prod_auto_upgrade_single_check(
+                    operator="assignment-executor-drain-hit",
+                    reason=f"followup_dispatch_blocked ticket={ticket_id} node={node_id} run={run_id}",
+                )
+            except Exception as exc:
+                auto_upgrade_single_check = {
+                    "ok": False,
+                    "requested": False,
+                    "reason": "single_check_request_failed",
+                    "error": str(exc),
+                }
         reason_text = _short_assignment_text(
             (
                 str((skipped[0] or {}).get("message") or "").strip()
@@ -92,6 +112,8 @@ def _assignment_finalize_followup_dispatch(
             "skipped": skipped[:8],
             "message": str(payload.get("message") or "").strip(),
         }
+        if auto_upgrade_single_check:
+            detail["auto_upgrade_single_check"] = auto_upgrade_single_check
         try:
             _assignment_write_audit_entry(
                 root,

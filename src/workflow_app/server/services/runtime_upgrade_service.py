@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
+import sys
 import threading
 import time
 from datetime import datetime
@@ -21,6 +23,16 @@ RUNTIME_INSTANCE_FILE_VAR = "WORKFLOW_RUNTIME_INSTANCE_FILE"
 PROD_UPGRADE_EXIT_CODE = 73
 
 _RUNTIME_UPGRADE_HIGHLIGHT_CACHE: dict[tuple[str, str], list[str]] = {}
+_PROD_AUTO_UPGRADE_SINGLE_CHECK_STATE = {
+    "requested_at": 0.0,
+    "candidate_version": "",
+    "pid": 0,
+}
+_PROD_AUTO_UPGRADE_SINGLE_CHECK_LOCK = threading.Lock()
+_PROD_AUTO_UPGRADE_SINGLE_CHECK_DEFAULT_MIN_INTERVAL_SECONDS = 60.0
+_PROD_AUTO_UPGRADE_SINGLE_CHECK_DEFAULT_REQUEST_TIMEOUT_SECONDS = 8
+_PROD_AUTO_UPGRADE_SINGLE_CHECK_DEFAULT_TIMEOUT_SECONDS = 30
+_PROD_AUTO_UPGRADE_SINGLE_CHECK_DEFAULT_OPERATOR = "prod-idle-upgrade-watchdog"
 _RUNTIME_UPGRADE_HIGHLIGHT_RULES: tuple[dict[str, Any], ...] = (
     {
         "prefixes": (
@@ -264,6 +276,19 @@ def current_runtime_instance() -> dict[str, Any]:
     return _read_json(path)
 
 
+def current_runtime_base_url() -> str:
+    instance = current_runtime_instance()
+    manifest = current_runtime_manifest()
+    host = str(instance.get("host") or manifest.get("host") or "").strip() or "127.0.0.1"
+    try:
+        port = int(instance.get("port") or manifest.get("port") or 0)
+    except Exception:
+        port = 0
+    if port <= 0:
+        port = 8090
+    return f"http://{host}:{port}"
+
+
 def prod_candidate_path() -> Path | None:
     control_root = current_runtime_control_root()
     if not isinstance(control_root, Path):
@@ -283,6 +308,154 @@ def prod_upgrade_request_path() -> Path | None:
     if not isinstance(control_root, Path):
         return None
     return (control_root / "prod-upgrade-request.json").resolve(strict=False)
+
+
+def prod_auto_upgrade_watchdog_log_path() -> Path | None:
+    control_root = current_runtime_control_root()
+    if not isinstance(control_root, Path):
+        return None
+    if control_root.name == "control":
+        running_root = control_root.parent
+        governance_root = running_root.parent if running_root.name == ".running" else running_root
+    else:
+        governance_root = None
+    if not isinstance(governance_root, Path):
+        return None
+    return (governance_root / "logs" / "runs" / "prod-idle-upgrade-watchdog-live.md").resolve(strict=False)
+
+
+def prod_auto_upgrade_single_check_script_path() -> Path | None:
+    candidates: list[Path] = []
+    source_root = current_runtime_source_root()
+    if isinstance(source_root, Path):
+        candidates.append((source_root / "scripts" / "apply_prod_candidate_when_idle.py").resolve(strict=False))
+    deploy_root = current_runtime_deploy_root()
+    if isinstance(deploy_root, Path):
+        candidates.append((deploy_root / "scripts" / "apply_prod_candidate_when_idle.py").resolve(strict=False))
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    return None
+
+
+def request_prod_auto_upgrade_single_check(
+    *,
+    operator: str = "",
+    reason: str = "",
+    min_interval_seconds: float = _PROD_AUTO_UPGRADE_SINGLE_CHECK_DEFAULT_MIN_INTERVAL_SECONDS,
+) -> dict[str, Any]:
+    snapshot = runtime_snapshot()
+    environment = str(snapshot.get("environment") or "").strip().lower()
+    if environment != "prod":
+        return {
+            "ok": True,
+            "requested": False,
+            "reason": "environment_not_prod",
+        }
+
+    request = dict(snapshot.get("upgrade_request") or {})
+    if str(request.get("candidate_version") or "").strip():
+        return {
+            "ok": True,
+            "requested": False,
+            "reason": "upgrade_request_pending",
+            "candidate_version": str(request.get("candidate_version") or "").strip(),
+        }
+
+    candidate = dict(snapshot.get("candidate") or {})
+    candidate_version = str(candidate.get("version") or "").strip()
+    if not candidate_version or not candidate_is_newer(snapshot):
+        return {
+            "ok": True,
+            "requested": False,
+            "reason": "candidate_not_newer",
+            "candidate_version": candidate_version,
+        }
+
+    script_path = prod_auto_upgrade_single_check_script_path()
+    if not isinstance(script_path, Path):
+        return {
+            "ok": False,
+            "requested": False,
+            "reason": "watcher_script_missing",
+        }
+
+    log_path = prod_auto_upgrade_watchdog_log_path()
+    if not isinstance(log_path, Path):
+        return {
+            "ok": False,
+            "requested": False,
+            "reason": "watcher_log_path_unavailable",
+        }
+
+    python_command = str(sys.executable or "").strip() or "python"
+    requested_at = time.monotonic()
+    minimum_interval = max(1.0, float(min_interval_seconds or 0.0))
+
+    with _PROD_AUTO_UPGRADE_SINGLE_CHECK_LOCK:
+        last_requested_at = float(_PROD_AUTO_UPGRADE_SINGLE_CHECK_STATE.get("requested_at") or 0.0)
+        last_candidate_version = str(_PROD_AUTO_UPGRADE_SINGLE_CHECK_STATE.get("candidate_version") or "").strip()
+        remaining = max(0.0, minimum_interval - (requested_at - last_requested_at))
+        if last_candidate_version == candidate_version and remaining > 0:
+            return {
+                "ok": True,
+                "requested": False,
+                "reason": "throttled",
+                "candidate_version": candidate_version,
+                "throttle_seconds_remaining": round(remaining, 3),
+                "log_path": log_path.as_posix(),
+            }
+
+        args = [
+            python_command,
+            script_path.as_posix(),
+            "--base-url",
+            current_runtime_base_url(),
+            "--single-check",
+            "--operator",
+            str(operator or "").strip() or _PROD_AUTO_UPGRADE_SINGLE_CHECK_DEFAULT_OPERATOR,
+            "--request-timeout-seconds",
+            str(_PROD_AUTO_UPGRADE_SINGLE_CHECK_DEFAULT_REQUEST_TIMEOUT_SECONDS),
+            "--timeout-seconds",
+            str(_PROD_AUTO_UPGRADE_SINGLE_CHECK_DEFAULT_TIMEOUT_SECONDS),
+            "--log-path",
+            log_path.as_posix(),
+        ]
+        creationflags = int(getattr(subprocess, "CREATE_NO_WINDOW", 0) or 0)
+        try:
+            process = subprocess.Popen(
+                args,
+                cwd=script_path.parent.parent.as_posix(),
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                creationflags=creationflags,
+            )
+        except Exception as exc:
+            return {
+                "ok": False,
+                "requested": False,
+                "reason": "spawn_failed",
+                "error": str(exc),
+                "candidate_version": candidate_version,
+                "script_path": script_path.as_posix(),
+                "log_path": log_path.as_posix(),
+            }
+
+        _PROD_AUTO_UPGRADE_SINGLE_CHECK_STATE["requested_at"] = requested_at
+        _PROD_AUTO_UPGRADE_SINGLE_CHECK_STATE["candidate_version"] = candidate_version
+        _PROD_AUTO_UPGRADE_SINGLE_CHECK_STATE["pid"] = int(getattr(process, "pid", 0) or 0)
+
+    return {
+        "ok": True,
+        "requested": True,
+        "reason": str(reason or "").strip() or "drain_hit",
+        "candidate_version": candidate_version,
+        "pid": int(getattr(process, "pid", 0) or 0),
+        "script_path": script_path.as_posix(),
+        "log_path": log_path.as_posix(),
+        "base_url": current_runtime_base_url(),
+    }
 
 
 def _candidate_store_payload(candidate: dict[str, Any]) -> dict[str, Any]:
