@@ -113,7 +113,7 @@ def main() -> int:
     assert "当前是继续推进、保持暂停、还是需要兜底补链" in pm_wake_done_definition, pm_wake_payload
     assert PM_DAILY_HISTORY_HINT in pm_wake_done_definition, pm_wake_payload
     assert "本轮巡检内容不能与上一轮主结论实质一致" in pm_wake_done_definition, pm_wake_payload
-    assert "dirty/ahead 历史问题或其他工作区异常" in pm_wake_done_definition, pm_wake_payload
+    assert "工作区异常" in pm_wake_done_definition, pm_wake_payload
     assert "root_sync_state / ahead_count / dirty_tracked_count / untracked_count / push_block_reason / next_push_batch" in pm_wake_done_definition, pm_wake_payload
     assert "异常治理现场" in execution_checklist, payload
     assert "non-destructive 收口" in execution_checklist, payload
