@@ -22,7 +22,9 @@ ASSIGNMENT_SELF_ITERATION_MASTER_PLAN_PATH = "pm/PM版本推进计划.md"
 ASSIGNMENT_SELF_ITERATION_VERSION_PLAN_PATH = "pm/PM当前版本计划.md"
 ASSIGNMENT_SELF_ITERATION_DAILY_TASK_PATH = "pm/PM每日任务清单.md"
 ASSIGNMENT_SELF_ITERATION_DAILY_HISTORY_HINT = "pm/daily-execution-history/YYYY-MM-DD.md"
+ASSIGNMENT_SELF_ITERATION_DAILY_LEARNING_REPORT_HINT = "pm/daily-learning-reports/YYYY-MM-DD/<agent_id>.md"
 ASSIGNMENT_SELF_ITERATION_VERSION_HISTORY_HINT = "pm/versions/<active_version>/history/YYYY-MM/YYYY-MM-DD.md"
+ASSIGNMENT_SELF_ITERATION_VERSION_AAR_HINT = "pm/versions/<active_version>/aar/YYYY-MM/YYYY-MM-DD-<requirement_id>.md"
 ASSIGNMENT_SELF_ITERATION_WAKE_REQUIREMENT_PATH = "docs/workflow/requirements/需求详情-pm持续唤醒与清醒维持.md"
 ASSIGNMENT_SELF_ITERATION_PERIODIC_LANES_TEXT = (
     "UCD/设计优化、测试探测、工程质量探测、需求分析、架构优化、功能开发、高价值功能探索"
@@ -127,7 +129,11 @@ def _assignment_self_iteration_schedule_payload(
                 f"必读：{ASSIGNMENT_SELF_ITERATION_MASTER_PLAN_PATH} / {version_plan_path} / `{version_plan_path}` 中 `active_version_file` 指向的版本文件 / {ASSIGNMENT_SELF_ITERATION_DAILY_TASK_PATH} / {wake_requirement_path}",
                 (
                     f"今日例行任务是否已完成，看 `{ASSIGNMENT_SELF_ITERATION_DAILY_HISTORY_HINT}`；"
-                    "每日任务现在只包含“每日 1 次系统 7x24 运维质量检查”和“团队内每个小伙伴每日学习提示”。"
+                    "每日任务现在包含“每日 1 次系统 7x24 运维质量检查”和“团队内每个小伙伴每日学习任务与真实学习报告”。"
+                ),
+                (
+                    f"每轮执行后都要逐项评估当前 active 需求的状态 / 进度 / 预计完成时间；"
+                    f"若需求超时，必须补写 `{ASSIGNMENT_SELF_ITERATION_VERSION_AAR_HINT}`。"
                 ),
                 *pm_version_lines,
                 *release_boundary_lines,
@@ -144,17 +150,20 @@ def _assignment_self_iteration_schedule_payload(
                 ),
                 "4. 先对照上一轮结果和最近版本记录；若本轮计划与上一轮主产出实质一致，必须改选更高价值切片。",
                 "5. 本轮必须明确版本究竟推进了哪一项：`工程质量探测 / bug 探测 / 当前需求开发 / 发布推进`；若只是复述上一轮，就视为无效轮次。",
-                "6. 按 `质量 / 效率 / 工作区小伙伴维护 = 4 / 4 / 2` 判断重点；若 live 真相显示另一条线更高价值，主动重排优先级。",
-                "7. 只有 helper workspace 真异常、drift、creating 或无法派发时，才把工作区可用性抬成最高优先级。",
-                f"8. 先记录 `root_sync_state / ahead_count / dirty_tracked_count / untracked_count / push_block_reason / next_push_batch`；若命中 dirty/ahead/异常治理现场，立即进入发布边界收口模式。",
-                f"9. 只做受支持动作：基于本机 `../workflow_code` 的 non-destructive 收口、developer workspace bootstrap/refresh、helper stale `creating` / schedule / supervisor / runtime-upgrade 恢复；不要主动 `fetch/pull origin` 或拉 GitHub。",
-                "10. 命中工作区问题时，不能停在“等待问题被解决”。只要属于受支持动作范围，你必须主动治理收口；只有确实超出支持范围或继续动作风险更大时，才允许记为 blocked。",
-                "11. 再检查 `/healthz`、`/api/status`、`/api/schedules`、`/api/runtime-upgrade/status`；必要时再看 `status-detail / run.json / events.log`。当前 shell 是 PowerShell：不要使用 bash heredoc，不要把 `scripts/*.ps1` 这类通配路径直接交给 `rg`，也不要手工猜 run_id。",
-                f"12. 正式升级申请改由 `prod` supervisor 托管的 idle watcher 周期检查并发起，当前主线节点不要自己调用 `/api/runtime-upgrade/apply`。{ASSIGNMENT_SELF_UPGRADE_HINT}",
-                f"13. 每轮都要检查是否需要给 {ASSIGNMENT_SELF_ITERATION_TEAMMATES_TEXT} 创建、续挂、恢复或调整任务；这属于 PM 主线每轮必查项，不属于每日任务。",
-                f"14. 当天的版本推进、后移和后续版本排期判断先写 `{ASSIGNMENT_SELF_ITERATION_VERSION_HISTORY_HINT}`；只有本轮主判断发生变化时，才更新 `{version_plan_path}` 的当前状态快照，或对应版本文件的具体排期正文。",
-                "15. 若识别到新的高杠杆功能或低维护价值重构项，先记入版本记录，并明确它进入 `V2 / V3 / V4 / backlog` 的哪一处，不要继续把当前版本加胖。",
-                "16. 更新 `.codex/memory/...` 时，在 `next` 明确写出下一次主线/保底触发时间；记忆库每一轮都要更新，不能因为当天每日任务已完成就跳过。",
+                "6. 本轮结束前，必须对当前 active 版本的每个需求点逐项更新：`状态 / 进度评估 / 预计完成时间 / 是否超时`。",
+                f"7. 若某个需求点超过上一轮承诺的预计完成时间，且本轮没有先重设 ETA，必须补写 `{ASSIGNMENT_SELF_ITERATION_VERSION_AAR_HINT}`，不能只在 history 里轻描淡写带过。",
+                f"8. 若当天学习任务尚未收口，必须给 {ASSIGNMENT_SELF_ITERATION_TEAMMATES_TEXT} 指派明确学习任务，并要求每个小伙伴把自己的学习报告写到 `{ASSIGNMENT_SELF_ITERATION_DAILY_LEARNING_REPORT_HINT}`；PM 不得代写空壳学习报告。",
+                "9. 按 `质量 / 效率 / 工作区小伙伴维护 = 4 / 4 / 2` 判断重点；若 live 真相显示另一条线更高价值，主动重排优先级。",
+                "10. 只有 helper workspace 真异常、drift、creating 或无法派发时，才把工作区可用性抬成最高优先级。",
+                f"11. 先记录 `root_sync_state / ahead_count / dirty_tracked_count / untracked_count / push_block_reason / next_push_batch`；若命中 dirty/ahead/异常治理现场，立即进入发布边界收口模式。",
+                f"12. 只做受支持动作：基于本机 `../workflow_code` 的 non-destructive 收口、developer workspace bootstrap/refresh、helper stale `creating` / schedule / supervisor / runtime-upgrade 恢复；不要主动 `fetch/pull origin` 或拉 GitHub。",
+                "13. 命中工作区问题时，不能停在“等待问题被解决”。只要属于受支持动作范围，你必须主动治理收口；只有确实超出支持范围或继续动作风险更大时，才允许记为 blocked。",
+                "14. 再检查 `/healthz`、`/api/status`、`/api/schedules`、`/api/runtime-upgrade/status`；必要时再看 `status-detail / run.json / events.log`。当前 shell 是 PowerShell：不要使用 bash heredoc，不要把 `scripts/*.ps1` 这类通配路径直接交给 `rg`，也不要手工猜 run_id。",
+                f"15. 正式升级申请改由 `prod` supervisor 托管的 idle watcher 周期检查并发起，当前主线节点不要自己调用 `/api/runtime-upgrade/apply`。{ASSIGNMENT_SELF_UPGRADE_HINT}",
+                f"16. 每轮都要检查是否需要给 {ASSIGNMENT_SELF_ITERATION_TEAMMATES_TEXT} 创建、续挂、恢复或调整任务；这属于 PM 主线每轮必查项，不属于每日任务。",
+                f"17. 当天的版本推进、后移、ETA 重估和后续版本排期判断先写 `{ASSIGNMENT_SELF_ITERATION_VERSION_HISTORY_HINT}`；只有本轮主判断发生变化时，才更新 `{version_plan_path}` 的当前状态快照，或对应版本文件的具体排期正文。",
+                "18. 若识别到新的高杠杆功能或低维护价值重构项，先记入版本记录，并明确它进入 `V2 / V3 / V4 / backlog` 的哪一处，不要继续把当前版本加胖。",
+                "19. 更新 `.codex/memory/...` 时，在 `next` 明确写出下一次主线/保底触发时间；记忆库每一轮都要更新，不能因为当天每日任务已完成就跳过。",
             ]
         ).strip(),
         "done_definition": "\n".join(
@@ -163,12 +172,14 @@ def _assignment_self_iteration_schedule_payload(
                 f"2. 若今日 `{ASSIGNMENT_SELF_ITERATION_DAILY_HISTORY_HINT}` 原本不存在，本轮已经补齐当天每日执行结果，或明确写清为什么仍未完成。",
                 "3. 本轮执行内容不能与上一轮主内容实质一致；若沿同一事项继续推进，必须新增证据、缺陷、实现、决策或发布动作。",
                 "4. 本轮要写清当前泳道、生命周期阶段，以及版本是否真的发生推进；若没有推进，必须写清卡点和下一轮改变动作。",
-                f"5. 当天的版本推进、后移和后续版本排期判断已写入 `{ASSIGNMENT_SELF_ITERATION_VERSION_HISTORY_HINT}`；只有主判断变化时才更新 `{version_plan_path}` 的当前状态快照。",
-                "6. 本轮显式记录了 `root_sync_state / ahead_count / dirty_tracked_count / untracked_count / push_block_reason / next_push_batch`，并且没有把它们误当成最终交付本身。",
-                "7. 若识别到新功能想法或低维护价值重构项，本轮已明确后移去向，而不是继续扩胖当前版本。",
-                "8. 若命中工作区异常、发布边界异常或 helper 异常，本轮已经主动执行受支持的治理动作，或明确写清为什么这轮只能 blocked；不接受只写“等待问题被解决”。",
-                "9. 若本轮存在已验证代码改动，本轮结束前已经完成当前工作区 `commit / push / 根仓同步`，或明确写清收口阻塞原因。",
-                "10. 若当前窗口不是暂停/治理调整，本轮结束时至少还保留一个后续出口（ready / future / 明确的下一次唤醒）；若当前窗口是暂停/治理调整，则不得误续挂新的主线推进任务。",
+                f"5. 当天的版本推进、后移、ETA 重估和后续版本排期判断已写入 `{ASSIGNMENT_SELF_ITERATION_VERSION_HISTORY_HINT}`；每个 active 需求点都有最新的状态 / 进度 / ETA 判断。",
+                f"6. 若本轮存在超时需求，已经补写 `{ASSIGNMENT_SELF_ITERATION_VERSION_AAR_HINT}`，或明确写清为什么本轮先重设 ETA 不触发 AAR。",
+                f"7. 若当天学习任务已执行，本轮已经为相关小伙伴补齐 `{ASSIGNMENT_SELF_ITERATION_DAILY_LEARNING_REPORT_HINT}` 的真实学习报告，且不是 PM 代写空壳。",
+                "8. 本轮显式记录了 `root_sync_state / ahead_count / dirty_tracked_count / untracked_count / push_block_reason / next_push_batch`，并且没有把它们误当成最终交付本身。",
+                "9. 若识别到新功能想法或低维护价值重构项，本轮已明确后移去向，而不是继续扩胖当前版本。",
+                "10. 若命中工作区异常、发布边界异常或 helper 异常，本轮已经主动执行受支持的治理动作，或明确写清为什么这轮只能 blocked；不接受只写“等待问题被解决”。",
+                "11. 若本轮存在已验证代码改动，本轮结束前已经完成当前工作区 `commit / push / 根仓同步`，或明确写清收口阻塞原因。",
+                "12. 若当前窗口不是暂停/治理调整，本轮结束时至少还保留一个后续出口（ready / future / 明确的下一次唤醒）；若当前窗口是暂停/治理调整，则不得误续挂新的主线推进任务。",
             ]
         ),
         "priority": priority,
@@ -296,7 +307,11 @@ def _assignment_pm_wake_schedule_payload(
                 f"必读：{ASSIGNMENT_SELF_ITERATION_MASTER_PLAN_PATH} / {version_plan_path} / `{version_plan_path}` 中 `active_version_file` 指向的版本文件 / {ASSIGNMENT_SELF_ITERATION_DAILY_TASK_PATH} / {wake_requirement_path}",
                 (
                     f"今日例行任务是否已完成，看 `{ASSIGNMENT_SELF_ITERATION_DAILY_HISTORY_HINT}`；"
-                    "每日任务现在只包含“每日 1 次系统 7x24 运维质量检查”和“团队内每个小伙伴每日学习提示”。"
+                    "每日任务现在包含“每日 1 次系统 7x24 运维质量检查”和“团队内每个小伙伴每日学习任务与真实学习报告”。"
+                ),
+                (
+                    f"每轮执行后都要逐项评估当前 active 需求的状态 / 进度 / 预计完成时间；"
+                    f"若需求超时，必须补写 `{ASSIGNMENT_SELF_ITERATION_VERSION_AAR_HINT}`。"
                 ),
                 *pm_version_lines,
                 *release_boundary_lines,
@@ -311,16 +326,19 @@ def _assignment_pm_wake_schedule_payload(
                 "4. 先对照上一轮结果和最近版本记录；若继续做同样的事只会重复消耗 token，就必须切到更高价值的巡检、探测或开发事项。",
                 "5. 本轮必须明确版本究竟推进了哪一项：`工程质量探测 / bug 探测 / 当前需求开发 / 发布推进`。",
                 "6. 先判断当前版本引用和当前活跃版本文件是否要求暂停、治理调整或仅观察；若是，默认不补新主线，只报告现场并保持暂停。",
-                "7. 再检查 `/healthz`、`/api/status`、`/api/schedules`、`/api/runtime-upgrade/status`；必要时再看 `assignment graph / status-detail / run.json / events.log`。",
-                "8. 若主线健康、future/ready 出口存在且没有 `0 running + ready pileup` 假健康，本轮只输出最小检查报告，不做额外治理动作。",
-                "9. 先记录 `root_sync_state / ahead_count / dirty_tracked_count / untracked_count / push_block_reason / next_push_batch`；若命中 dirty/ahead/异常治理现场，立即进入发布边界收口模式。",
-                f"10. 只做受支持动作：基于本机 `../workflow_code` 的 non-destructive 收口、developer workspace bootstrap/refresh、helper stale `creating` / schedule / supervisor / runtime-upgrade 恢复。不要主动 `fetch/pull origin` 或拉 GitHub。",
-                "11. 命中工作区问题时，不能停在“等待问题被解决”。只要属于受支持动作范围，你必须主动治理收口；只有确实超出支持范围或继续动作风险更大时，才允许记为 blocked。",
-                f"12. 正式升级申请改由 `prod` supervisor 托管的 idle watcher 周期检查并发起，当前巡检节点不要自己调用 `/api/runtime-upgrade/apply`。{ASSIGNMENT_SELF_UPGRADE_HINT}",
-                f"13. 只有主链断了，或当前版本引用/当前活跃版本文件明确要求补链/兜底时，才补新的 [持续迭代] workflow 入口；是否派发或恢复小伙伴，也要按版本文件里的每轮必查项判断。",
-                f"14. 当天的版本推进、后移和后续版本排期判断先写 `{ASSIGNMENT_SELF_ITERATION_VERSION_HISTORY_HINT}`；只有本轮主判断发生变化时，才更新 `{version_plan_path}` 的当前状态快照。",
-                "15. 若发现高杠杆新功能或低维护价值重构项，先记录并明确它进入哪个后续版本，不要借巡检窗口把当前版本加胖。",
-                "16. 更新 `.codex/memory/...` 时，在 `next` 明确写出下一次主线/保底触发时间，并输出本次巡检结论与下一步建议；记忆库每一轮都要更新。",
+                "7. 本轮结束前，必须对当前 active 版本的每个需求点逐项更新：`状态 / 进度评估 / 预计完成时间 / 是否超时`。",
+                f"8. 若某个需求点超过上一轮承诺的预计完成时间，且本轮没有先重设 ETA，必须补写 `{ASSIGNMENT_SELF_ITERATION_VERSION_AAR_HINT}`，不能只在 history 里轻描淡写带过。",
+                f"9. 若当天学习任务尚未收口，必须给 {ASSIGNMENT_SELF_ITERATION_TEAMMATES_TEXT} 指派明确学习任务，并要求每个小伙伴把自己的学习报告写到 `{ASSIGNMENT_SELF_ITERATION_DAILY_LEARNING_REPORT_HINT}`；PM 不得代写空壳学习报告。",
+                "10. 再检查 `/healthz`、`/api/status`、`/api/schedules`、`/api/runtime-upgrade/status`；必要时再看 `assignment graph / status-detail / run.json / events.log`。",
+                "11. 若主线健康、future/ready 出口存在且没有 `0 running + ready pileup` 假健康，本轮只输出最小检查报告，不做额外治理动作。",
+                "12. 先记录 `root_sync_state / ahead_count / dirty_tracked_count / untracked_count / push_block_reason / next_push_batch`；若命中 dirty/ahead/异常治理现场，立即进入发布边界收口模式。",
+                f"13. 只做受支持动作：基于本机 `../workflow_code` 的 non-destructive 收口、developer workspace bootstrap/refresh、helper stale `creating` / schedule / supervisor / runtime-upgrade 恢复。不要主动 `fetch/pull origin` 或拉 GitHub。",
+                "14. 命中工作区问题时，不能停在“等待问题被解决”。只要属于受支持动作范围，你必须主动治理收口；只有确实超出支持范围或继续动作风险更大时，才允许记为 blocked。",
+                f"15. 正式升级申请改由 `prod` supervisor 托管的 idle watcher 周期检查并发起，当前巡检节点不要自己调用 `/api/runtime-upgrade/apply`。{ASSIGNMENT_SELF_UPGRADE_HINT}",
+                f"16. 只有主链断了，或当前版本引用/当前活跃版本文件明确要求补链/兜底时，才补新的 [持续迭代] workflow 入口；是否派发或恢复小伙伴，也要按版本文件里的每轮必查项判断。",
+                f"17. 当天的版本推进、后移、ETA 重估和后续版本排期判断先写 `{ASSIGNMENT_SELF_ITERATION_VERSION_HISTORY_HINT}`；只有本轮主判断发生变化时，才更新 `{version_plan_path}` 的当前状态快照。",
+                "18. 若发现高杠杆新功能或低维护价值重构项，先记录并明确它进入哪个后续版本，不要借巡检窗口把当前版本加胖。",
+                "19. 更新 `.codex/memory/...` 时，在 `next` 明确写出下一次主线/保底触发时间，并输出本次巡检结论与下一步建议；记忆库每一轮都要更新。",
             ]
         ).strip(),
         "done_definition": "\n".join(
@@ -330,9 +348,11 @@ def _assignment_pm_wake_schedule_payload(
                 "3. 本轮巡检内容不能与上一轮主结论实质一致；若判断继续推进，必须指出新增进展、风险变化或新切换的最高价值动作。",
                 "4. 若当前窗口是暂停/治理调整，本轮没有误补新的主线 schedule 或主线任务。",
                 "5. 若当前窗口允许推进，prod 仍至少保留一条未来可执行的 workflow 主线入口，且不存在 ready 堆积但没有 live run 的假健康现场。",
-                "6. 本次巡检显式记录了 `root_sync_state / ahead_count / dirty_tracked_count / untracked_count / push_block_reason / next_push_batch`，并且没有把它们误当成终态交付。",
-                f"7. 当天的版本推进、后移和后续版本排期判断已写入 `{ASSIGNMENT_SELF_ITERATION_VERSION_HISTORY_HINT}`；只有主判断变化时才更新 `{version_plan_path}` 的当前状态快照。",
-                "8. 若命中 7x24 异常治理现场或工作区异常，本轮已经执行受支持的治理收口动作，或明确写清为什么仍然 blocked；不接受只写“等待问题被解决”。",
+                f"6. 当天的版本推进、后移、ETA 重估和后续版本排期判断已写入 `{ASSIGNMENT_SELF_ITERATION_VERSION_HISTORY_HINT}`；每个 active 需求点都有最新的状态 / 进度 / ETA 判断。",
+                f"7. 若本轮存在超时需求，已经补写 `{ASSIGNMENT_SELF_ITERATION_VERSION_AAR_HINT}`，或明确写清为什么本轮先重设 ETA 不触发 AAR。",
+                f"8. 若当天学习任务已执行，本轮已经为相关小伙伴补齐 `{ASSIGNMENT_SELF_ITERATION_DAILY_LEARNING_REPORT_HINT}` 的真实学习报告，且不是 PM 代写空壳。",
+                "9. 本次巡检显式记录了 `root_sync_state / ahead_count / dirty_tracked_count / untracked_count / push_block_reason / next_push_batch`，并且没有把它们误当成终态交付。",
+                "10. 若命中 7x24 异常治理现场或工作区异常，本轮已经执行受支持的治理收口动作，或明确写清为什么仍然 blocked；不接受只写“等待问题被解决”。",
             ]
         ).strip(),
         "priority": "P1",

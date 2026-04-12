@@ -17,7 +17,9 @@ SCHEDULE_MASTER_PLAN_PATH = "pm/PM版本推进计划.md"
 SCHEDULE_VERSION_PLAN_PATH = "pm/PM当前版本计划.md"
 SCHEDULE_DAILY_TASK_PATH = "pm/PM每日任务清单.md"
 SCHEDULE_DAILY_HISTORY_HINT = "pm/daily-execution-history/YYYY-MM-DD.md"
+SCHEDULE_DAILY_LEARNING_REPORT_HINT = "pm/daily-learning-reports/YYYY-MM-DD/<agent_id>.md"
 SCHEDULE_VERSION_HISTORY_HINT = "pm/versions/<active_version>/history/YYYY-MM/YYYY-MM-DD.md"
+SCHEDULE_VERSION_AAR_HINT = "pm/versions/<active_version>/aar/YYYY-MM/YYYY-MM-DD-<requirement_id>.md"
 SCHEDULE_WAKE_REQUIREMENT_PATH = "docs/workflow/requirements/需求详情-pm持续唤醒与清醒维持.md"
 SCHEDULE_SELF_UPGRADE_HINT = (
     "正式升级改由 `prod` supervisor 托管的 idle watcher 周期检查并发起；"
@@ -83,7 +85,11 @@ def _schedule_template_texts(*, expected_artifact: Any, assigned_agent_id: Any) 
                     f"必读：{SCHEDULE_MASTER_PLAN_PATH} / {SCHEDULE_VERSION_PLAN_PATH} / `{SCHEDULE_VERSION_PLAN_PATH}` 中 `active_version_file` 指向的版本文件 / {SCHEDULE_DAILY_TASK_PATH} / {SCHEDULE_WAKE_REQUIREMENT_PATH}",
                     (
                         f"今日例行任务是否已完成，看 `{SCHEDULE_DAILY_HISTORY_HINT}`；"
-                        "每日任务现在只包含“每日 1 次系统 7x24 运维质量检查”和“团队内每个小伙伴每日学习提示”。"
+                        "每日任务现在包含“每日 1 次系统 7x24 运维质量检查”和“团队内每个小伙伴每日学习任务与真实学习报告”。"
+                    ),
+                    (
+                        f"每轮执行后都要逐项评估当前 active 需求的状态 / 进度 / 预计完成时间；"
+                        f"若需求超时，必须补写 `{SCHEDULE_VERSION_AAR_HINT}`。"
                     ),
                 ]
             ).strip(),
@@ -94,15 +100,18 @@ def _schedule_template_texts(*, expected_artifact: Any, assigned_agent_id: Any) 
                     "3. 先对照上一轮结果和最近版本记录；若继续做同样的事只会重复消耗 token，就必须切到更高价值的巡检、探测或开发事项。",
                     "4. 本轮必须明确版本究竟推进了哪一项：`工程质量探测 / bug 探测 / 当前需求开发 / 发布推进`。",
                     "5. 先判断当前版本引用和当前活跃版本文件是否要求暂停、治理调整或仅观察；若是，默认不补新主线，只报告现场并保持暂停。",
-                    "6. 检查 `/healthz`、`/api/status`、`/api/schedules`、`/api/runtime-upgrade/status`；必要时再看 `assignment graph / status-detail / run.json / events.log`。",
-                    "7. 先记录 `root_sync_state / ahead_count / dirty_tracked_count / untracked_count / push_block_reason / next_push_batch`；若命中 dirty/ahead/异常治理现场，先处理 release boundary。",
-                    "8. 命中工作区问题时，不能停在“等待问题被解决”。只要属于受支持动作范围，你必须主动治理收口；只有确实超出支持范围或继续动作风险更大时，才允许记为 blocked。",
-                    f"9. 正式升级申请改由 `prod` supervisor 托管的 idle watcher 周期检查并发起，当前巡检节点不要自己调用 `/api/runtime-upgrade/apply`。{SCHEDULE_SELF_UPGRADE_HINT}",
-                    "10. 只有主链断了或当前版本引用/当前活跃版本文件明确允许时，才补新的 [持续迭代] workflow 入口；是否派发或恢复小伙伴，也要按版本文件里的每轮必查项判断。",
-                    f"11. 当天的版本推进、后移和后续版本排期判断先写 `{SCHEDULE_VERSION_HISTORY_HINT}`；只有主判断变化时，才更新 `pm/PM当前版本计划.md` 的当前状态快照。",
-                    "12. 若发现高杠杆新功能或低维护价值重构项，先记录并明确它进入哪个后续版本，不要借巡检窗口把当前版本加胖。",
-                    "13. 更细现场写入 `logs/runs/*.md` 或今日日记，不要把主计划正文写成长流水。",
-                    "14. 更新 `.codex/memory/...` 时，在 `next` 明确写出下一次主线/保底触发时间；记忆库每一轮都要更新。",
+                    "6. 本轮结束前，必须对当前 active 版本的每个需求点逐项更新：`状态 / 进度评估 / 预计完成时间 / 是否超时`。",
+                    f"7. 若某个需求点超过上一轮承诺的预计完成时间，且本轮没有先重设 ETA，必须补写 `{SCHEDULE_VERSION_AAR_HINT}`，不能只在 history 里轻描淡写带过。",
+                    f"8. 若当天学习任务尚未收口，必须给各小伙伴指派明确学习任务，并要求每个小伙伴把自己的学习报告写到 `{SCHEDULE_DAILY_LEARNING_REPORT_HINT}`；PM 不得代写空壳学习报告。",
+                    "9. 检查 `/healthz`、`/api/status`、`/api/schedules`、`/api/runtime-upgrade/status`；必要时再看 `assignment graph / status-detail / run.json / events.log`。",
+                    "10. 先记录 `root_sync_state / ahead_count / dirty_tracked_count / untracked_count / push_block_reason / next_push_batch`；若命中 dirty/ahead/异常治理现场，先处理 release boundary。",
+                    "11. 命中工作区问题时，不能停在“等待问题被解决”。只要属于受支持动作范围，你必须主动治理收口；只有确实超出支持范围或继续动作风险更大时，才允许记为 blocked。",
+                    f"12. 正式升级申请改由 `prod` supervisor 托管的 idle watcher 周期检查并发起，当前巡检节点不要自己调用 `/api/runtime-upgrade/apply`。{SCHEDULE_SELF_UPGRADE_HINT}",
+                    "13. 只有主链断了或当前版本引用/当前活跃版本文件明确允许时，才补新的 [持续迭代] workflow 入口；是否派发或恢复小伙伴，也要按版本文件里的每轮必查项判断。",
+                    f"14. 当天的版本推进、后移、ETA 重估和后续版本排期判断先写 `{SCHEDULE_VERSION_HISTORY_HINT}`；只有主判断变化时，才更新 `pm/PM当前版本计划.md` 的当前状态快照。",
+                    "15. 若发现高杠杆新功能或低维护价值重构项，先记录并明确它进入哪个后续版本，不要借巡检窗口把当前版本加胖。",
+                    "16. 更细现场写入 `logs/runs/*.md` 或今日日记，不要把主计划正文写成长流水。",
+                    "17. 更新 `.codex/memory/...` 时，在 `next` 明确写出下一次主线/保底触发时间；记忆库每一轮都要更新。",
                 ]
             ).strip(),
             "done_definition": "\n".join(
@@ -111,8 +120,10 @@ def _schedule_template_texts(*, expected_artifact: Any, assigned_agent_id: Any) 
                     f"2. 若今日 `{SCHEDULE_DAILY_HISTORY_HINT}` 原本不存在，本轮已经补齐当天每日执行结果，或明确写清为什么仍未完成。",
                     "3. 本轮巡检内容不能与上一轮主结论实质一致；若判断继续推进，必须指出新增进展、风险变化或新切换的最高价值动作。",
                     "4. 若当前窗口允许推进，prod 至少保留一条未来可执行的 workflow 主线入口。",
-                    "5. 本次巡检结论和证据可追溯。",
-                    "6. 若发现上一轮遗留的 dirty/ahead 历史问题或其他工作区异常，本轮已经优先处理这批治理问题，或明确写清阻塞原因。",
+                    "5. 每个 active 需求点都已有最新的状态 / 进度 / ETA 判断；若本轮存在超时需求，已补写对应 AAR 或明确写清不触发原因。",
+                    f"6. 若当天学习任务已执行，相关学习报告已经写到 `{SCHEDULE_DAILY_LEARNING_REPORT_HINT}`，且不是 PM 代写空壳。",
+                    "7. 本次巡检结论和证据可追溯。",
+                    "8. 若发现上一轮遗留的 dirty/ahead 历史问题或其他工作区异常，本轮已经优先处理这批治理问题，或明确写清阻塞原因。",
                 ]
             ).strip(),
         }
@@ -128,7 +139,11 @@ def _schedule_template_texts(*, expected_artifact: Any, assigned_agent_id: Any) 
                     f"必读：{SCHEDULE_MASTER_PLAN_PATH} / {SCHEDULE_VERSION_PLAN_PATH} / `{SCHEDULE_VERSION_PLAN_PATH}` 中 `active_version_file` 指向的版本文件 / {SCHEDULE_DAILY_TASK_PATH} / {SCHEDULE_WAKE_REQUIREMENT_PATH}",
                     (
                         f"今日例行任务是否已完成，看 `{SCHEDULE_DAILY_HISTORY_HINT}`；"
-                        "每日任务现在只包含“每日 1 次系统 7x24 运维质量检查”和“团队内每个小伙伴每日学习提示”。"
+                        "每日任务现在包含“每日 1 次系统 7x24 运维质量检查”和“团队内每个小伙伴每日学习任务与真实学习报告”。"
+                    ),
+                    (
+                        f"每轮执行后都要逐项评估当前 active 需求的状态 / 进度 / 预计完成时间；"
+                        f"若需求超时，必须补写 `{SCHEDULE_VERSION_AAR_HINT}`。"
                     ),
                 ]
             ).strip(),
@@ -145,11 +160,14 @@ def _schedule_template_texts(*, expected_artifact: Any, assigned_agent_id: Any) 
                     f"9. 正式升级申请改由 `prod` supervisor 托管的 idle watcher 周期检查并发起，当前主线节点不要自己调用 `/api/runtime-upgrade/apply`。{SCHEDULE_SELF_UPGRADE_HINT}",
                     "10. 按 `质量 / 效率 / 工作区小伙伴维护 = 4 / 4 / 2` 判断重点；若 live 真相显示另一条线更高价值，主动重排优先级。",
                     "11. 只有 helper workspace 真异常时，才把工作区可用性抬成最高优先级。",
-                    "12. 每轮都要检查是否需要给小伙伴创建、续挂、恢复或调整任务；这属于 PM 主线每轮必查项，不属于每日任务。",
-                    f"13. 当天的版本推进、后移和后续版本排期判断先写 `{SCHEDULE_VERSION_HISTORY_HINT}`；只有主判断变化时，才更新 `pm/PM当前版本计划.md` 的当前状态快照。",
-                    "14. 若发现高杠杆新功能或低维护价值重构项，先记录并明确它进入哪个后续版本，不要继续把当前版本加胖。",
-                    "15. 更细现场写入 `logs/runs/*.md` 或今日日记。",
-                    "16. 更新 `.codex/memory/...` 时，在 `next` 明确写出下一次主线/保底触发时间；记忆库每一轮都要更新。",
+                    "12. 本轮结束前，必须对当前 active 版本的每个需求点逐项更新：`状态 / 进度评估 / 预计完成时间 / 是否超时`。",
+                    f"13. 若某个需求点超过上一轮承诺的预计完成时间，且本轮没有先重设 ETA，必须补写 `{SCHEDULE_VERSION_AAR_HINT}`，不能只在 history 里轻描淡写带过。",
+                    "14. 每轮都要检查是否需要给小伙伴创建、续挂、恢复或调整任务；这属于 PM 主线每轮必查项，不属于每日任务。",
+                    f"15. 若当天学习任务尚未收口，必须给各小伙伴指派明确学习任务，并要求每个小伙伴把自己的学习报告写到 `{SCHEDULE_DAILY_LEARNING_REPORT_HINT}`；PM 不得代写空壳学习报告。",
+                    f"16. 当天的版本推进、后移、ETA 重估和后续版本排期判断先写 `{SCHEDULE_VERSION_HISTORY_HINT}`；只有主判断变化时，才更新 `pm/PM当前版本计划.md` 的当前状态快照。",
+                    "17. 若发现高杠杆新功能或低维护价值重构项，先记录并明确它进入哪个后续版本，不要继续把当前版本加胖。",
+                    "18. 更细现场写入 `logs/runs/*.md` 或今日日记。",
+                    "19. 更新 `.codex/memory/...` 时，在 `next` 明确写出下一次主线/保底触发时间；记忆库每一轮都要更新。",
                 ]
             ).strip(),
             "done_definition": "\n".join(
@@ -158,10 +176,12 @@ def _schedule_template_texts(*, expected_artifact: Any, assigned_agent_id: Any) 
                     f"2. 若今日 `{SCHEDULE_DAILY_HISTORY_HINT}` 原本不存在，本轮已经补齐当天每日执行结果，或明确写清为什么仍未完成。",
                     "3. 本轮执行内容不能与上一轮主内容实质一致；若沿同一事项继续推进，必须新增证据、缺陷、实现、决策或发布动作。",
                     "4. 本轮附带验证证据，而不是只给方向性描述。",
-                    f"5. 当天的版本推进、后移和后续版本排期判断已写入 `{SCHEDULE_VERSION_HISTORY_HINT}`；只有主判断变化时才更新 `pm/PM当前版本计划.md` 的当前状态快照。",
-                    "6. 若命中工作区异常、发布边界异常或 helper 异常，本轮已经主动执行受支持的治理动作，或明确写清为什么这轮只能 blocked；不接受只写“等待问题被解决”。",
-                    "7. 若本轮存在已验证代码改动，本轮结束前已经完成当前工作区 `commit / push / 根仓同步`，或明确写清阻塞原因。",
-                    "8. 若当前窗口不是暂停/治理调整，本轮结束时至少还保留一个后续出口；若当前窗口是暂停/治理调整，则不得误续挂新的主线推进任务。",
+                    f"5. 当天的版本推进、后移、ETA 重估和后续版本排期判断已写入 `{SCHEDULE_VERSION_HISTORY_HINT}`；每个 active 需求点都有最新的状态 / 进度 / ETA 判断。",
+                    f"6. 若本轮存在超时需求，已经补写 `{SCHEDULE_VERSION_AAR_HINT}`，或明确写清为什么本轮先重设 ETA 不触发 AAR。",
+                    f"7. 若当天学习任务已执行，相关学习报告已经写到 `{SCHEDULE_DAILY_LEARNING_REPORT_HINT}`，且不是 PM 代写空壳。",
+                    "8. 若命中工作区异常、发布边界异常或 helper 异常，本轮已经主动执行受支持的治理动作，或明确写清为什么这轮只能 blocked；不接受只写“等待问题被解决”。",
+                    "9. 若本轮存在已验证代码改动，本轮结束前已经完成当前工作区 `commit / push / 根仓同步`，或明确写清阻塞原因。",
+                    "10. 若当前窗口不是暂停/治理调整，本轮结束时至少还保留一个后续出口；若当前窗口是暂停/治理调整，则不得误续挂新的主线推进任务。",
                 ]
             ).strip(),
         }
