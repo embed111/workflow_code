@@ -81,6 +81,13 @@ def _assignment_execution_worker_guarded(
 
 
 def _assignment_dispatch_candidates(snapshot: dict[str, Any]) -> list[dict[str, Any]]:
+    def _workflow_lane_rank(node: dict[str, Any]) -> int:
+        if _assignment_is_workflow_mainline_node(node):
+            return 0
+        if _assignment_is_workflow_patrol_node(node):
+            return 2
+        return 1
+
     rows = [
         dict(node)
         for node in list(snapshot.get("nodes") or [])
@@ -89,6 +96,7 @@ def _assignment_dispatch_candidates(snapshot: dict[str, Any]) -> list[dict[str, 
     rows.sort(
         key=lambda item: (
             int(item.get("priority") or 0),
+            _workflow_lane_rank(item),
             str(item.get("created_at") or ""),
             str(item.get("node_id") or ""),
         )
@@ -604,25 +612,26 @@ def pause_assignment_scheduler(
     operator_text = _default_assignment_operator(operator)
     note_text = _normalize_text(pause_note, field="pause_note", required=False, max_len=500)
     now_text = iso_ts(now_local())
-    snapshot = _assignment_snapshot_from_files(
-        root,
-        ticket_id,
-        include_test_data=include_test_data,
-        reconcile_running=True,
-    )
-    ticket_id = str(snapshot["graph_row"].get("ticket_id") or ticket_id).strip()
-    task_record = dict(snapshot["graph_row"])
-    node_records = [dict(item) for item in list(snapshot["all_nodes"] or [])]
-    running_count = sum(
-        1
-        for node in _assignment_active_node_records(node_records)
-        if str(node.get("status") or "").strip().lower() == "running"
-    )
-    next_state = "pause_pending" if running_count > 0 else "paused"
-    task_record["scheduler_state"] = next_state
-    task_record["pause_note"] = note_text
-    task_record["updated_at"] = now_text
-    _assignment_store_snapshot(root, task_record=task_record, node_records=node_records)
+    with _assignment_ticket_mutation_lock(ticket_id):
+        snapshot = _assignment_snapshot_from_files(
+            root,
+            ticket_id,
+            include_test_data=include_test_data,
+            reconcile_running=True,
+        )
+        ticket_id = str(snapshot["graph_row"].get("ticket_id") or ticket_id).strip()
+        task_record = dict(snapshot["graph_row"])
+        node_records = [dict(item) for item in list(snapshot["all_nodes"] or [])]
+        running_count = sum(
+            1
+            for node in _assignment_active_node_records(node_records)
+            if str(node.get("status") or "").strip().lower() == "running"
+        )
+        next_state = "pause_pending" if running_count > 0 else "paused"
+        task_record["scheduler_state"] = next_state
+        task_record["pause_note"] = note_text
+        task_record["updated_at"] = now_text
+        _assignment_store_snapshot(root, task_record=task_record, node_records=node_records)
     audit_id = _assignment_write_audit_entry(
         root,
         ticket_id=ticket_id,
@@ -668,19 +677,20 @@ def resume_assignment_scheduler(
     operator_text = _default_assignment_operator(operator)
     note_text = _normalize_text(pause_note, field="pause_note", required=False, max_len=500)
     now_text = iso_ts(now_local())
-    snapshot = _assignment_snapshot_from_files(
-        root,
-        ticket_id,
-        include_test_data=include_test_data,
-        reconcile_running=True,
-    )
-    ticket_id = str(snapshot["graph_row"].get("ticket_id") or ticket_id).strip()
-    task_record = dict(snapshot["graph_row"])
-    node_records = [dict(item) for item in list(snapshot["all_nodes"] or [])]
-    task_record["scheduler_state"] = "running"
-    task_record["pause_note"] = note_text
-    task_record["updated_at"] = now_text
-    _assignment_store_snapshot(root, task_record=task_record, node_records=node_records)
+    with _assignment_ticket_mutation_lock(ticket_id):
+        snapshot = _assignment_snapshot_from_files(
+            root,
+            ticket_id,
+            include_test_data=include_test_data,
+            reconcile_running=True,
+        )
+        ticket_id = str(snapshot["graph_row"].get("ticket_id") or ticket_id).strip()
+        task_record = dict(snapshot["graph_row"])
+        node_records = [dict(item) for item in list(snapshot["all_nodes"] or [])]
+        task_record["scheduler_state"] = "running"
+        task_record["pause_note"] = note_text
+        task_record["updated_at"] = now_text
+        _assignment_store_snapshot(root, task_record=task_record, node_records=node_records)
     audit_id = _assignment_write_audit_entry(
         root,
         ticket_id=ticket_id,
@@ -765,51 +775,52 @@ def clear_assignment_graph(
     operator_text = _default_assignment_operator(operator)
     reason_text = _normalize_text(reason, field="reason", required=False, max_len=1000)
     now_text = iso_ts(now_local())
-    snapshot = _assignment_snapshot_from_files(
-        root,
-        ticket_id,
-        include_test_data=include_test_data,
-        reconcile_running=True,
-    )
-    ticket_id = str(snapshot["graph_row"].get("ticket_id") or ticket_id).strip()
-    task_record = dict(snapshot["graph_row"])
-    node_records = [dict(item) for item in list(snapshot["all_nodes"] or [])]
-    active_nodes = _assignment_active_node_records(node_records)
-    running_nodes = [
-        node
-        for node in active_nodes
-        if str(node.get("status") or "").strip().lower() == "running"
-    ]
-    if running_nodes:
-        raise AssignmentCenterError(
-            409,
-            "running nodes prevent clear",
-            "assignment_clear_has_running_nodes",
-            {
-                "running_node_ids": [
-                    str(node.get("node_id") or "").strip()
-                    for node in running_nodes
-                ],
-            },
+    with _assignment_ticket_mutation_lock(ticket_id):
+        snapshot = _assignment_snapshot_from_files(
+            root,
+            ticket_id,
+            include_test_data=include_test_data,
+            reconcile_running=True,
         )
-    removed_node_count = 0
-    for row in node_records:
-        if str(row.get("record_state") or "active").strip().lower() == "deleted":
-            continue
-        removed_node_count += 1
-        row["record_state"] = "deleted"
-        row["delete_meta"] = {
-            "delete_action": "clear_graph",
-            "deleted_at": now_text,
-            "delete_reason": reason_text or "clear assignment graph",
-        }
-        row["updated_at"] = now_text
-    removed_edge_count = len(_assignment_active_edges(task_record, active_nodes))
-    task_record["edges"] = []
-    task_record["scheduler_state"] = "idle"
-    task_record["pause_note"] = ""
-    task_record["updated_at"] = now_text
-    _assignment_store_snapshot(root, task_record=task_record, node_records=node_records)
+        ticket_id = str(snapshot["graph_row"].get("ticket_id") or ticket_id).strip()
+        task_record = dict(snapshot["graph_row"])
+        node_records = [dict(item) for item in list(snapshot["all_nodes"] or [])]
+        active_nodes = _assignment_active_node_records(node_records)
+        running_nodes = [
+            node
+            for node in active_nodes
+            if str(node.get("status") or "").strip().lower() == "running"
+        ]
+        if running_nodes:
+            raise AssignmentCenterError(
+                409,
+                "running nodes prevent clear",
+                "assignment_clear_has_running_nodes",
+                {
+                    "running_node_ids": [
+                        str(node.get("node_id") or "").strip()
+                        for node in running_nodes
+                    ],
+                },
+            )
+        removed_node_count = 0
+        for row in node_records:
+            if str(row.get("record_state") or "active").strip().lower() == "deleted":
+                continue
+            removed_node_count += 1
+            row["record_state"] = "deleted"
+            row["delete_meta"] = {
+                "delete_action": "clear_graph",
+                "deleted_at": now_text,
+                "delete_reason": reason_text or "clear assignment graph",
+            }
+            row["updated_at"] = now_text
+        removed_edge_count = len(_assignment_active_edges(task_record, active_nodes))
+        task_record["edges"] = []
+        task_record["scheduler_state"] = "idle"
+        task_record["pause_note"] = ""
+        task_record["updated_at"] = now_text
+        _assignment_store_snapshot(root, task_record=task_record, node_records=node_records)
     audit_id = _assignment_write_audit_entry(
         root,
         ticket_id=ticket_id,

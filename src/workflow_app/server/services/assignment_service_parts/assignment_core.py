@@ -68,24 +68,29 @@ ASSIGNMENT_TEST_GRAPH_UPDATED_AT = "2026-03-14T12:20:30+08:00"
 
 _ASSIGNMENT_ACTIVE_RUN_LOCK = threading.Lock()
 _ASSIGNMENT_ACTIVE_RUN_PROCESSES: dict[str, subprocess.Popen[str]] = {}
-_ASSIGNMENT_DISPATCH_LOCK_GUARD = threading.Lock()
-_ASSIGNMENT_DISPATCH_LOCKS: dict[str, threading.Lock] = {}
+_ASSIGNMENT_GLOBAL_MUTATION_LOCK = threading.RLock()
+_ASSIGNMENT_TICKET_MUTATION_LOCK_GUARD = threading.Lock()
+_ASSIGNMENT_TICKET_MUTATION_LOCKS: dict[str, threading.RLock] = {}
 _ASSIGNMENT_EVENT_CONDITION = threading.Condition()
 _ASSIGNMENT_EVENT_SEQ = 0
 _ASSIGNMENT_EVENT_HISTORY: deque[dict[str, Any]] = deque(maxlen=DEFAULT_ASSIGNMENT_EVENT_HISTORY_LIMIT)
 
 
-def _assignment_ticket_dispatch_lock(ticket_id: str) -> threading.Lock:
+def _assignment_ticket_mutation_lock(ticket_id: str) -> threading.RLock:
     ticket_key = safe_token(str(ticket_id or ""), "", 160)
     if not ticket_key:
-        return _ASSIGNMENT_ACTIVE_RUN_LOCK
-    with _ASSIGNMENT_DISPATCH_LOCK_GUARD:
-        existing = _ASSIGNMENT_DISPATCH_LOCKS.get(ticket_key)
+        return _ASSIGNMENT_GLOBAL_MUTATION_LOCK
+    with _ASSIGNMENT_TICKET_MUTATION_LOCK_GUARD:
+        existing = _ASSIGNMENT_TICKET_MUTATION_LOCKS.get(ticket_key)
         if existing is not None:
             return existing
-        created = threading.Lock()
-        _ASSIGNMENT_DISPATCH_LOCKS[ticket_key] = created
+        created = threading.RLock()
+        _ASSIGNMENT_TICKET_MUTATION_LOCKS[ticket_key] = created
         return created
+
+
+def _assignment_ticket_dispatch_lock(ticket_id: str) -> threading.RLock:
+    return _assignment_ticket_mutation_lock(ticket_id)
 
 
 def _assignment_execution_timeout_s() -> int:

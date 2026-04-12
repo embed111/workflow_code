@@ -177,7 +177,7 @@ def _assignment_system_running_counts(root: Path, *, include_test_data: bool) ->
     }
 
 
-def _assignment_snapshot_from_files(
+def _assignment_snapshot_from_files_unlocked(
     root: Path,
     ticket_id: str,
     *,
@@ -248,3 +248,39 @@ def _assignment_snapshot_from_files(
         "scheduler": scheduler_payload,
         "serialized_nodes": serialized_nodes,
     }
+
+
+def _assignment_snapshot_from_files(
+    root: Path,
+    ticket_id: str,
+    *,
+    include_test_data: bool = True,
+    reconcile_running: bool = True,
+    sticky_node_ids: set[str] | None = None,
+    include_scheduler: bool = True,
+    include_serialized_nodes: bool = True,
+    persist_changes: bool = True,
+) -> dict[str, Any]:
+    resolved_ticket_id = _assignment_resolve_graph_ticket_id(root, ticket_id)
+    if not persist_changes:
+        return _assignment_snapshot_from_files_unlocked(
+            root,
+            resolved_ticket_id,
+            include_test_data=include_test_data,
+            reconcile_running=reconcile_running,
+            sticky_node_ids=sticky_node_ids,
+            include_scheduler=include_scheduler,
+            include_serialized_nodes=include_serialized_nodes,
+            persist_changes=False,
+        )
+    with _assignment_ticket_mutation_lock(resolved_ticket_id):
+        return _assignment_snapshot_from_files_unlocked(
+            root,
+            resolved_ticket_id,
+            include_test_data=include_test_data,
+            reconcile_running=reconcile_running,
+            sticky_node_ids=sticky_node_ids,
+            include_scheduler=include_scheduler,
+            include_serialized_nodes=include_serialized_nodes,
+            persist_changes=True,
+        )

@@ -341,84 +341,16 @@ def _finalize_assignment_execution_run(
     suppress_followup_dispatch: bool = False,
 ) -> None:
     with _assignment_run_finalize_lock(ticket_id, node_id, run_id):
-        now_text = iso_ts(now_local())
-        snapshot = _assignment_snapshot_from_files(
-            root,
-            ticket_id,
-            include_test_data=True,
-            reconcile_running=False,
-        )
-        task_record = dict(snapshot["graph_row"])
-        node_records = [dict(item) for item in list(snapshot["all_nodes"] or [])]
-        node_record = next(
-            (
-                item
-                for item in node_records
-                if str(item.get("node_id") or "").strip() == node_id
-                and str(item.get("record_state") or "active").strip().lower() != "deleted"
-            ),
-            {},
-        )
-        if not node_record:
-            return
-        run_record = _assignment_load_run_record(root, ticket_id=ticket_id, run_id=run_id)
-        if not run_record:
-            return
-        result_ref = str(run_record.get("result_ref") or "").strip()
-        workspace_path_text = str(run_record.get("workspace_path") or "").strip()
-        current_run_status = str(run_record.get("status") or "").strip().lower()
-        current_node_status = str(node_record.get("status") or "").strip().lower()
-        if current_run_status in {"succeeded", "failed"} and current_node_status == current_run_status:
-            return
-        if current_run_status == "cancelled":
-            _kill_assignment_run_process(run_id, provider_pid=run_record.get("provider_pid"))
-            run_record["latest_event"] = _assignment_cancelled_run_final_message(run_record)
-            run_record["latest_event_at"] = now_text
-            run_record["exit_code"] = int(exit_code or 0)
-            run_record["finished_at"] = now_text
-            run_record["updated_at"] = now_text
-            run_record["codex_failure"] = {}
-            _assignment_write_run_record(root, ticket_id=ticket_id, run_record=run_record)
-            _assignment_append_workspace_memory_with_audit(
+        with _assignment_ticket_mutation_lock(ticket_id):
+            now_text = iso_ts(now_local())
+            snapshot = _assignment_snapshot_from_files(
                 root,
-                ticket_id=ticket_id,
-                node_record=node_record,
-                run_id=run_id,
-                workspace_path_text=workspace_path_text,
-                exit_code=exit_code,
-                result_ref=result_ref,
-                summary_text=str(run_record.get("latest_event") or "").strip() or "执行已取消",
-                artifact_paths=list(node_record.get("artifact_paths") or []),
-                warnings=[],
-                appended_at=now_text,
-                target_status="cancelled",
+                ticket_id,
+                include_test_data=True,
+                reconcile_running=False,
             )
-            return
-        success = int(exit_code or 0) == 0 and not str(failure_message or "").strip()
-        upgrade_request_result: dict[str, Any] = {}
-        memory_summary_text = ""
-        memory_artifact_paths: list[str] = []
-        memory_warning_items: list[Any] = []
-        if success:
-            markdown_text = str(result_payload.get("artifact_markdown") or "").strip()
-            artifact_source_paths = _resolve_assignment_artifact_source_paths(
-                workspace_path_text,
-                list(result_payload.get("artifact_files") or []),
-            )
-            delivered_graph, delivered_node, artifact_paths, _artifact_audit_id = _deliver_assignment_artifact_locked(
-                root,
-                ticket_id=ticket_id,
-                node_id=node_id,
-                operator_text="assignment-executor",
-                artifact_label=str(result_payload.get("artifact_label") or "").strip() or "任务产物",
-                delivery_note=str(result_payload.get("result_summary") or "").strip(),
-                artifact_body=markdown_text,
-                now_text=now_text,
-                artifact_source_paths=artifact_source_paths,
-                source_workspace_path=workspace_path_text,
-            )
-            task_record = dict(delivered_graph or task_record)
-            node_records = _assignment_load_node_records(root, ticket_id, include_deleted=True)
+            task_record = dict(snapshot["graph_row"])
+            node_records = [dict(item) for item in list(snapshot["all_nodes"] or [])]
             node_record = next(
                 (
                     item
@@ -426,166 +358,235 @@ def _finalize_assignment_execution_run(
                     if str(item.get("node_id") or "").strip() == node_id
                     and str(item.get("record_state") or "active").strip().lower() != "deleted"
                 ),
-                node_record,
+                {},
             )
-            node_record["status"] = "succeeded"
-            node_record["status_text"] = _node_status_text("succeeded")
-            node_record["completed_at"] = now_text
-            node_record["success_reason"] = str(result_payload.get("result_summary") or "").strip() or "执行完成"
-            node_record["result_ref"] = result_ref
-            node_record["failure_reason"] = ""
-            node_record["updated_at"] = now_text
-            node_record["artifact_paths"] = list(delivered_node.get("artifact_paths") or artifact_paths)
-            task_record["updated_at"] = now_text
-            task_record, node_records, _changed = _assignment_recompute_task_state(
-                root,
-                task_record=task_record,
-                node_records=node_records,
-                reconcile_running=False,
-            )
-            _assignment_store_snapshot(root, task_record=task_record, node_records=node_records)
-            _assignment_write_audit_entry(
-                root,
-                ticket_id=ticket_id,
-                node_id=node_id,
-                action="execution_succeeded",
-                operator="assignment-executor",
-                reason=str(result_payload.get("result_summary") or "").strip() or "assignment execution succeeded",
-                target_status="succeeded",
-                detail={
-                    "run_id": run_id,
-                    "result_ref": result_ref,
-                    "artifact_paths": list(node_record.get("artifact_paths") or []),
-                },
-                created_at=now_text,
-            )
-            run_record["status"] = "succeeded"
-            run_record["latest_event"] = "执行完成并已自动回写结果。"
-            run_record["latest_event_at"] = now_text
-            run_record["exit_code"] = int(exit_code or 0)
-            run_record["finished_at"] = now_text
-            run_record["updated_at"] = now_text
-            run_record["codex_failure"] = {}
-            _assignment_write_run_record(root, ticket_id=ticket_id, run_record=run_record)
-            memory_summary_text = str(result_payload.get("result_summary") or "").strip() or "执行完成"
-            memory_artifact_paths = list(node_record.get("artifact_paths") or [])
-            memory_warning_items = list(result_payload.get("warnings") or [])
-            try:
-                schedule_result = _assignment_queue_self_iteration_schedule(
+            if not node_record:
+                return
+            run_record = _assignment_load_run_record(root, ticket_id=ticket_id, run_id=run_id)
+            if not run_record:
+                return
+            result_ref = str(run_record.get("result_ref") or "").strip()
+            workspace_path_text = str(run_record.get("workspace_path") or "").strip()
+            current_run_status = str(run_record.get("status") or "").strip().lower()
+            current_node_status = str(node_record.get("status") or "").strip().lower()
+            if current_run_status in {"succeeded", "failed"} and current_node_status == current_run_status:
+                return
+            if current_run_status == "cancelled":
+                _kill_assignment_run_process(run_id, provider_pid=run_record.get("provider_pid"))
+                run_record["latest_event"] = _assignment_cancelled_run_final_message(run_record)
+                run_record["latest_event_at"] = now_text
+                run_record["exit_code"] = int(exit_code or 0)
+                run_record["finished_at"] = now_text
+                run_record["updated_at"] = now_text
+                run_record["codex_failure"] = {}
+                _assignment_write_run_record(root, ticket_id=ticket_id, run_record=run_record)
+                _assignment_append_workspace_memory_with_audit(
+                    root,
+                    ticket_id=ticket_id,
+                    node_record=node_record,
+                    run_id=run_id,
+                    workspace_path_text=workspace_path_text,
+                    exit_code=exit_code,
+                    result_ref=result_ref,
+                    summary_text=str(run_record.get("latest_event") or "").strip() or "执行已取消",
+                    artifact_paths=list(node_record.get("artifact_paths") or []),
+                    warnings=[],
+                    appended_at=now_text,
+                    target_status="cancelled",
+                )
+                return
+            success = int(exit_code or 0) == 0 and not str(failure_message or "").strip()
+            upgrade_request_result: dict[str, Any] = {}
+            memory_summary_text = ""
+            memory_artifact_paths: list[str] = []
+            memory_warning_items: list[Any] = []
+            if success:
+                markdown_text = str(result_payload.get("artifact_markdown") or "").strip()
+                artifact_source_paths = _resolve_assignment_artifact_source_paths(
+                    workspace_path_text,
+                    list(result_payload.get("artifact_files") or []),
+                )
+                delivered_graph, delivered_node, artifact_paths, _artifact_audit_id = _deliver_assignment_artifact_locked(
+                    root,
+                    ticket_id=ticket_id,
+                    node_id=node_id,
+                    operator_text="assignment-executor",
+                    artifact_label=str(result_payload.get("artifact_label") or "").strip() or "任务产物",
+                    delivery_note=str(result_payload.get("result_summary") or "").strip(),
+                    artifact_body=markdown_text,
+                    now_text=now_text,
+                    artifact_source_paths=artifact_source_paths,
+                    source_workspace_path=workspace_path_text,
+                )
+                task_record = dict(delivered_graph or task_record)
+                node_records = _assignment_load_node_records(root, ticket_id, include_deleted=True)
+                node_record = next(
+                    (
+                        item
+                        for item in node_records
+                        if str(item.get("node_id") or "").strip() == node_id
+                        and str(item.get("record_state") or "active").strip().lower() != "deleted"
+                    ),
+                    node_record,
+                )
+                node_record["status"] = "succeeded"
+                node_record["status_text"] = _node_status_text("succeeded")
+                node_record["completed_at"] = now_text
+                node_record["success_reason"] = str(result_payload.get("result_summary") or "").strip() or "执行完成"
+                node_record["result_ref"] = result_ref
+                node_record["failure_reason"] = ""
+                node_record["updated_at"] = now_text
+                node_record["artifact_paths"] = list(delivered_node.get("artifact_paths") or artifact_paths)
+                task_record["updated_at"] = now_text
+                task_record, node_records, _changed = _assignment_recompute_task_state(
                     root,
                     task_record=task_record,
-                    node_record=node_record,
-                    result_summary=str(result_payload.get("result_summary") or "").strip() or "执行完成",
-                    success=True,
+                    node_records=node_records,
+                    reconcile_running=False,
                 )
-                if bool(schedule_result.get("queued")):
-                    _assignment_write_audit_entry(
+                _assignment_store_snapshot(root, task_record=task_record, node_records=node_records)
+                _assignment_write_audit_entry(
+                    root,
+                    ticket_id=ticket_id,
+                    node_id=node_id,
+                    action="execution_succeeded",
+                    operator="assignment-executor",
+                    reason=str(result_payload.get("result_summary") or "").strip() or "assignment execution succeeded",
+                    target_status="succeeded",
+                    detail={
+                        "run_id": run_id,
+                        "result_ref": result_ref,
+                        "artifact_paths": list(node_record.get("artifact_paths") or []),
+                    },
+                    created_at=now_text,
+                )
+                run_record["status"] = "succeeded"
+                run_record["latest_event"] = "执行完成并已自动回写结果。"
+                run_record["latest_event_at"] = now_text
+                run_record["exit_code"] = int(exit_code or 0)
+                run_record["finished_at"] = now_text
+                run_record["updated_at"] = now_text
+                run_record["codex_failure"] = {}
+                _assignment_write_run_record(root, ticket_id=ticket_id, run_record=run_record)
+                memory_summary_text = str(result_payload.get("result_summary") or "").strip() or "执行完成"
+                memory_artifact_paths = list(node_record.get("artifact_paths") or [])
+                memory_warning_items = list(result_payload.get("warnings") or [])
+                try:
+                    schedule_result = _assignment_queue_self_iteration_schedule(
                         root,
-                        ticket_id=ticket_id,
-                        node_id=node_id,
-                        action="schedule_self_iteration",
-                        operator="assignment-executor",
-                        reason="queued next self-iteration schedule",
-                        target_status="succeeded",
-                        detail=schedule_result,
-                        created_at=now_text,
+                        task_record=task_record,
+                        node_record=node_record,
+                        result_summary=str(result_payload.get("result_summary") or "").strip() or "执行完成",
+                        success=True,
                     )
-            except Exception:
-                pass
-        else:
-            failure_base_text = str(
-                failure_message or _short_assignment_text(stderr_text, 500) or "assignment execution failed"
-            ).strip()
-            result_summary_text = str(result_payload.get("result_summary") or "").strip()
-            result_markdown_text = str(result_payload.get("artifact_markdown") or "").strip()
-            preserve_result_ref = _assignment_result_payload_has_meaningful_content(result_payload) and (
-                result_summary_text != failure_base_text
-                or bool(result_markdown_text)
-                or bool(list(result_payload.get("artifact_files") or []))
-                or bool(list(result_payload.get("warnings") or []))
-            )
-            failure_text = _normalize_text(
-                (
-                    _assignment_failure_message_with_result_context(
-                        failure_base_text,
-                        result_payload=result_payload,
-                    )
-                    if preserve_result_ref
-                    else failure_base_text
-                ),
-                field="failure_reason",
-                required=True,
-                max_len=1000,
-            )
-            node_record["status"] = "failed"
-            node_record["status_text"] = _node_status_text("failed")
-            node_record["completed_at"] = now_text
-            node_record["success_reason"] = ""
-            node_record["result_ref"] = result_ref if preserve_result_ref else ""
-            node_record["failure_reason"] = failure_text
-            node_record["updated_at"] = now_text
-            task_record["updated_at"] = now_text
-            task_record, node_records, _changed = _assignment_recompute_task_state(
-                root,
-                task_record=task_record,
-                node_records=node_records,
-                reconcile_running=False,
-            )
-            _assignment_store_snapshot(root, task_record=task_record, node_records=node_records)
-            _assignment_write_audit_entry(
-                root,
-                ticket_id=ticket_id,
-                node_id=node_id,
-                action="execution_failed",
-                operator="assignment-executor",
-                reason=failure_text,
-                target_status="failed",
-                detail={"run_id": run_id, "result_ref": result_ref},
-                created_at=now_text,
-            )
-            run_record["status"] = "failed"
-            run_record["latest_event"] = failure_text
-            run_record["latest_event_at"] = now_text
-            run_record["exit_code"] = int(exit_code or 0)
-            run_record["finished_at"] = now_text
-            run_record["updated_at"] = now_text
-            run_record["codex_failure"] = _assignment_execution_codex_failure(
-                root,
-                ticket_id=ticket_id,
-                node_id=node_id,
-                run_id=run_id,
-                run_record=run_record,
-                exit_code=exit_code,
-                stderr_text=stderr_text,
-                failure_message=failure_text,
-                failed_at=now_text,
-            )
-            _assignment_write_run_record(root, ticket_id=ticket_id, run_record=run_record)
-            memory_summary_text = failure_text
-            memory_artifact_paths = list(node_record.get("artifact_paths") or [])
-            memory_warning_items = list(result_payload.get("warnings") or []) if preserve_result_ref else []
-            try:
-                schedule_result = _assignment_queue_self_iteration_schedule(
+                    if bool(schedule_result.get("queued")):
+                        _assignment_write_audit_entry(
+                            root,
+                            ticket_id=ticket_id,
+                            node_id=node_id,
+                            action="schedule_self_iteration",
+                            operator="assignment-executor",
+                            reason="queued next self-iteration schedule",
+                            target_status="succeeded",
+                            detail=schedule_result,
+                            created_at=now_text,
+                        )
+                except Exception:
+                    pass
+            else:
+                failure_base_text = str(
+                    failure_message or _short_assignment_text(stderr_text, 500) or "assignment execution failed"
+                ).strip()
+                result_summary_text = str(result_payload.get("result_summary") or "").strip()
+                result_markdown_text = str(result_payload.get("artifact_markdown") or "").strip()
+                preserve_result_ref = _assignment_result_payload_has_meaningful_content(result_payload) and (
+                    result_summary_text != failure_base_text
+                    or bool(result_markdown_text)
+                    or bool(list(result_payload.get("artifact_files") or []))
+                    or bool(list(result_payload.get("warnings") or []))
+                )
+                failure_text = _normalize_text(
+                    (
+                        _assignment_failure_message_with_result_context(
+                            failure_base_text,
+                            result_payload=result_payload,
+                        )
+                        if preserve_result_ref
+                        else failure_base_text
+                    ),
+                    field="failure_reason",
+                    required=True,
+                    max_len=1000,
+                )
+                node_record["status"] = "failed"
+                node_record["status_text"] = _node_status_text("failed")
+                node_record["completed_at"] = now_text
+                node_record["success_reason"] = ""
+                node_record["result_ref"] = result_ref if preserve_result_ref else ""
+                node_record["failure_reason"] = failure_text
+                node_record["updated_at"] = now_text
+                task_record["updated_at"] = now_text
+                task_record, node_records, _changed = _assignment_recompute_task_state(
                     root,
                     task_record=task_record,
-                    node_record=node_record,
-                    result_summary=failure_text,
-                    success=False,
+                    node_records=node_records,
+                    reconcile_running=False,
                 )
-                if bool(schedule_result.get("queued")):
-                    _assignment_write_audit_entry(
+                _assignment_store_snapshot(root, task_record=task_record, node_records=node_records)
+                _assignment_write_audit_entry(
+                    root,
+                    ticket_id=ticket_id,
+                    node_id=node_id,
+                    action="execution_failed",
+                    operator="assignment-executor",
+                    reason=failure_text,
+                    target_status="failed",
+                    detail={"run_id": run_id, "result_ref": result_ref},
+                    created_at=now_text,
+                )
+                run_record["status"] = "failed"
+                run_record["latest_event"] = failure_text
+                run_record["latest_event_at"] = now_text
+                run_record["exit_code"] = int(exit_code or 0)
+                run_record["finished_at"] = now_text
+                run_record["updated_at"] = now_text
+                run_record["codex_failure"] = _assignment_execution_codex_failure(
+                    root,
+                    ticket_id=ticket_id,
+                    node_id=node_id,
+                    run_id=run_id,
+                    run_record=run_record,
+                    exit_code=exit_code,
+                    stderr_text=stderr_text,
+                    failure_message=failure_text,
+                    failed_at=now_text,
+                )
+                _assignment_write_run_record(root, ticket_id=ticket_id, run_record=run_record)
+                memory_summary_text = failure_text
+                memory_artifact_paths = list(node_record.get("artifact_paths") or [])
+                memory_warning_items = list(result_payload.get("warnings") or []) if preserve_result_ref else []
+                try:
+                    schedule_result = _assignment_queue_self_iteration_schedule(
                         root,
-                        ticket_id=ticket_id,
-                        node_id=node_id,
-                        action="schedule_self_iteration",
-                        operator="assignment-executor",
-                        reason="queued next self-iteration schedule after failure",
-                        target_status="failed",
-                        detail=schedule_result,
-                        created_at=now_text,
+                        task_record=task_record,
+                        node_record=node_record,
+                        result_summary=failure_text,
+                        success=False,
                     )
-            except Exception:
-                pass
+                    if bool(schedule_result.get("queued")):
+                        _assignment_write_audit_entry(
+                            root,
+                            ticket_id=ticket_id,
+                            node_id=node_id,
+                            action="schedule_self_iteration",
+                            operator="assignment-executor",
+                            reason="queued next self-iteration schedule after failure",
+                            target_status="failed",
+                            detail=schedule_result,
+                            created_at=now_text,
+                        )
+                except Exception:
+                    pass
         _assignment_append_workspace_memory_with_audit(
             root,
             ticket_id=ticket_id,

@@ -283,6 +283,34 @@ def _priority_label(value: Any) -> str:
     return SCHEDULE_PRIORITY_LABEL.get(number, "P1")
 
 
+def _schedule_is_workflow_mainline_payload(payload: dict[str, Any]) -> bool:
+    row = dict(payload or {})
+    agent_id = str(row.get("assigned_agent_id") or "").strip().lower()
+    if agent_id != "workflow":
+        return False
+    schedule_name = str(row.get("schedule_name") or "").strip()
+    expected_artifact = str(row.get("expected_artifact") or "").strip().lower()
+    return expected_artifact == "continuous-improvement-report.md" or schedule_name.startswith("[持续迭代] workflow")
+
+
+def _schedule_is_workflow_patrol_payload(payload: dict[str, Any]) -> bool:
+    row = dict(payload or {})
+    agent_id = str(row.get("assigned_agent_id") or "").strip().lower()
+    if agent_id != "workflow":
+        return False
+    schedule_name = str(row.get("schedule_name") or "").strip()
+    expected_artifact = str(row.get("expected_artifact") or "").strip().lower()
+    return expected_artifact == "workflow-pm-wake-summary" or schedule_name.startswith("pm持续唤醒 - workflow 主线巡检")
+
+
+def _schedule_recovery_lane_rank(payload: dict[str, Any]) -> int:
+    if _schedule_is_workflow_mainline_payload(payload):
+        return 0
+    if _schedule_is_workflow_patrol_payload(payload):
+        return 2
+    return 1
+
+
 def _normalize_delivery_mode(value: Any) -> str:
     text = str(value or "none").strip().lower() or "none"
     if text not in {"none", "specified"}:
@@ -3181,6 +3209,15 @@ def _resume_pending_schedule_triggers(cfg: Any, *, operator: str = "schedule-wor
         entries = [(row, _row_to_schedule(row, conn=conn)) for row in rows]
     finally:
         conn.close()
+    entries.sort(
+        key=lambda item: (
+            1 if str(item[0]["trigger_status"] or "").strip().lower() == "dispatch_failed" else 0,
+            _schedule_recovery_lane_rank(item[1]),
+            str(item[0]["trigger_updated_at"] or ""),
+            str(item[0]["planned_trigger_at"] or ""),
+            str(item[0]["trigger_instance_id"] or ""),
+        )
+    )
     resumed = []
     started_count = 0
     for row, schedule in entries:
