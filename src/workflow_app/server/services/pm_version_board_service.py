@@ -59,6 +59,12 @@ _ALLOWED_GATE_LEVELS = {"workflow-gate", "activation-gate", "report-only"}
 _PROGRESS_RE = re.compile(r"(\d+(?:\.\d+)?)\s*%")
 _REQUIREMENT_ID_RE = re.compile(r"(V\d+-R\d+)")
 _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+_PROBE_SPLIT_RE = re.compile(r"(?:[、,，;；]+|\s+/\s+)")
+_TEST_CASE_REF_RE = re.compile(r"^TC-[A-Z0-9-]+$")
+_DRAFT_PROBE_PREFIX = "draft:"
+_ACCEPTANCE_SCRIPT_EXTENSIONS = (".py", ".js", ".ps1")
+_ACTIVATION_READY_VALUES = {"ready", "ok", "go"}
+_EMPTY_LIKE_VALUES = {"", "-", "无", "none", "n/a"}
 
 
 def _read_text(path: Path | None) -> str:
@@ -144,6 +150,70 @@ def _parse_activation_fields(section_text: str) -> dict[str, str]:
         if matched:
             fields[str(matched.group(1) or "").strip()] = str(matched.group(2) or "").strip()
     return fields
+
+
+def _clean_token(value: str) -> str:
+    return str(value or "").strip().strip("`").strip()
+
+
+def _split_probe_refs(value: str) -> list[str]:
+    tokens = [_clean_token(item) for item in _PROBE_SPLIT_RE.split(str(value or ""))]
+    refs: list[str] = []
+    for token in tokens:
+        if token and token not in refs:
+            refs.append(token)
+    return refs
+
+
+def _probe_ref_is_bound(workspace_root: Path, probe_ref: str) -> bool:
+    candidate = _clean_token(probe_ref)
+    if not candidate:
+        return False
+    if candidate.lower().startswith(_DRAFT_PROBE_PREFIX):
+        return False
+    if _TEST_CASE_REF_RE.fullmatch(candidate):
+        return True
+    paths: list[Path] = []
+    if "/" in candidate or "\\" in candidate:
+        path = Path(candidate)
+        if path.is_absolute():
+            paths.append(path.resolve(strict=False))
+        else:
+            paths.append((workspace_root / path).resolve(strict=False))
+    else:
+        acceptance_root = workspace_root / "scripts" / "acceptance"
+        paths.append((acceptance_root / candidate).resolve(strict=False))
+        if not any(candidate.endswith(ext) for ext in _ACCEPTANCE_SCRIPT_EXTENSIONS):
+            for ext in _ACCEPTANCE_SCRIPT_EXTENSIONS:
+                paths.append((acceptance_root / f"{candidate}{ext}").resolve(strict=False))
+    return any(path.exists() and path.is_file() for path in paths)
+
+
+def _activation_gate_summary(
+    *,
+    schema_ok: bool,
+    schema_issue_count: int,
+    activation_readiness: str,
+    activation_readiness_ready: bool,
+    draft_probe_refs: list[str],
+    unbound_probe_refs: list[str],
+    blocking_items_clear: bool,
+    activation_gate_ready: bool,
+) -> str:
+    if activation_gate_ready:
+        return "activation gate 就绪"
+    reasons: list[str] = []
+    if not schema_ok:
+        reasons.append(f"schema 缺口 {schema_issue_count} 项")
+    if draft_probe_refs or unbound_probe_refs:
+        reasons.append("probe binding 未完成")
+    if not blocking_items_clear:
+        reasons.append("存在 blocker")
+    if not activation_readiness_ready:
+        reasons.append(f"activation_readiness={activation_readiness or '-'}")
+    if not reasons:
+        return "activation gate 未就绪"
+    return "activation gate 未就绪 · " + " / ".join(reasons)
 
 
 def _parse_active_requirement_rows(version_text: str) -> tuple[list[str], list[dict[str, Any]]]:
@@ -249,7 +319,12 @@ def _future_version_severity(version_id: str, status: str, next_candidate: str) 
     return "report-only"
 
 
-def _parse_future_version_card(version_path: Path, *, next_activation_candidate: str) -> dict[str, Any]:
+def _parse_future_version_card(
+    version_path: Path,
+    *,
+    next_activation_candidate: str,
+    workspace_root: Path,
+) -> dict[str, Any]:
     text = _read_text(version_path)
     heading = _VERSION_HEADING_RE.search(text)
     status = ""
@@ -273,6 +348,7 @@ def _parse_future_version_card(version_path: Path, *, next_activation_candidate:
     headers, rows = _parse_table(requirement_section)
     missing_columns = [column for column in _REQUIRED_FUTURE_COLUMNS if column not in headers]
     row_issues: list[dict[str, Any]] = []
+    activation_gate_probe_refs: list[str] = []
     for row in rows:
         requirement_id = _requirement_id(row.get("需求点") or "")
         missing_fields = [
@@ -289,6 +365,10 @@ def _parse_future_version_card(version_path: Path, *, next_activation_candidate:
         gate_level = str(row.get("Gate级别") or "").strip().strip("`").strip()
         if gate_level and gate_level not in _ALLOWED_GATE_LEVELS:
             invalid_fields.append("Gate级别")
+        if gate_level == "activation-gate":
+            for probe_ref in _split_probe_refs(str(row.get("验收/Probe") or "")):
+                if probe_ref not in activation_gate_probe_refs:
+                    activation_gate_probe_refs.append(probe_ref)
         if missing_fields or invalid_fields:
             row_issues.append(
                 {
@@ -297,18 +377,65 @@ def _parse_future_version_card(version_path: Path, *, next_activation_candidate:
                     "invalid_fields": invalid_fields,
                 }
             )
-    issue_count = len(missing_sections) + len(missing_subfields) + len(missing_columns) + len(row_issues)
+    required_probes = _split_probe_refs(str(activation_fields.get("required_probes") or ""))
+    all_probe_refs: list[str] = []
+    for probe_ref in [*required_probes, *activation_gate_probe_refs]:
+        if probe_ref not in all_probe_refs:
+            all_probe_refs.append(probe_ref)
+    draft_probe_refs = [probe for probe in all_probe_refs if probe.lower().startswith(_DRAFT_PROBE_PREFIX)]
+    unbound_probe_refs = [
+        probe
+        for probe in all_probe_refs
+        if probe not in draft_probe_refs and not _probe_ref_is_bound(workspace_root, probe)
+    ]
+    activation_readiness = _clean_token(str(activation_fields.get("activation_readiness") or ""))
+    activation_readiness_ready = activation_readiness.lower() in _ACTIVATION_READY_VALUES
+    blocking_items_text = _clean_token(str(activation_fields.get("blocking_items") or ""))
+    blocking_items_clear = blocking_items_text.lower() in _EMPTY_LIKE_VALUES
+    schema_issue_count = len(missing_sections) + len(missing_subfields) + len(missing_columns) + len(row_issues)
+    gate_issue_count = 0
+    if not activation_readiness_ready:
+        gate_issue_count += 1
+    if draft_probe_refs:
+        gate_issue_count += 1
+    if unbound_probe_refs:
+        gate_issue_count += 1
+    if not blocking_items_clear:
+        gate_issue_count += 1
+    issue_count = schema_issue_count + gate_issue_count
     severity = _future_version_severity(version_id, status, next_activation_candidate)
-    ok = issue_count == 0
-    summary = "activation gate 就绪" if ok else f"缺口 {issue_count} 项"
+    schema_ok = schema_issue_count == 0
+    activation_gate_ready = schema_ok and gate_issue_count == 0
+    ok = activation_gate_ready
+    summary = _activation_gate_summary(
+        schema_ok=schema_ok,
+        schema_issue_count=schema_issue_count,
+        activation_readiness=activation_readiness,
+        activation_readiness_ready=activation_readiness_ready,
+        draft_probe_refs=draft_probe_refs,
+        unbound_probe_refs=unbound_probe_refs,
+        blocking_items_clear=blocking_items_clear,
+        activation_gate_ready=activation_gate_ready,
+    )
     return {
         "version_id": version_id,
         "title": title,
         "status": status,
         "severity": severity,
         "ok": ok,
+        "schema_ok": schema_ok,
+        "activation_gate_ready": activation_gate_ready,
         "summary": summary,
         "issue_count": issue_count,
+        "schema_issue_count": schema_issue_count,
+        "gate_issue_count": gate_issue_count,
+        "activation_readiness": activation_readiness,
+        "required_probes": required_probes,
+        "activation_gate_probe_refs": activation_gate_probe_refs,
+        "draft_probe_refs": draft_probe_refs,
+        "unbound_probe_refs": unbound_probe_refs,
+        "blocking_items_text": blocking_items_text,
+        "blocking_items_clear": blocking_items_clear,
         "missing_sections": missing_sections,
         "missing_subfields": missing_subfields,
         "missing_columns": missing_columns,
@@ -318,7 +445,7 @@ def _parse_future_version_card(version_path: Path, *, next_activation_candidate:
     }
 
 
-def _future_activation_summary(pm_root: Path, active_version: str) -> dict[str, Any]:
+def _future_activation_summary(pm_root: Path, active_version: str, workspace_root: Path) -> dict[str, Any]:
     version_paths = _future_version_paths(pm_root, active_version)
     versions_meta: list[tuple[str, str, Path]] = []
     for version_path in version_paths:
@@ -330,7 +457,11 @@ def _future_activation_summary(pm_root: Path, active_version: str) -> dict[str, 
         versions_meta.append((version_id, status, version_path))
     next_activation_candidate = next((version_id for version_id, status, _ in versions_meta if status.lower() == "planned"), "")
     versions = [
-        _parse_future_version_card(version_path, next_activation_candidate=next_activation_candidate)
+        _parse_future_version_card(
+            version_path,
+            next_activation_candidate=next_activation_candidate,
+            workspace_root=workspace_root,
+        )
         for _, _, version_path in versions_meta
     ]
     hard_failures = [item["version_id"] for item in versions if item["severity"] == "hard" and not item["ok"]]
@@ -388,7 +519,11 @@ def load_pm_version_board(root: Path | None = None, *, runtime_snapshot: dict[st
     if not version_text:
         return payload
     _, requirements = _parse_active_requirement_rows(version_text)
-    activation_summary = _future_activation_summary(reference_path.parent, str(status.get("active_version") or "").strip())
+    activation_summary = _future_activation_summary(
+        reference_path.parent,
+        str(status.get("active_version") or "").strip(),
+        workspace_root,
+    )
     payload.update(
         {
             "ok": bool(requirements),

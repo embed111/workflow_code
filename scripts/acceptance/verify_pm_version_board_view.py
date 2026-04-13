@@ -42,8 +42,19 @@ def main() -> int:
     assert int(summary.get("owner_count") or 0) == len(owners), summary
     assert all(str(item.get("requirement_id") or "").startswith(f"{active_version}-R") for item in requirements), requirements
     assert str(activation_summary.get("next_activation_candidate") or "").strip() == "V3", activation_summary
-    assert bool(activation_summary.get("next_activation_ready")), activation_summary
-    assert not list(activation_summary.get("hard_failures") or []), activation_summary
+    assert not bool(activation_summary.get("next_activation_ready")), activation_summary
+    assert list(activation_summary.get("hard_failures") or []) == ["V3"], activation_summary
+    activation_versions = list(activation_summary.get("versions") or [])
+    next_activation_row = next(
+        (item for item in activation_versions if str(item.get("version_id") or "").strip() == "V3"),
+        {},
+    )
+    assert next_activation_row, activation_summary
+    assert not bool(next_activation_row.get("ok")), next_activation_row
+    assert bool(next_activation_row.get("schema_ok")), next_activation_row
+    assert "draft:v3-activation-gate" in list(next_activation_row.get("draft_probe_refs") or []), next_activation_row
+    assert not bool(next_activation_row.get("blocking_items_clear")), next_activation_row
+    assert "activation gate" in str(next_activation_row.get("summary") or "").strip(), next_activation_row
 
     cfg = SimpleNamespace(root=workspace_root, agent_search_root=workspace_root.as_posix())
     state = SimpleNamespace()
@@ -148,6 +159,8 @@ def main() -> int:
                 "owner_count": len(owners),
                 "next_activation_candidate": activation_summary.get("next_activation_candidate"),
                 "next_activation_ready": activation_summary.get("next_activation_ready"),
+                "hard_failures": activation_summary.get("hard_failures"),
+                "next_activation_summary": next_activation_row.get("summary"),
             },
             ensure_ascii=False,
             indent=2,
