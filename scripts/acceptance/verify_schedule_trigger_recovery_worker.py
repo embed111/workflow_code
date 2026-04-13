@@ -37,7 +37,10 @@ def main() -> int:
     )
     cfg = type("Cfg", (), {"root": root, "runtime_environment": "prod"})()
     original_load_agents = schedule_service._load_available_agents
+    original_now_bj = schedule_service._now_bj
+    fixed_now = schedule_service._minute_floor(schedule_service._now_bj())
     schedule_service._load_available_agents = lambda _cfg: [{"agent_id": "workflow", "agent_name": "workflow"}]
+    schedule_service._now_bj = lambda: fixed_now
 
     def create_schedule(date_text: str) -> str:
         schedule = schedule_service.create_schedule(
@@ -244,6 +247,7 @@ def main() -> int:
     try:
         result = schedule_service._resume_pending_schedule_triggers(cfg, operator="test-recover")
     finally:
+        schedule_service._now_bj = original_now_bj
         schedule_service._start_schedule_trigger_processing = original_start
         schedule_service._assignment_runtime_status = original_assignment_runtime_status
         schedule_service._assignment_ticket_has_other_running_nodes = original_has_other_running

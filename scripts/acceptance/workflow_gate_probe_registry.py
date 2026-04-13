@@ -222,6 +222,16 @@ SCRIPT_PROBE_DEFINITIONS: tuple[ScriptProbeDefinition, ...] = (
         failure_message="pm version truth source probe failed",
     ),
     ScriptProbeDefinition(
+        key="pm_daily_execution_governance",
+        relative_path="scripts/acceptance/verify_pm_daily_execution_governance.py",
+        failure_message="pm daily execution governance probe failed",
+    ),
+    ScriptProbeDefinition(
+        key="pm_current_version_snapshot_alignment",
+        relative_path="scripts/acceptance/verify_pm_current_version_snapshot_alignment.py",
+        failure_message="pm current version snapshot alignment probe failed",
+    ),
+    ScriptProbeDefinition(
         key="active_version_requirements_matrix",
         relative_path="scripts/acceptance/verify_active_version_requirements_matrix.py",
         failure_message="active version requirements matrix probe failed",
