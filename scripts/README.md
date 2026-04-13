@@ -33,6 +33,7 @@
 ## 4. Common Commands
 - `python scripts/workflow_web_server.py --help`
 - `python scripts/workflow_entry_cli.py --help`
+- `python scripts/bin/refresh_pm_daily_governance.py --help`
 - `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/launch_workflow.ps1 -OpenBrowser`
 - `python scripts/quality/check-module-readme-contract.py --root .`
 - `python scripts/quality/check-prototype-text.py --root .`
