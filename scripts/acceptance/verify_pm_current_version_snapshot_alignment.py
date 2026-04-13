@@ -23,7 +23,7 @@ CURRENT_LIFECYCLE_STAGE_RE = re.compile(
     re.MULTILINE,
 )
 CURRENT_BASELINE_RE = re.compile(
-    r"^\s*\d+\.\s*baseline\s*(?:继续沿用|为|仍为|已切到|已更新为|已追到\s*live)?\s*`([^`]+)`",
+    r"^\s*\d+\.\s*baseline\s*(?:继续沿用|为|仍为|已切到|已更新为|已对齐为|已追到\s*live)?\s*`([^`]+)`",
     re.IGNORECASE | re.MULTILINE,
 )
 REFERENCE_ACTIVE_VERSION_RE = re.compile(r"^\s*-\s*active_version:\s*`([^`]+)`", re.MULTILINE)
