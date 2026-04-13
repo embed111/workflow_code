@@ -227,6 +227,11 @@ SCRIPT_PROBE_DEFINITIONS: tuple[ScriptProbeDefinition, ...] = (
         failure_message="active version requirements matrix probe failed",
     ),
     ScriptProbeDefinition(
+        key="planned_version_activation_readiness",
+        relative_path="scripts/acceptance/verify_planned_version_activation_readiness.py",
+        failure_message="planned version activation readiness probe failed",
+    ),
+    ScriptProbeDefinition(
         key="dashboard_pending_upstream_blockers",
         relative_path="scripts/acceptance/verify_dashboard_pending_upstream_blockers.py",
         failure_message="dashboard pending upstream blockers probe failed",
