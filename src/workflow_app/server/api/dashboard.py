@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from ..bootstrap import web_server_runtime as ws
+from ..services.pm_version_board_service import load_pm_version_board
 from ..services.pm_version_status_service import (
     build_pm_version_truth_payload,
     load_effective_pm_version_status,
@@ -781,6 +782,7 @@ def try_handle_get(handler, cfg, state, ctx: dict) -> bool:
         else:
             ab = {"active_version": "disabled", "active_slot": "disabled"}
         pm_version_status = load_effective_pm_version_status(Path(cfg.root))
+        pm_version_board = load_pm_version_board(Path(cfg.root))
         truth_payload = build_pm_version_truth_payload(
             reported_active_version=ab.get("active_version"),
             reported_active_slot=ab.get("active_slot"),
@@ -801,6 +803,7 @@ def try_handle_get(handler, cfg, state, ctx: dict) -> bool:
                 "truth_mismatch_count": truth_payload["truth_mismatch_count"],
                 "truth_mismatch_items": truth_payload["truth_mismatch_items"],
                 "pm_version_status": truth_payload["pm_version_status"],
+                "pm_version_board": pm_version_board,
                 "available_agents": len(ws.list_available_agents(cfg)) if root_ready else 0,
                 **policy_fields,
                 "agent_search_root": root_text,
@@ -835,11 +838,13 @@ def try_handle_get(handler, cfg, state, ctx: dict) -> bool:
     agent_call_count = max(0, session_running_task_count + assignment_agent_call_count)
     policy_fields = ws.show_test_data_policy_fields(cfg, state)
     runtime_goal = _runtime_goal_payload(cfg)
+    pm_version_board = load_pm_version_board(Path(cfg.root))
     handler.send_json(
         200,
         {
             **ws.dashboard(cfg, include_test_data=include_test_data),
             **policy_fields,
+            "pm_version_board": pm_version_board,
             "include_test_data": bool(include_test_data),
             "fetched_at": fetched_at,
             "running_task_count": running_task_count,

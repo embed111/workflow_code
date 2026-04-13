@@ -5,6 +5,7 @@
 from pathlib import Path
 
 from ..bootstrap.web_server_runtime import *  # noqa: F401,F403
+from ..services.pm_version_board_service import load_pm_version_board
 from ..services.pm_version_status_service import (
     build_pm_version_truth_payload,
     load_effective_pm_version_status,
@@ -130,6 +131,7 @@ def handle_get_legacy(self, cfg, state) -> None:
         else:
             ab = {"active_version": "disabled", "active_slot": "disabled"}
         pm_version_status = load_effective_pm_version_status(Path(cfg.root))
+        pm_version_board = load_pm_version_board(Path(cfg.root))
         truth_payload = build_pm_version_truth_payload(
             reported_active_version=ab.get("active_version"),
             reported_active_slot=ab.get("active_slot"),
@@ -149,6 +151,7 @@ def handle_get_legacy(self, cfg, state) -> None:
                 "truth_mismatch_count": truth_payload["truth_mismatch_count"],
                 "truth_mismatch_items": truth_payload["truth_mismatch_items"],
                 "pm_version_status": truth_payload["pm_version_status"],
+                "pm_version_board": pm_version_board,
                 "available_agents": len(list_available_agents(cfg)) if root_ready else 0,
                 "show_test_data": bool(include_test_data),
                 "agent_search_root": root_text,
@@ -179,10 +182,12 @@ def handle_get_legacy(self, cfg, state) -> None:
         return
     if path == "/api/dashboard":
         include_test_data = resolve_include_test_data(query, cfg, state)
+        pm_version_board = load_pm_version_board(Path(cfg.root))
         self.send_json(
             200,
             {
                 **dashboard(cfg, include_test_data=include_test_data),
+                "pm_version_board": pm_version_board,
                 "show_test_data": bool(current_show_test_data(cfg, state)),
                 "include_test_data": bool(include_test_data),
             },

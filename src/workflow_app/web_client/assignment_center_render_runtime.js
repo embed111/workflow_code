@@ -971,11 +971,136 @@
     );
   }
 
+  function assignmentWorkboardVersionTone(status, isOverdue) {
+    if (isOverdue) return 'fail';
+    const normalized = safe(status).trim().toLowerCase();
+    if (normalized === 'in_progress') return 'running';
+    if (normalized === 'succeeded' || normalized === 'done' || normalized === 'completed') return 'success';
+    if (normalized === 'failed' || normalized === 'blocked') return 'fail';
+    return 'muted';
+  }
+
+  function assignmentWorkboardVersionRequirementCardHtml(item) {
+    const row = item && typeof item === 'object' ? item : {};
+    const tone = assignmentWorkboardVersionTone(row.status, row.is_overdue);
+    const requirementId = safe(row.requirement_id).trim() || '未命名需求';
+    const owner = safe(row.owner).trim() || '未指派';
+    const progressText = safe(row.progress_text).trim() || '-';
+    const eta = safe(row.eta).trim() || '-';
+    const timeoutText = safe(row.timeout_text).trim();
+    const summary = safe(row.summary).trim();
+    const statusLabel = timeoutText && timeoutText !== '未超时'
+      ? timeoutText
+      : (safe(row.status).trim() || 'planned');
+    return (
+      "<div class='assignment-workboard-version-card " + escapeHtml(tone) + "'>" +
+      "<div class='assignment-workboard-version-card-head'>" +
+      "<div>" +
+      "<div class='assignment-workboard-version-title'>" + escapeHtml(requirementId) + '</div>' +
+      "<div class='assignment-workboard-version-meta'>责任人 · " + escapeHtml(owner) + '</div>' +
+      '</div>' +
+      "<span class='assignment-chip " + escapeHtml(tone) + "'>" + escapeHtml(statusLabel) + '</span>' +
+      '</div>' +
+      "<div class='assignment-workboard-version-meta'>进度 " + escapeHtml(progressText) + ' · ETA ' + escapeHtml(eta) + '</div>' +
+      (summary
+        ? "<div class='assignment-workboard-version-note'>" + escapeHtml(summary) + '</div>'
+        : '') +
+      '</div>'
+    );
+  }
+
+  function assignmentWorkboardVersionSectionHtml(board) {
+    const data = board && typeof board === 'object' ? board : {};
+    const summary = data.summary && typeof data.summary === 'object' ? data.summary : {};
+    const activation = data.activation_summary && typeof data.activation_summary === 'object'
+      ? data.activation_summary
+      : {};
+    const requirements = Array.isArray(data.requirements) ? data.requirements.slice(0, 4) : [];
+    const owners = Array.isArray(data.owners) ? data.owners.slice(0, 3) : [];
+    const total = Number(summary.total || 0);
+    const ownerCount = Number(summary.owner_count || 0);
+    const nextEta = safe(summary.next_eta).trim();
+    const headerChip = safe(data.active_version).trim()
+      ? (safe(data.active_version).trim() + ' · ' + String(total) + ' 项')
+      : (String(total) + ' 项');
+    const ownerSummary = owners.length
+      ? owners
+        .map((item) => {
+          const owner = safe(item && item.owner).trim() || '未指派';
+          const count = Number(item && item.active_count || 0);
+          return owner + ' ' + String(count) + ' 项';
+        })
+        .join(' · ')
+      : '';
+    const nextActivationCandidate = safe(activation.next_activation_candidate).trim();
+    const nextActivationRow = Array.isArray(activation.versions)
+      ? activation.versions.find((item) => safe(item && item.version_id).trim() === nextActivationCandidate)
+      : null;
+    const activationTone = nextActivationRow && nextActivationRow.ok
+      ? 'success'
+      : (nextActivationRow && safe(nextActivationRow.severity).trim() === 'hard' ? 'fail' : 'muted');
+    const activationSummary = nextActivationCandidate
+      ? (
+        nextActivationCandidate +
+        ' · ' +
+        (nextActivationRow
+          ? (safe(nextActivationRow.summary).trim() || (nextActivationRow.ok ? 'activation gate 就绪' : '存在准入缺口'))
+          : '等待准入摘要')
+      )
+      : '当前没有后续 planned 版本';
+    return (
+      "<section class='assignment-workboard-section'>" +
+      "<div class='assignment-workboard-section-head'>" +
+      "<div>" +
+      "<div class='assignment-workboard-section-title'>版本推进</div>" +
+      "<div class='assignment-workboard-section-meta'>固定展示 active 需求、负责人、ETA 和下一版准入摘要。</div>" +
+      '</div>' +
+      "<span class='assignment-chip muted'>" + escapeHtml(headerChip) + '</span>' +
+      '</div>' +
+      "<div class='assignment-workboard-inline-note'>" +
+      escapeHtml(
+        [
+          safe(data.active_version_title).trim(),
+          safe(data.lane).trim(),
+          safe(data.lifecycle_stage).trim(),
+          safe(data.baseline).trim(),
+        ].filter(Boolean).join(' · ')
+      ) +
+      '</div>' +
+      (requirements.length
+        ? "<div class='assignment-workboard-version-list'>" + requirements.map((item) => assignmentWorkboardVersionRequirementCardHtml(item)).join('') + '</div>'
+        : "<div class='assignment-workboard-inline-note'>当前还没有可展示的 active 需求明细。</div>") +
+      "<div class='assignment-workboard-inline-note'>" +
+      escapeHtml(
+        '负责人 ' + String(ownerCount) + ' 位' +
+        (nextEta ? (' · 最近 ETA ' + nextEta) : '') +
+        (ownerSummary ? (' · ' + ownerSummary) : '')
+      ) +
+      '</div>' +
+      "<div class='assignment-workboard-version-card " + escapeHtml(activationTone) + "'>" +
+      "<div class='assignment-workboard-version-card-head'>" +
+      "<div>" +
+      "<div class='assignment-workboard-version-title'>下一版 activation</div>" +
+      "<div class='assignment-workboard-version-meta'>下一个 planned 版本与当前准入缺口摘要</div>" +
+      '</div>' +
+      "<span class='assignment-chip " + escapeHtml(activationTone) + "'>" +
+      escapeHtml(nextActivationCandidate || '无') +
+      '</span>' +
+      '</div>' +
+      "<div class='assignment-workboard-version-note'>" + escapeHtml(activationSummary) + '</div>' +
+      '</div>' +
+      '</section>'
+    );
+  }
+
   function renderAssignmentWorkboard() {
     const host = $('assignmentWorkboard');
     if (!host) return;
     const metrics = state.dashboardMetrics && typeof state.dashboardMetrics === 'object'
       ? state.dashboardMetrics
+      : {};
+    const versionBoard = metrics.pm_version_board && typeof metrics.pm_version_board === 'object'
+      ? metrics.pm_version_board
       : {};
     const goal = assignmentWorkboardGoalSnapshot();
     const groups = assignmentWorkboardGroups();
@@ -1125,6 +1250,7 @@
           : "<div class='assignment-workboard-inline-note'>最近未拿到定时任务预览。</div>"
       ) +
       '</section>';
+    const versionHtml = assignmentWorkboardVersionSectionHtml(versionBoard);
     host.innerHTML =
       headerHtml +
       summaryHtml +
@@ -1135,6 +1261,7 @@
       groupsHtml +
       '</div>' +
       "<aside class='assignment-workboard-rail'>" +
+      versionHtml +
       failureHtml +
       scheduleHtml +
       '</aside>' +

@@ -588,6 +588,62 @@
   padding: 10px;
 }
 
+.assignment-workboard-version-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.assignment-workboard-version-card {
+  border: 1px solid #e6ebf2;
+  border-radius: 12px;
+  background: #fff;
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.assignment-workboard-version-card.running {
+  border-color: #c8d9ff;
+  background: linear-gradient(180deg, #ffffff 0%, #eef4ff 100%);
+}
+
+.assignment-workboard-version-card.success {
+  border-color: #b7ebd3;
+  background: linear-gradient(180deg, #ffffff 0%, #eefbf4 100%);
+}
+
+.assignment-workboard-version-card.fail {
+  border-color: #ffd8d2;
+  background: linear-gradient(180deg, #ffffff 0%, #fff5f3 100%);
+}
+
+.assignment-workboard-version-card-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px 12px;
+}
+
+.assignment-workboard-version-title {
+  font-size: 13px;
+  font-weight: 800;
+  color: #1f2329;
+}
+
+.assignment-workboard-version-meta {
+  font-size: 12px;
+  line-height: 1.5;
+  color: #667085;
+}
+
+.assignment-workboard-version-note {
+  font-size: 12px;
+  line-height: 1.55;
+  color: #344054;
+}
+
 .assignment-panel-head {
   padding: 12px 12px 10px;
   border-bottom: 1px solid var(--line-soft);
