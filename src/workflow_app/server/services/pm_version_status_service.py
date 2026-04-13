@@ -35,6 +35,10 @@ _BASELINE_RE = re.compile(
 )
 _SNAPSHOT_AT_RE = re.compile(r"最新有效快照截至\s*`([^`]+)`")
 _ACTIVE_TABLE_RE = re.compile(r"^\|\s*`([^`]+)`[^|]*\|\s*`active`\s*\|", re.MULTILINE)
+_PROD_BASELINE_PREFIX_RE = re.compile(r"^\s*prod\s*=", re.IGNORECASE)
+PM_VERSION_BASELINE_SOURCE_PLAN = "pm_version_plan"
+PM_VERSION_BASELINE_SOURCE_RUNTIME = "prod_runtime_current_version"
+PM_VERSION_SNAPSHOT_SOURCE_RUNTIME = "api/runtime-upgrade/status.current_version"
 
 
 def _path_candidates(root: Path | None, relative_path: Path) -> list[Path]:
@@ -153,6 +157,79 @@ def load_pm_version_status(root: Path | None = None) -> dict[str, Any]:
     return payload
 
 
+def _load_runtime_snapshot() -> dict[str, Any]:
+    try:
+        from workflow_app.server.services import runtime_upgrade_service
+
+        payload = runtime_upgrade_service.runtime_snapshot()
+    except Exception:
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _runtime_prod_baseline_override(runtime_snapshot: dict[str, Any] | None) -> dict[str, str]:
+    payload = runtime_snapshot if isinstance(runtime_snapshot, dict) else {}
+    if str(payload.get("environment") or "").strip().lower() != "prod":
+        return {}
+    current_version = str(payload.get("current_version") or "").strip()
+    if not current_version:
+        return {}
+    current_version_rank = str(payload.get("current_version_rank") or current_version).strip()
+    last_action = payload.get("last_action") if isinstance(payload.get("last_action"), dict) else {}
+    snapshot_updated_at = ""
+    if str(last_action.get("status") or "").strip().lower() == "success" and str(
+        last_action.get("current_version") or ""
+    ).strip() == current_version:
+        snapshot_updated_at = str(last_action.get("finished_at") or "").strip()
+    if not snapshot_updated_at:
+        candidate = payload.get("candidate") if isinstance(payload.get("candidate"), dict) else {}
+        if str(candidate.get("version") or "").strip() == current_version:
+            snapshot_updated_at = str(candidate.get("passed_at") or "").strip()
+    return {
+        "baseline": f"prod={current_version}",
+        "current_version": current_version,
+        "current_version_rank": current_version_rank,
+        "snapshot_updated_at": snapshot_updated_at,
+    }
+
+
+def load_effective_pm_version_status(
+    root: Path | None = None,
+    *,
+    runtime_snapshot: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    payload = dict(load_pm_version_status(root))
+    document_baseline = str(payload.get("baseline") or "").strip()
+    document_snapshot_updated_at = str(payload.get("snapshot_updated_at") or "").strip()
+    payload["document_baseline"] = document_baseline
+    payload["document_snapshot_updated_at"] = document_snapshot_updated_at
+    payload["baseline_source"] = PM_VERSION_BASELINE_SOURCE_PLAN
+    payload["snapshot_source"] = str(
+        payload.get("source_relative_path") or PM_VERSION_PLAN_RELATIVE_PATH.as_posix()
+    ).strip()
+    payload["runtime_current_version"] = ""
+    payload["runtime_current_version_rank"] = ""
+    current_runtime_snapshot = runtime_snapshot if isinstance(runtime_snapshot, dict) else _load_runtime_snapshot()
+    runtime_override = _runtime_prod_baseline_override(current_runtime_snapshot)
+    if not runtime_override:
+        return payload
+    payload["runtime_current_version"] = str(runtime_override.get("current_version") or "").strip()
+    payload["runtime_current_version_rank"] = str(runtime_override.get("current_version_rank") or "").strip()
+    if document_baseline and not _PROD_BASELINE_PREFIX_RE.match(document_baseline):
+        return payload
+    runtime_baseline = str(runtime_override.get("baseline") or "").strip()
+    if not runtime_baseline:
+        return payload
+    payload["baseline"] = runtime_baseline
+    if runtime_baseline != document_baseline:
+        payload["baseline_source"] = PM_VERSION_BASELINE_SOURCE_RUNTIME
+        payload["snapshot_source"] = PM_VERSION_SNAPSHOT_SOURCE_RUNTIME
+    runtime_snapshot_updated_at = str(runtime_override.get("snapshot_updated_at") or "").strip()
+    if runtime_snapshot_updated_at:
+        payload["snapshot_updated_at"] = runtime_snapshot_updated_at
+    return payload
+
+
 def format_pm_version_prompt_lines(status: dict[str, Any]) -> list[str]:
     payload = status if isinstance(status, dict) else {}
     active_version = str(payload.get("active_version") or "").strip()
@@ -162,6 +239,7 @@ def format_pm_version_prompt_lines(status: dict[str, Any]) -> list[str]:
     lifecycle_stage = str(payload.get("lifecycle_stage") or "").strip()
     baseline = str(payload.get("baseline") or "").strip()
     snapshot_at = str(payload.get("snapshot_updated_at") or "").strip()
+    snapshot_source = str(payload.get("snapshot_source") or "").strip()
     reference_relative_path = str(
         payload.get("reference_relative_path") or PM_VERSION_PLAN_RELATIVE_PATH.as_posix()
     ).strip()
@@ -183,7 +261,7 @@ def format_pm_version_prompt_lines(status: dict[str, Any]) -> list[str]:
     if active_version_file:
         lines.append(f"当前版本文件： {active_version_file} ; ref={reference_relative_path}")
     if snapshot_at:
-        lines.append(f"版本快照时间： {snapshot_at} ; source={source_relative_path}")
+        lines.append(f"版本快照时间： {snapshot_at} ; source={snapshot_source or source_relative_path}")
     return lines
 
 
@@ -231,7 +309,13 @@ def build_pm_version_truth_payload(
             "lane": str(plan_payload.get("lane") or "").strip(),
             "lifecycle_stage": str(plan_payload.get("lifecycle_stage") or "").strip(),
             "baseline": str(plan_payload.get("baseline") or "").strip(),
+            "baseline_source": str(plan_payload.get("baseline_source") or "").strip(),
+            "document_baseline": str(plan_payload.get("document_baseline") or "").strip(),
             "snapshot_updated_at": str(plan_payload.get("snapshot_updated_at") or "").strip(),
+            "document_snapshot_updated_at": str(plan_payload.get("document_snapshot_updated_at") or "").strip(),
+            "snapshot_source": str(plan_payload.get("snapshot_source") or "").strip(),
+            "runtime_current_version": str(plan_payload.get("runtime_current_version") or "").strip(),
+            "runtime_current_version_rank": str(plan_payload.get("runtime_current_version_rank") or "").strip(),
             "source_path": str(plan_payload.get("source_path") or "").strip(),
             "source_relative_path": str(
                 plan_payload.get("source_relative_path") or PM_VERSION_PLAN_RELATIVE_PATH.as_posix()

@@ -8,7 +8,7 @@ from pathlib import Path
 from ..bootstrap import web_server_runtime as ws
 from ..services.pm_version_status_service import (
     build_pm_version_truth_payload,
-    load_pm_version_status,
+    load_effective_pm_version_status,
 )
 
 
@@ -780,7 +780,7 @@ def try_handle_get(handler, cfg, state, ctx: dict) -> bool:
             ab = ws.ab_status(cfg)
         else:
             ab = {"active_version": "disabled", "active_slot": "disabled"}
-        pm_version_status = load_pm_version_status(Path(cfg.root))
+        pm_version_status = load_effective_pm_version_status(Path(cfg.root))
         truth_payload = build_pm_version_truth_payload(
             reported_active_version=ab.get("active_version"),
             reported_active_slot=ab.get("active_slot"),

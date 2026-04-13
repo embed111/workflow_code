@@ -19,7 +19,7 @@ from .release_boundary_service import (
 )
 from .pm_version_status_service import (
     format_pm_version_prompt_lines,
-    load_pm_version_status,
+    load_effective_pm_version_status,
 )
 from . import schedule_assignment_bridge as _schedule_assignment_bridge
 from .schedule_text_repair import (
@@ -1323,7 +1323,7 @@ def _ensure_self_iter_backup_schedule(
         backup_name = "pm持续唤醒 - workflow 主线巡检" if agent_id.lower() == "workflow" else f"pm持续唤醒 - {agent_id} 主线巡检"
         release_boundary = collect_release_boundary_snapshot(runtime_root=cfg.root)
         release_boundary_lines = format_release_boundary_prompt_lines(release_boundary)
-        pm_version_lines = format_pm_version_prompt_lines(load_pm_version_status(Path(cfg.root)))
+        pm_version_lines = format_pm_version_prompt_lines(load_effective_pm_version_status(Path(cfg.root)))
         existing = {}
         conn = connect_db(cfg.root)
         try:

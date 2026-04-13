@@ -19,7 +19,7 @@ from ..services.work_record_store import (
 )
 from ..services.pm_version_status_service import (
     build_pm_version_truth_payload,
-    load_pm_version_status,
+    load_effective_pm_version_status,
 )
 
 def bind_runtime_symbols(symbols: dict[str, object]) -> None:
@@ -673,7 +673,7 @@ def dashboard(cfg: AppConfig, *, include_test_data: bool = True) -> dict[str, An
             "active_version": "disabled",
             "standby_version": "disabled",
         }
-    pm_version_status = load_pm_version_status(Path(cfg.root))
+    pm_version_status = load_effective_pm_version_status(Path(cfg.root))
     truth_payload = build_pm_version_truth_payload(
         reported_active_version=ab.get("active_version"),
         reported_active_slot=ab.get("active_slot"),

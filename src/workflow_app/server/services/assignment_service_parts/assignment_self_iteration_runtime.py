@@ -6,7 +6,7 @@ from workflow_app.server.services.release_boundary_service import (
 )
 from workflow_app.server.services.pm_version_status_service import (
     format_pm_version_prompt_lines,
-    load_pm_version_status,
+    load_effective_pm_version_status,
 )
 
 ASSIGNMENT_SELF_ITERATION_AGENT_IDS = {"workflow"}
@@ -100,7 +100,7 @@ def _assignment_release_boundary_compact_lines(*, root: Path | None = None) -> l
 def _assignment_pm_version_compact_lines(*, root: Path | None = None) -> list[str]:
     if root is None:
         return []
-    return format_pm_version_prompt_lines(load_pm_version_status(root))
+    return format_pm_version_prompt_lines(load_effective_pm_version_status(root))
 
 
 def _assignment_self_iteration_schedule_payload(

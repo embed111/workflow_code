@@ -39,9 +39,11 @@ def main() -> int:
 
     from workflow_app.server.api import dashboard as dashboard_api
     from workflow_app.server.infra import audit_runtime
+    from workflow_app.server.services.assignment_service_parts import assignment_self_iteration_runtime
     from workflow_app.server.services.pm_version_status_service import (
         build_pm_version_truth_payload,
         format_pm_version_prompt_lines,
+        load_effective_pm_version_status,
         load_pm_version_status,
         resolve_pm_version_plan_path,
     )
@@ -67,16 +69,46 @@ def main() -> int:
     assert f"lifecycle_stage={plan_status['lifecycle_stage']}" in prompt_text, prompt_text
     assert f"baseline={expected_baseline}" in prompt_text, prompt_text
 
+    runtime_snapshot = {
+        "environment": "prod",
+        "current_version": "20991231-235959",
+        "current_version_rank": "20991231-235959",
+        "last_action": {
+            "status": "success",
+            "current_version": "20991231-235959",
+            "finished_at": "2099-12-31T23:59:59+08:00",
+        },
+    }
+    effective_status = load_effective_pm_version_status(workspace_root, runtime_snapshot=runtime_snapshot)
+    assert effective_status["document_baseline"] == expected_baseline, effective_status
+    assert effective_status["baseline"] == "prod=20991231-235959", effective_status
+    assert effective_status["baseline_source"] == "prod_runtime_current_version", effective_status
+    assert effective_status["snapshot_updated_at"] == "2099-12-31T23:59:59+08:00", effective_status
+    effective_prompt_lines = format_pm_version_prompt_lines(effective_status)
+    effective_prompt_text = "\n".join(effective_prompt_lines)
+    assert "baseline=prod=20991231-235959" in effective_prompt_text, effective_prompt_text
+    assert "source=api/runtime-upgrade/status.current_version" in effective_prompt_text, effective_prompt_text
+
+    with patch.object(
+        assignment_self_iteration_runtime,
+        "load_effective_pm_version_status",
+        return_value=effective_status,
+    ):
+        compact_lines = assignment_self_iteration_runtime._assignment_pm_version_compact_lines(root=workspace_root)
+    compact_text = "\n".join(compact_lines)
+    assert "baseline=prod=20991231-235959" in compact_text, compact_text
+
     truth_payload = build_pm_version_truth_payload(
         reported_active_version="disabled",
         reported_active_slot="disabled",
-        plan_status=plan_status,
+        plan_status=effective_status,
     )
     assert truth_payload["active_version"] == plan_status["active_version"], truth_payload
     assert truth_payload["active_slot"] == "pm-plan", truth_payload
     assert truth_payload["active_version_source"] == "pm_version_plan", truth_payload
     assert truth_payload["runtime_active_version"] == "disabled", truth_payload
     assert int(truth_payload["truth_mismatch_count"] or 0) == 0, truth_payload
+    assert dict(truth_payload.get("pm_version_status") or {}).get("baseline") == "prod=20991231-235959", truth_payload
 
     cfg = SimpleNamespace(root=workspace_root, agent_search_root=workspace_root.as_posix())
     handler = _CaptureHandler()
@@ -93,6 +125,7 @@ def main() -> int:
         patch.object(dashboard_api.ws, "show_test_data_policy_fields", return_value={"show_test_data": False, "show_test_data_source": "environment_policy", "environment": "prod"}),
         patch.object(dashboard_api.ws, "list_available_agents", return_value=[{"agent_id": "workflow"}]),
         patch.object(dashboard_api.ws, "AB_FEATURE_ENABLED", False),
+        patch.object(dashboard_api, "load_effective_pm_version_status", return_value=effective_status),
     ):
         ok = dashboard_api.try_handle_get(
             handler,
@@ -112,6 +145,7 @@ def main() -> int:
     assert handler.payload.get("active_version_source") == "pm_version_plan", handler.payload
     assert int(handler.payload.get("truth_mismatch_count") or 0) == 0, handler.payload
     assert dict(handler.payload.get("pm_version_status") or {}).get("active_version") == plan_status["active_version"], handler.payload
+    assert dict(handler.payload.get("pm_version_status") or {}).get("baseline") == "prod=20991231-235959", handler.payload
 
     with (
         patch.object(audit_runtime, "pending_counts", return_value=(1, 0)),
@@ -121,13 +155,14 @@ def main() -> int:
         patch.object(audit_runtime, "policy_closure_stats", return_value={}),
         patch.object(audit_runtime, "new_sessions_24h", return_value=0),
         patch.object(audit_runtime, "AB_FEATURE_ENABLED", False),
+        patch.object(audit_runtime, "load_effective_pm_version_status", return_value=effective_status),
     ):
         dashboard_payload = audit_runtime.dashboard(cfg, include_test_data=False)
     assert dashboard_payload["active_version"] == plan_status["active_version"], dashboard_payload
     assert dashboard_payload["active_slot"] == "pm-plan", dashboard_payload
     assert dashboard_payload["active_version_source"] == "pm_version_plan", dashboard_payload
     assert int(dashboard_payload["truth_mismatch_count"] or 0) == 0, dashboard_payload
-    assert dict(dashboard_payload.get("pm_version_status") or {}).get("baseline") == plan_status["baseline"], dashboard_payload
+    assert dict(dashboard_payload.get("pm_version_status") or {}).get("baseline") == "prod=20991231-235959", dashboard_payload
 
     print(
         json.dumps(
@@ -136,8 +171,9 @@ def main() -> int:
                 "active_version": plan_status["active_version"],
                 "lane": plan_status["lane"],
                 "lifecycle_stage": plan_status["lifecycle_stage"],
-                "baseline": plan_status["baseline"],
+                "baseline": effective_status["baseline"],
                 "prompt_lines": prompt_lines,
+                "effective_prompt_lines": effective_prompt_lines,
                 "status_truth": {
                     "active_version": handler.payload.get("active_version"),
                     "active_version_source": handler.payload.get("active_version_source"),
