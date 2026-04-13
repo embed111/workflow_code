@@ -144,6 +144,23 @@ SCHEDULE_SELF_ITER_AUTO_RECOVERY_REASONS = {
     "smoke baseline timestamp invalid",
     "smoke baseline expired",
 }
+SCHEDULE_DYNAMIC_SUMMARY_LINE_PREFIXES = (
+    "当前版本快照：",
+    "当前版本文件：",
+    "版本快照时间：",
+    "发布边界专项方案：",
+    "根仓同步快照：",
+    "当前开发工作区：",
+    "上游参考状态(默认不阻塞)：",
+    "代码根仓快照：",
+    "next_push_batch:",
+    "注意：这些计数只是异常触发信号；",
+    "发布边界动作:",
+    "代码根仓动作:",
+    "suggested_push_batches:",
+    "changed_paths_preview:",
+)
+SCHEDULE_DYNAMIC_SUMMARY_CONTEXT_PREFIXES = ("上一轮结果:", "最近上下文:")
 
 
 def _now_bj() -> datetime:
@@ -320,6 +337,85 @@ def _schedule_recovery_lane_rank(payload: dict[str, Any]) -> int:
     if _schedule_is_workflow_patrol_payload(payload):
         return 2
     return 1
+
+
+def _schedule_release_boundary_compact_lines(root: Path | None) -> list[str]:
+    if root is None:
+        return []
+    snapshot = collect_release_boundary_snapshot(runtime_root=root)
+    developer_id = str(snapshot.get("developer_id") or "").strip() or "pm-main"
+    workspace_head = str(snapshot.get("workspace_head") or "").strip() or "-"
+    code_root_head = str(snapshot.get("code_root_head") or "").strip() or "-"
+    return [
+        f"发布边界专项方案：{RELEASE_BOUNDARY_REPORT_PATH}",
+        (
+            "根仓同步快照："
+            f" root_sync_state={str(snapshot.get('root_sync_state') or '').strip() or 'diverged_or_unknown'}"
+            f" ; ahead_count={int(snapshot.get('ahead_count') or 0)}"
+            f" ; dirty_tracked_count={int(snapshot.get('dirty_tracked_count') or 0)}"
+            f" ; untracked_count={int(snapshot.get('untracked_count') or 0)}"
+        ),
+        f"当前开发工作区：{developer_id} ; workspace_head={workspace_head} ; code_root_head={code_root_head}",
+        (
+            f"next_push_batch: {str(snapshot.get('next_push_batch') or '').strip() or '待切批'}"
+            f" ; push_block_reason: {str(snapshot.get('push_block_reason') or '').strip() or '-'}"
+        ),
+        "注意：这些计数只是异常触发信号；一旦命中 dirty/ahead/阻塞，不允许只汇报数字，必须先执行清理、切批、提交、推根仓或明确阻塞收口。",
+    ]
+
+
+def _schedule_replace_dynamic_summary_lines(
+    summary_text: str,
+    *,
+    pm_version_lines: list[str],
+    release_boundary_lines: list[str],
+) -> str:
+    lines = [str(line or "").rstrip() for line in str(summary_text or "").splitlines() if str(line or "").strip()]
+    dynamic_lines = [str(line or "").strip() for line in [*pm_version_lines, *release_boundary_lines] if str(line or "").strip()]
+    if not lines or not dynamic_lines:
+        return str(summary_text or "").strip()
+    filtered = [
+        line
+        for line in lines
+        if not any(line.strip().startswith(prefix) for prefix in SCHEDULE_DYNAMIC_SUMMARY_LINE_PREFIXES)
+    ]
+    insert_at = next(
+        (
+            index
+            for index, line in enumerate(filtered)
+            if any(line.strip().startswith(prefix) for prefix in SCHEDULE_DYNAMIC_SUMMARY_CONTEXT_PREFIXES)
+        ),
+        len(filtered),
+    )
+    merged = filtered[:insert_at] + dynamic_lines + filtered[insert_at:]
+    return "\n".join(line for line in merged if str(line or "").strip()).strip()
+
+
+def _refresh_workflow_schedule_prompt_context(
+    root: Path | None,
+    schedule: dict[str, Any],
+) -> dict[str, Any]:
+    payload = dict(schedule or {})
+    if root is None:
+        return payload
+    if not (
+        _schedule_is_workflow_mainline_payload(payload)
+        or _schedule_is_workflow_patrol_payload(payload)
+    ):
+        return payload
+    launch_summary = str(payload.get("launch_summary") or "").strip()
+    if not launch_summary:
+        return payload
+    pm_version_lines = format_pm_version_prompt_lines(load_effective_pm_version_status(root))
+    release_boundary_lines = _schedule_release_boundary_compact_lines(root)
+    repaired_summary = _schedule_replace_dynamic_summary_lines(
+        launch_summary,
+        pm_version_lines=pm_version_lines,
+        release_boundary_lines=release_boundary_lines,
+    )
+    if repaired_summary:
+        payload["launch_summary"] = repaired_summary
+    return payload
 
 
 def _normalize_delivery_mode(value: Any) -> str:
@@ -1112,7 +1208,7 @@ def _latest_smoke_schedule_report(root: Path) -> dict[str, Any]:
         ).fetchall()
         smoke_schedules = []
         for row in rows:
-            schedule = _row_to_schedule(row, conn=conn)
+            schedule = _row_to_schedule(row, root=root, conn=conn)
             if _schedule_is_smoke_baseline(schedule):
                 smoke_schedules.append(schedule)
     finally:
@@ -1771,13 +1867,14 @@ def _month_bounds(month_text: str | None) -> tuple[datetime, datetime, str]:
 def _row_to_schedule(
     row: sqlite3.Row | dict[str, Any],
     *,
+    root: Path | None = None,
     conn: sqlite3.Connection | None = None,
     snapshot_cache: dict[str, dict[str, str]] | None = None,
 ) -> dict[str, Any]:
     item = dict(row or {})
     rule_sets = _json_loads_list(item.get("rule_sets_json"))
     repaired = _repair_schedule_text_fields(item, conn=conn, snapshot_cache=snapshot_cache)
-    return {
+    payload = {
         "schedule_id": str(item.get("schedule_id") or "").strip(),
         "schedule_name": repaired["schedule_name"],
         "enabled": bool(item.get("enabled")),
@@ -1806,6 +1903,7 @@ def _row_to_schedule(
         "updated_at": str(item.get("updated_at") or "").strip(),
         "deleted_at": str(item.get("deleted_at") or "").strip(),
     }
+    return _refresh_workflow_schedule_prompt_context(root, payload)
 
 
 def _row_to_trigger(
@@ -2463,7 +2561,7 @@ def _build_schedule_items(
     plan_cache: dict[str, dict[str, str]] = {}
     snapshot_cache: dict[str, dict[str, str]] = {}
     for row in rows:
-        schedule = _row_to_schedule(row, conn=conn, snapshot_cache=snapshot_cache)
+        schedule = _row_to_schedule(row, root=root, conn=conn, snapshot_cache=snapshot_cache)
         latest = latest_rows.get(schedule["schedule_id"])
         enriched = (
             _enrich_trigger(
@@ -2565,7 +2663,7 @@ def get_schedule_detail(root: Path, schedule_id: str) -> dict[str, Any]:
         ).fetchall()
         plan_cache: dict[str, dict[str, str]] = {}
         snapshot_cache: dict[str, dict[str, str]] = {}
-        schedule = _row_to_schedule(row, conn=conn, snapshot_cache=snapshot_cache)
+        schedule = _row_to_schedule(row, root=root, conn=conn, snapshot_cache=snapshot_cache)
         recent = [
             _enrich_trigger(
                 root,
@@ -2649,7 +2747,7 @@ def get_schedule_calendar(root: Path, *, month: str = "") -> dict[str, Any]:
         snapshot_cache: dict[str, dict[str, str]] = {}
         now_dt = _minute_floor(_now_bj())
         for row in plan_rows:
-            schedule = _row_to_schedule(row, conn=conn, snapshot_cache=snapshot_cache)
+            schedule = _row_to_schedule(row, root=root, conn=conn, snapshot_cache=snapshot_cache)
             if not schedule.get("enabled"):
                 continue
             merged = _merge_candidates(
@@ -2886,7 +2984,7 @@ def update_schedule(cfg: Any, schedule_id: str, body: dict[str, Any]) -> dict[st
     now_text = _now_text()
     conn = connect_db(cfg.root)
     try:
-        existing = _row_to_schedule(_load_plan_row(conn, schedule_key), conn=conn)
+        existing = _row_to_schedule(_load_plan_row(conn, schedule_key), root=cfg.root, conn=conn)
     finally:
         conn.close()
     payload = _schedule_payload_from_body(
@@ -2952,7 +3050,7 @@ def set_schedule_enabled(cfg: Any, schedule_id: str, *, enabled: bool, operator:
     now_text = _now_text()
     conn = connect_db(cfg.root)
     try:
-        current = _row_to_schedule(_load_plan_row(conn, schedule_key), conn=conn)
+        current = _row_to_schedule(_load_plan_row(conn, schedule_key), root=cfg.root, conn=conn)
     finally:
         conn.close()
     if enabled and not list(current.get("rule_sets") or []):
@@ -3025,7 +3123,7 @@ def run_schedule_scan(cfg: Any, *, operator: str = "schedule-worker", now_at: st
             sql += " AND schedule_id=?"
             params.append(schedule_key)
         rows = conn.execute(sql + " ORDER BY updated_at DESC", tuple(params)).fetchall()
-        schedules = [_row_to_schedule(row, conn=conn) for row in rows]
+        schedules = [_row_to_schedule(row, root=cfg.root, conn=conn) for row in rows]
     finally:
         conn.close()
     scanned = 0
@@ -3241,7 +3339,7 @@ def _resume_pending_schedule_triggers(cfg: Any, *, operator: str = "schedule-wor
                 max(1, int(SCHEDULE_TRIGGER_RECOVERY_BATCH_SIZE)),
             ),
         ).fetchall()
-        entries = [(row, _row_to_schedule(row, conn=conn)) for row in rows]
+        entries = [(row, _row_to_schedule(row, root=cfg.root, conn=conn)) for row in rows]
     finally:
         conn.close()
     entries.sort(

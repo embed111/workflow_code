@@ -6,6 +6,7 @@ import shutil
 import sys
 from datetime import datetime
 from pathlib import Path
+from unittest.mock import patch
 
 
 def _write_json(path: Path, payload: dict) -> None:
@@ -224,10 +225,35 @@ def main() -> int:
         )
 
         cfg = type("Cfg", (), {"root": runtime_root})()
-        preview = schedule_service.list_schedule_preview(runtime_root)
-        schedule_list = schedule_service.list_schedules(runtime_root)
-        detail = schedule_service.get_schedule_detail(runtime_root, "sch-self-iter-bad")
-        calendar = schedule_service.get_schedule_calendar(runtime_root, month="2026-04")
+        effective_pm_status = {
+            "active_version": "V1",
+            "active_version_title": "工程质量基线与 7x24 运行稳态",
+            "active_version_file": "pm/versions/V1/版本计划.md",
+            "lane": "工程质量探测",
+            "lifecycle_stage": "基于基线测试",
+            "baseline": "prod=20991231-235959",
+            "snapshot_updated_at": "2099-12-31T23:59:59+08:00",
+            "snapshot_source": "api/runtime-upgrade/status.current_version",
+        }
+        release_boundary_snapshot = {
+            "developer_id": "pm-main",
+            "root_sync_state": "clean_synced",
+            "ahead_count": 0,
+            "dirty_tracked_count": 0,
+            "untracked_count": 0,
+            "workspace_head": "abc1234",
+            "code_root_head": "abc1234",
+            "next_push_batch": "待切批",
+            "push_block_reason": "-",
+        }
+        with (
+            patch.object(schedule_service, "load_effective_pm_version_status", return_value=effective_pm_status),
+            patch.object(schedule_service, "collect_release_boundary_snapshot", return_value=release_boundary_snapshot),
+        ):
+            preview = schedule_service.list_schedule_preview(runtime_root)
+            schedule_list = schedule_service.list_schedules(runtime_root)
+            detail = schedule_service.get_schedule_detail(runtime_root, "sch-self-iter-bad")
+            calendar = schedule_service.get_schedule_calendar(runtime_root, month="2026-04")
 
         preview_by_id = {str(item.get("schedule_id") or ""): item for item in list(preview.get("items") or [])}
         list_by_id = {str(item.get("schedule_id") or ""): item for item in list(schedule_list.get("items") or [])}
@@ -254,6 +280,26 @@ def main() -> int:
             detail_schedule,
         )
         _assert(
+            "baseline=prod=20991231-235959" in str(detail_schedule.get("launch_summary") or ""),
+            "detail should refresh workflow launch summary with live prod baseline",
+            detail_schedule,
+        )
+        _assert(
+            "workspace_head=abc1234" in str(detail_schedule.get("launch_summary") or ""),
+            "detail should refresh workflow launch summary with live release boundary",
+            detail_schedule,
+        )
+        _assert(
+            "baseline=prod=20991231-235959" in str(preview_by_id["sch-self-iter-bad"].get("launch_summary") or ""),
+            "preview should use live prod baseline in workflow summary",
+            preview_by_id.get("sch-self-iter-bad"),
+        )
+        _assert(
+            "baseline=prod=20991231-235959" in str(list_by_id["sch-pm-wake-bad"].get("launch_summary") or ""),
+            "list should use live prod baseline in pm wake summary",
+            list_by_id.get("sch-pm-wake-bad"),
+        )
+        _assert(
             recent_triggers and recent_triggers[0].get("schedule_name_snapshot") == "[持续迭代] workflow",
             "recent trigger snapshot should repair self-iteration title",
             recent_triggers,
@@ -278,8 +324,12 @@ def main() -> int:
             "execution_checklist": "????????",
             "done_definition": "????????",
         }
-        schedule_service.update_schedule(cfg, "sch-self-iter-bad", update_body)
-        updated_detail = schedule_service.get_schedule_detail(runtime_root, "sch-self-iter-bad")
+        with (
+            patch.object(schedule_service, "load_effective_pm_version_status", return_value=effective_pm_status),
+            patch.object(schedule_service, "collect_release_boundary_snapshot", return_value=release_boundary_snapshot),
+        ):
+            schedule_service.update_schedule(cfg, "sch-self-iter-bad", update_body)
+            updated_detail = schedule_service.get_schedule_detail(runtime_root, "sch-self-iter-bad")
         updated_schedule = dict(updated_detail.get("schedule") or {})
         _assert(
             updated_schedule.get("schedule_name") == "[持续迭代] workflow",
@@ -289,6 +339,11 @@ def main() -> int:
         _assert(
             "版本计划" in str(updated_schedule.get("launch_summary") or ""),
             "update should keep repaired launch summary",
+            updated_schedule,
+        )
+        _assert(
+            "baseline=prod=20991231-235959" in str(updated_schedule.get("launch_summary") or ""),
+            "update should keep live prod baseline in repaired launch summary",
             updated_schedule,
         )
 
