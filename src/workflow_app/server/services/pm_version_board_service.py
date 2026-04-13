@@ -165,6 +165,25 @@ def _split_probe_refs(value: str) -> list[str]:
     return refs
 
 
+def _acceptance_search_roots(workspace_root: Path) -> list[Path]:
+    roots: list[Path] = []
+    seen: set[str] = set()
+    candidates = [workspace_root / "scripts" / "acceptance"]
+    repository_root = workspace_root / ".repository"
+    if repository_root.exists():
+        for item in sorted(repository_root.iterdir()):
+            if item.is_dir():
+                candidates.append(item / "scripts" / "acceptance")
+    for candidate in candidates:
+        resolved = candidate.resolve(strict=False)
+        key = resolved.as_posix()
+        if key in seen:
+            continue
+        seen.add(key)
+        roots.append(resolved)
+    return roots
+
+
 def _probe_ref_is_bound(workspace_root: Path, probe_ref: str) -> bool:
     candidate = _clean_token(probe_ref)
     if not candidate:
@@ -181,11 +200,11 @@ def _probe_ref_is_bound(workspace_root: Path, probe_ref: str) -> bool:
         else:
             paths.append((workspace_root / path).resolve(strict=False))
     else:
-        acceptance_root = workspace_root / "scripts" / "acceptance"
-        paths.append((acceptance_root / candidate).resolve(strict=False))
-        if not any(candidate.endswith(ext) for ext in _ACCEPTANCE_SCRIPT_EXTENSIONS):
-            for ext in _ACCEPTANCE_SCRIPT_EXTENSIONS:
-                paths.append((acceptance_root / f"{candidate}{ext}").resolve(strict=False))
+        for acceptance_root in _acceptance_search_roots(workspace_root):
+            paths.append((acceptance_root / candidate).resolve(strict=False))
+            if not any(candidate.endswith(ext) for ext in _ACCEPTANCE_SCRIPT_EXTENSIONS):
+                for ext in _ACCEPTANCE_SCRIPT_EXTENSIONS:
+                    paths.append((acceptance_root / f"{candidate}{ext}").resolve(strict=False))
     return any(path.exists() and path.is_file() for path in paths)
 
 
