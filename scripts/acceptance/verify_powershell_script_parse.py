@@ -13,6 +13,7 @@ FILES = [
     "scripts/deploy_workflow_env.ps1",
     "scripts/launch_workflow.ps1",
     "scripts/workflow_env_common.ps1",
+    "scripts/collect_post_upgrade_dispatch_regression.ps1",
 ]
 
 

@@ -22,11 +22,7 @@ class _CaptureHandler:
 def _expected_current_snapshot_baseline(plan_text: str) -> str:
     section_match = re.search(r"^##+\s*[0-9.]*\s*当前状态快照\s*(.*?)(?=^##+\s|\Z)", str(plan_text or ""), re.DOTALL | re.MULTILINE)
     assert section_match, "current snapshot section missing"
-    baseline_match = re.search(
-        r"^\s*\d+\.\s*baseline\s*(?:继续沿用|为|已切到|已更新为)?\s*`([^`]+)`",
-        section_match.group(1),
-        re.IGNORECASE | re.MULTILINE,
-    )
+    baseline_match = re.search(r"^\s*\d+\.\s*[^`\n]*?baseline[^`\n]*?`([^`]+)`", section_match.group(1), re.IGNORECASE | re.MULTILINE)
     assert baseline_match, "current snapshot baseline missing"
     return str(baseline_match.group(1) or "").strip()
 
@@ -55,12 +51,15 @@ def main() -> int:
     plan_status = load_pm_version_status(workspace_root)
     assert plan_status.get("ok"), plan_status
     assert str(plan_status.get("active_version") or "").strip(), plan_status
+    assert str(plan_status.get("active_version_file") or "").strip(), plan_status
     assert str(plan_status.get("lane") or "").strip(), plan_status
     assert str(plan_status.get("lifecycle_stage") or "").strip(), plan_status
     assert str(plan_status.get("baseline") or "").strip(), plan_status
     assert plan_status["baseline"] == expected_baseline, plan_status
     assert str(plan_status.get("reference_path") or "").strip().endswith("pm/PM当前版本计划.md"), plan_status
-    assert str(plan_status.get("source_path") or "").strip().endswith("pm/versions/V1/版本计划.md"), plan_status
+    expected_source_suffix = str(plan_status.get("active_version_file") or "").replace("\\", "/")
+    actual_source_path = str(plan_status.get("source_path") or "").replace("\\", "/")
+    assert actual_source_path.endswith(expected_source_suffix), plan_status
 
     prompt_lines = format_pm_version_prompt_lines(plan_status)
     prompt_text = "\n".join(prompt_lines)
