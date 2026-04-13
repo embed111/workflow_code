@@ -104,6 +104,7 @@ def main() -> int:
         assert len(backup_items) == 1, schedules
         assert bool(str(backup_items[0].get("next_trigger_at") or "").strip()), backup_items[0]
         assert str(backup_items[0].get("assigned_agent_id") or "").strip() == "workflow", backup_items[0]
+        assert str(backup_items[0].get("priority") or "").strip() == "P2", backup_items[0]
         assert PM_GOVERNANCE_README in str(backup_schedule.get("launch_summary") or ""), backup_schedule
         assert "20 分钟真定时看门狗" in str(backup_schedule.get("launch_summary") or ""), backup_schedule
         assert PM_MASTER_PLAN in str(backup_schedule.get("launch_summary") or ""), backup_schedule
@@ -142,6 +143,7 @@ def main() -> int:
                     "scan": scan,
                     "backup_schedule_id": backup_schedule_id,
                     "backup_next_trigger_at": str(backup_items[0].get("next_trigger_at") or "").strip(),
+                    "backup_priority": str(backup_items[0].get("priority") or "").strip(),
                     "self_iteration_last_result_summary": str(schedule_info.get("last_result_summary") or "").strip(),
                 },
                 ensure_ascii=False,

@@ -46,6 +46,8 @@ def main() -> int:
     pm_wake_execution_checklist = str(pm_wake_payload.get("execution_checklist") or "")
     pm_wake_done_definition = str(pm_wake_payload.get("done_definition") or "")
 
+    assert str(payload.get("priority") or "").strip() == "P1", payload
+    assert str(pm_wake_payload.get("priority") or "").strip() == "P2", pm_wake_payload
     assert PM_GOVERNANCE_README in launch_summary, payload
     assert PM_MASTER_PLAN in launch_summary, payload
     assert PM_CURRENT_PLAN in launch_summary, payload
@@ -178,6 +180,7 @@ def main() -> int:
                 "schedule_name": payload.get("schedule_name"),
                 "pm_wake_schedule_name": pm_wake_payload.get("schedule_name"),
                 "priority": payload.get("priority"),
+                "pm_wake_priority": pm_wake_payload.get("priority"),
                 "launch_summary": launch_summary,
                 "schedule_goal_length": len(schedule_goal),
                 "pm_wake_goal_length": len(pm_wake_goal),

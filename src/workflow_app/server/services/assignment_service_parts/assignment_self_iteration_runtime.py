@@ -17,6 +17,8 @@ ASSIGNMENT_PM_WAKE_SCHEDULE_NAME = "pm持续唤醒 - workflow 主线巡检"
 ASSIGNMENT_PM_WATCHDOG_INTERVAL_MINUTES = 20
 ASSIGNMENT_PM_WAKE_EXPECTED_ARTIFACT = "workflow-pm-wake-summary"
 ASSIGNMENT_SELF_ITERATION_EXPECTED_ARTIFACT = "continuous-improvement-report.md"
+ASSIGNMENT_SELF_ITERATION_MAINLINE_PRIORITY = "P1"
+ASSIGNMENT_PM_WATCHDOG_PRIORITY = "P2"
 ASSIGNMENT_PM_GOVERNANCE_README_PATH = "pm/README.md"
 ASSIGNMENT_SELF_ITERATION_MASTER_PLAN_PATH = "pm/PM版本推进计划.md"
 ASSIGNMENT_SELF_ITERATION_VERSION_PLAN_PATH = "pm/PM当前版本计划.md"
@@ -362,7 +364,7 @@ def _assignment_pm_wake_schedule_payload(
                 "11. 若命中 7x24 异常治理现场或工作区异常，本轮已经执行受支持的治理收口动作，或明确写清为什么仍然 blocked；不接受只写“等待问题被解决”。",
             ]
         ).strip(),
-        "priority": "P1",
+        "priority": ASSIGNMENT_PM_WATCHDOG_PRIORITY,
         "expected_artifact": ASSIGNMENT_PM_WAKE_EXPECTED_ARTIFACT,
         "delivery_mode": "none",
         "rule_sets": {
@@ -429,7 +431,9 @@ def _assignment_queue_self_iteration_schedule(
     ticket_id = str(task_record.get("ticket_id") or "").strip()
     node_id = str(node_record.get("node_id") or "").strip()
     next_trigger_at = _assignment_self_iteration_next_trigger_at(success=success)
-    priority = "P2" if success else "P1"
+    # Even after a successful round, the next mainline must stay ahead of the
+    # watchdog. Otherwise finalize will reintroduce patrol-first ready drift.
+    priority = ASSIGNMENT_SELF_ITERATION_MAINLINE_PRIORITY
     existing = _assignment_find_self_iteration_schedule(root, agent_id=agent_id)
     if existing:
         next_trigger_at = _assignment_keep_earliest_future_trigger(

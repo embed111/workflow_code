@@ -66,10 +66,12 @@ def main() -> int:
             "result": result,
             "schedule": self_item,
         }
+        assert str(self_item.get("priority") or "").strip() == "P1", self_item
         assert str(wake_item.get("next_trigger_at") or "").strip() == str(result.get("backup_next_trigger_at") or "").strip(), {
             "result": result,
             "backup_schedule": wake_item,
         }
+        assert str(wake_item.get("priority") or "").strip() == "P2", wake_item
         wake_editor_inputs = wake_item.get("editor_rule_inputs") if isinstance(wake_item.get("editor_rule_inputs"), dict) else {}
         wake_daily = wake_editor_inputs.get("daily") if isinstance(wake_editor_inputs.get("daily"), dict) else {}
         wake_once = wake_editor_inputs.get("once") if isinstance(wake_editor_inputs.get("once"), dict) else {}
@@ -83,8 +85,10 @@ def main() -> int:
                 "ok": True,
                 "self_iteration_schedule_id": str(result.get("schedule_id") or "").strip(),
                 "self_iteration_next_trigger_at": str(result.get("next_trigger_at") or "").strip(),
+                "self_iteration_priority": str(self_item.get("priority") or "").strip(),
                 "pm_wake_schedule_id": str(result.get("backup_schedule_id") or "").strip(),
                 "pm_wake_next_trigger_at": str(result.get("backup_next_trigger_at") or "").strip(),
+                "pm_wake_priority": str(wake_item.get("priority") or "").strip(),
             },
             ensure_ascii=False,
             indent=2,

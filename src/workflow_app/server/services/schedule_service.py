@@ -126,6 +126,7 @@ SCHEDULE_PM_TEAMMATES_TEXT = (
     "workflow_devmate / workflow_testmate / workflow_qualitymate / workflow_bugmate"
 )
 SCHEDULE_PM_WATCHDOG_INTERVAL_MINUTES = 20
+SCHEDULE_PM_WATCHDOG_PRIORITY = "P2"
 SCHEDULE_SELF_UPGRADE_HINT = (
     "正式升级改由 `prod` supervisor 托管的 idle watcher 周期检查并发起；"
     "当前主线/巡检节点不要再通过自排除方式自己触发 `/api/runtime-upgrade/apply`。"
@@ -1397,7 +1398,7 @@ def _ensure_self_iter_backup_schedule(
                     "11. 若命中 7x24 异常治理现场或工作区异常，本轮已经执行受支持的治理收口动作，或明确写清为什么仍然 blocked；不接受只写“等待问题被解决”。",
                 ]
             ).strip(),
-            "priority": "P1",
+            "priority": SCHEDULE_PM_WATCHDOG_PRIORITY,
             "expected_artifact": "workflow-pm-wake-summary",
             "delivery_mode": "none",
             "rule_sets": {
