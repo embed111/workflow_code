@@ -63,6 +63,21 @@ def schedule_trigger_node_id(trigger_instance_id: str) -> str:
     return f"node-{trigger_key}"
 
 
+def _workflow_schedule_priority(schedule: dict[str, Any]) -> str:
+    row = dict(schedule or {})
+    priority = str(row.get("priority") or "P1").strip() or "P1"
+    agent_id = str(row.get("assigned_agent_id") or "").strip().lower()
+    if agent_id != "workflow":
+        return priority
+    schedule_name = str(row.get("schedule_name") or "").strip()
+    expected_artifact = str(row.get("expected_artifact") or "").strip().lower()
+    if expected_artifact == "continuous-improvement-report.md" or schedule_name.startswith("[持续迭代] workflow"):
+        return "P1"
+    if expected_artifact == "workflow-pm-wake-summary" or schedule_name.startswith("pm持续唤醒 - workflow 主线巡检"):
+        return "P2"
+    return priority
+
+
 def _scan_ticket_nodes(
     nodes_dir: Path,
     *,
@@ -369,7 +384,9 @@ def create_schedule_node(
         "node_id": schedule_trigger_node_id(trigger_instance_id),
         "node_name": f"{str(schedule.get('schedule_name') or '').strip()} / {planned_label}",
         "assigned_agent_id": str(schedule.get("assigned_agent_id") or "").strip(),
-        "priority": str(schedule.get("priority") or "P1"),
+        # Keep workflow mainline/patrol queue order canonical even if an old
+        # schedule row is still carrying stale priority after an upgrade.
+        "priority": _workflow_schedule_priority(schedule),
         "node_goal": build_schedule_assignment_goal(
             schedule,
             planned_trigger_at=planned_trigger_at,

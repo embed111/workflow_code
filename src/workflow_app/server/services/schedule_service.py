@@ -306,6 +306,14 @@ def _schedule_is_workflow_patrol_payload(payload: dict[str, Any]) -> bool:
     return expected_artifact == "workflow-pm-wake-summary" or schedule_name.startswith("pm持续唤醒 - workflow 主线巡检")
 
 
+def _workflow_schedule_canonical_priority(payload: dict[str, Any]) -> str:
+    if _schedule_is_workflow_mainline_payload(payload):
+        return "P1"
+    if _schedule_is_workflow_patrol_payload(payload):
+        return SCHEDULE_PM_WATCHDOG_PRIORITY
+    return ""
+
+
 def _schedule_recovery_lane_rank(payload: dict[str, Any]) -> int:
     if _schedule_is_workflow_mainline_payload(payload):
         return 0
@@ -2755,7 +2763,19 @@ def _schedule_payload_from_body(cfg: Any, body: dict[str, Any], *, existing: dic
     current = existing if isinstance(existing, dict) else {}
     enabled = _normalize_bool(body.get("enabled")) if "enabled" in body else bool(current.get("enabled"))
     assigned_agent = _resolve_agent(cfg, body.get("assigned_agent_id") if "assigned_agent_id" in body else current.get("assigned_agent_id"))
-    priority_label, priority_value = _normalize_priority(body.get("priority") if "priority" in body else current.get("priority") or "P1")
+    schedule_name_value = body.get("schedule_name") if "schedule_name" in body else current.get("schedule_name")
+    expected_artifact_value = body.get("expected_artifact") if "expected_artifact" in body else current.get("expected_artifact")
+    raw_priority = body.get("priority") if "priority" in body else current.get("priority") or "P1"
+    canonical_priority = _workflow_schedule_canonical_priority(
+        {
+            "assigned_agent_id": str(assigned_agent.get("agent_id") or "").strip(),
+            "schedule_name": schedule_name_value,
+            "expected_artifact": expected_artifact_value,
+        }
+    )
+    if canonical_priority:
+        raw_priority = canonical_priority
+    priority_label, priority_value = _normalize_priority(raw_priority)
     delivery_mode = _normalize_delivery_mode(body.get("delivery_mode") if "delivery_mode" in body else current.get("delivery_mode") or "none")
     receiver_meta = _resolve_agent(
         cfg,
